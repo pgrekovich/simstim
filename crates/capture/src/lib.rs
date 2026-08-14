@@ -42,11 +42,15 @@ impl Drop for CaptureHandle {
 /// *next* call's input) still owed to the output, and `carry[1]` is the last
 /// sample of the input this function most recently saw. Pass the same `Vec`
 /// (starting empty) on every call for a given stream; a fresh `Vec` starts a
-/// new stream.
+/// new stream. `from_rate` is assumed fixed for the lifetime of a given
+/// `carry` (a stream doesn't change sample rate mid-flight); the 16 kHz
+/// passthrough below never touches `carry`, so switching `from_rate` to
+/// exactly 16000 and back is the only safe rate change.
 ///
 /// Good enough for ASR (the official sherpa-onnx mic example ships the same
 /// approach).
 pub(crate) fn resample_to_16k(input: &[f32], from_rate: u32, carry: &mut Vec<f32>) -> Vec<f32> {
+    debug_assert!(from_rate > 0, "sample rate must be positive");
     if from_rate == 16000 {
         return input.to_vec();
     }
@@ -115,14 +119,20 @@ mod tests {
         let mut carry_whole = Vec::new();
         let whole = resample_to_16k(&input, 48000, &mut carry_whole);
 
-        let (first_half, second_half) = input.split_at(2400);
-        let mut carry_split = Vec::new();
-        let mut split = resample_to_16k(first_half, 48000, &mut carry_split);
-        split.extend(resample_to_16k(second_half, 48000, &mut carry_split));
+        // Ratio is 48000/16000 = 3.0, so a split at a multiple of 3 (e.g. 2400)
+        // lands carry back on an exact integer and never exercises the
+        // negative-index / prev_last look-behind branch. Cover both aligned
+        // and misaligned splits so a regression in that branch can't hide.
+        for split_at in [1, 7, 2399, 2400, 2401] {
+            let (first_half, second_half) = input.split_at(split_at);
+            let mut carry_split = Vec::new();
+            let mut split = resample_to_16k(first_half, 48000, &mut carry_split);
+            split.extend(resample_to_16k(second_half, 48000, &mut carry_split));
 
-        assert_eq!(
-            split, whole,
-            "feeding in two halves must reproduce whole-buffer output exactly"
-        );
+            assert_eq!(
+                split, whole,
+                "split at {split_at} must reproduce whole-buffer output exactly"
+            );
+        }
     }
 }

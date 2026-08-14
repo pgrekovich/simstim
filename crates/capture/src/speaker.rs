@@ -16,6 +16,7 @@
 use crate::{Channel, Chunk, resample_to_16k};
 use anyhow::{Context, Result};
 use cidre::{av, cat, cf, core_audio as ca, ns, os};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 
 /// Name of the private aggregate device we create. `mic.rs` checks for this
@@ -77,7 +78,15 @@ pub fn start_speaker(tx: Sender<Chunk>) -> Result<SpeakerHandle> {
         ],
         &[
             cf::Boolean::value_true().as_type_ref(),
-            cf::Boolean::value_true().as_type_ref(),
+            // `tap_auto_start = true` means AudioDeviceStart blocks until a
+            // tapped process starts *receiving* audio, which for our
+            // exclude-nothing global tap can be forever: `device_start`
+            // below is synchronous, so that would hang `start_speaker`
+            // until some app happens to play something. We want the device
+            // running immediately and simply deliver silence until there's
+            // real audio, so this must be false (anarlog: speaker/macos.rs
+            // sets the same key to false for the same reason).
+            cf::Boolean::value_false().as_type_ref(),
             cf::String::from_str(TAP_DEVICE_NAME).as_ref(),
             cf::Uuid::new().to_cf_string().as_ref(),
             cf::ArrayOf::from_slice(&[sub_tap.as_ref()]).as_ref(),
@@ -92,6 +101,13 @@ pub fn start_speaker(tx: Sender<Chunk>) -> Result<SpeakerHandle> {
         common_format,
         carry: Vec::new(),
     });
+    // Known MVP-0 gap (mirrors anarlog): if `create_io_proc_id` succeeds but
+    // `device_start` below fails, `proc_id` is never destroyed via
+    // `AudioDeviceDestroyIOProcID`. Acceptable here since a failed
+    // `start_speaker` call means the caller won't get a `SpeakerHandle` to
+    // retry with anyway, and `agg_device` itself is dropped without ever
+    // having lived in a `StartedDevice`, so it's collected fine on the next
+    // launch.
     let proc_id = agg_device
         .create_io_proc_id(io_proc, Some(ctx.as_mut()))
         .context("create IO proc")?;
@@ -129,21 +145,36 @@ extern "C" fn io_proc(
     let samples: Vec<f32> = match ctx.common_format {
         av::AudioCommonFormat::PcmF32 => match read_samples::<f32>(buf) {
             Some(s) => s.to_vec(),
-            None => return os::Status::NO_ERR,
+            None => {
+                log_format_issue_once("buffer unreadable (null/misaligned) for PcmF32");
+                return os::Status::NO_ERR;
+            }
         },
         av::AudioCommonFormat::PcmF64 => match read_samples::<f64>(buf) {
             Some(s) => s.iter().map(|&v| v as f32).collect(),
-            None => return os::Status::NO_ERR,
+            None => {
+                log_format_issue_once("buffer unreadable (null/misaligned) for PcmF64");
+                return os::Status::NO_ERR;
+            }
         },
         av::AudioCommonFormat::PcmI32 => match read_samples::<i32>(buf) {
             Some(s) => s.iter().map(|&v| pcm_i32_to_f32(v)).collect(),
-            None => return os::Status::NO_ERR,
+            None => {
+                log_format_issue_once("buffer unreadable (null/misaligned) for PcmI32");
+                return os::Status::NO_ERR;
+            }
         },
         av::AudioCommonFormat::PcmI16 => match read_samples::<i16>(buf) {
             Some(s) => s.iter().map(|&v| pcm_i16_to_f32(v)).collect(),
-            None => return os::Status::NO_ERR,
+            None => {
+                log_format_issue_once("buffer unreadable (null/misaligned) for PcmI16");
+                return os::Status::NO_ERR;
+            }
         },
-        _ => return os::Status::NO_ERR,
+        _ => {
+            log_format_issue_once("unrecognized common format, dropping audio");
+            return os::Status::NO_ERR;
+        }
     };
 
     let resampled = resample_to_16k(&samples, ctx.rate, &mut ctx.carry);
@@ -153,6 +184,21 @@ extern "C" fn io_proc(
     });
 
     os::Status::NO_ERR
+}
+
+/// Set once the first format/alignment problem has been logged, so a
+/// misbehaving tap prints one diagnostic line instead of flooding stderr
+/// from the audio callback (and so a real format problem is distinguishable
+/// from plain silence, which produces valid, merely-quiet chunks).
+static FORMAT_ISSUE_LOGGED: AtomicBool = AtomicBool::new(false);
+
+fn log_format_issue_once(msg: &str) {
+    if FORMAT_ISSUE_LOGGED
+        .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
+        .is_ok()
+    {
+        eprintln!("simstim-capture: speaker tap {msg}");
+    }
 }
 
 /// Reinterprets a raw `AudioBuf`'s bytes as a `[T]`, refusing to do so if the

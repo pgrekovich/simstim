@@ -1,0 +1,7 @@
+[workspace]
+resolver = "2"
+members = ["apps/desktop/src-tauri", "crates/capture", "crates/engine", "crates/transcript"]
+
+[workspace.dependencies]
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }

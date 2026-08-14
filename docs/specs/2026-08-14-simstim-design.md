@@ -133,6 +133,8 @@ MVP-0 exit criteria: Pavel runs it during a real work call (Slack huddle /
 Meet), gets a readable EN and RU transcript on the Desktop without the app
 crashing or pegging the CPU.
 
+Status (2026-08-14): shipped and verified e2e.
+
 ## Milestones after MVP-0
 
 1. Audio file kept next to the .md; re-transcribe command (whisper turbo).
@@ -157,6 +159,9 @@ crashing or pegging the CPU.
   whether headphones + separate channels are enough.
 - Model download UX for MVP-0: acceptable to fetch on first run with a
   progress line; no fancy manager.
+- Interim decoding needed for streaming feel (sherpa example pattern).
+- sherpa VAD `max_speech_duration=8s` did not force-split a 15s monologue in
+  practice, investigate.
 
 ## Research references
 

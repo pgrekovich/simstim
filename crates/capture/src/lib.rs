@@ -1,11 +1,13 @@
 pub mod mic;
+#[cfg(target_os = "macos")]
+pub mod speaker;
 
 /// Which side of a conversation a [`Chunk`] came from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Channel {
     /// Captured from the local microphone.
     Me,
-    /// Captured from system/speaker output (Task 5).
+    /// Captured from system/speaker output.
     Them,
 }
 
@@ -17,8 +19,12 @@ pub struct Chunk {
 }
 
 /// RAII handle for a running capture stream. Dropping it signals the capture
-/// thread to tear down its stream. Shared by `mic` (this task) and `speaker`
-/// (Task 5).
+/// thread to tear down its stream. Used by `mic`; `speaker` has its own
+/// `SpeakerHandle` instead, since the Core Audio tap doesn't need a dedicated
+/// parked thread the way a `cpal::Stream` does (`speaker`'s object graph is
+/// plain HAL object IDs, so it can be dropped directly from whatever thread
+/// holds it, and its teardown order matters more than a single stop signal
+/// can express).
 pub struct CaptureHandle {
     drop_tx: std::sync::mpsc::Sender<()>,
 }

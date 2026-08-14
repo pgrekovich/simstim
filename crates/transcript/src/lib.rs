@@ -75,10 +75,8 @@ impl Transcript {
     }
 }
 
-pub fn default_output_path(started_at: DateTime<Local>) -> PathBuf {
-    let home = dirs::home_dir().expect("no home dir");
-    home.join("Desktop")
-        .join(format!("{} call.md", started_at.format("%Y-%m-%d %H-%M")))
+pub fn output_path(dir: &Path, started_at: DateTime<Local>) -> PathBuf {
+    dir.join(format!("{} call.md", started_at.format("%Y-%m-%d %H-%M")))
 }
 
 #[cfg(test)]
@@ -98,6 +96,15 @@ mod tests {
         let me = md.find("[00:00:03] Me: hi everyone").unwrap();
         let them = md.find("[00:00:15] Them: hello pavel").unwrap();
         assert!(me < them, "lines not sorted by offset");
+    }
+
+    #[test]
+    fn output_path_lands_in_given_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let t0 = Local.with_ymd_and_hms(2026, 8, 14, 14, 30, 0).unwrap();
+        let path = output_path(dir.path(), t0);
+        assert_eq!(path.parent().unwrap(), dir.path());
+        assert_eq!(path.file_name().unwrap(), "2026-08-14 14-30 call.md");
     }
 
     #[test]

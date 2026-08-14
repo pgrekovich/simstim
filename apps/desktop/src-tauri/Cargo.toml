@@ -24,6 +24,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = { workspace = true }
 chrono = "0.4"
+dirs = "6"
 simstim-capture = { path = "../../../crates/capture" }
 simstim-engine = { path = "../../../crates/engine" }
 simstim-transcript = { path = "../../../crates/transcript" }

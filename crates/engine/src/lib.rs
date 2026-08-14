@@ -77,38 +77,6 @@ fn clean_unk(text: &str) -> String {
     out
 }
 
-#[cfg(test)]
-mod unk_tests {
-    use super::clean_unk;
-
-    #[test]
-    fn restores_yo_as_ye_after_cyrillic() {
-        assert_eq!(clean_unk("Да ещ<unk>"), "Да еще");
-        assert_eq!(clean_unk("ч<unk>?"), "че?");
-    }
-
-    #[test]
-    fn restores_word_initial_yo_as_capital_ye() {
-        assert_eq!(clean_unk("<unk>лка"), "Елка");
-    }
-
-    #[test]
-    fn drops_isolated_unk_and_collapses_space() {
-        assert_eq!(clean_unk("hello <unk> world"), "hello world");
-        assert_eq!(clean_unk("<unk>"), "");
-    }
-
-    #[test]
-    fn leaves_clean_text_untouched() {
-        assert_eq!(clean_unk("обычный текст, no tags"), "обычный текст, no tags");
-    }
-
-    #[test]
-    fn handles_multiple_unks() {
-        assert_eq!(clean_unk("вс<unk> ещ<unk> тут"), "все еще тут");
-    }
-}
-
 const VAD_WINDOW: usize = 512;
 
 pub struct Vad {
@@ -171,5 +139,37 @@ impl Vad {
             }
             self.vad.pop();
         }
+    }
+}
+
+#[cfg(test)]
+mod unk_tests {
+    use super::clean_unk;
+
+    #[test]
+    fn restores_yo_as_ye_after_cyrillic() {
+        assert_eq!(clean_unk("Да ещ<unk>"), "Да еще");
+        assert_eq!(clean_unk("ч<unk>?"), "че?");
+    }
+
+    #[test]
+    fn restores_word_initial_yo_as_capital_ye() {
+        assert_eq!(clean_unk("<unk>лка"), "Елка");
+    }
+
+    #[test]
+    fn drops_isolated_unk_and_collapses_space() {
+        assert_eq!(clean_unk("hello <unk> world"), "hello world");
+        assert_eq!(clean_unk("<unk>"), "");
+    }
+
+    #[test]
+    fn leaves_clean_text_untouched() {
+        assert_eq!(clean_unk("обычный текст, no tags"), "обычный текст, no tags");
+    }
+
+    #[test]
+    fn handles_multiple_unks() {
+        assert_eq!(clean_unk("вс<unk> ещ<unk> тут"), "все еще тут");
     }
 }

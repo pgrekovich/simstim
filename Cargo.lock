@@ -847,6 +847,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "dirs",
  "hound",
  "serde",
  "serde_json",
@@ -3460,7 +3461,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
- "dirs",
  "tempfile",
 ]
 

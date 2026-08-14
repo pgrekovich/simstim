@@ -1,5 +1,8 @@
+pub mod config;
 pub mod session;
 
+use config::Config;
+use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, State};
 
@@ -33,7 +36,7 @@ fn start_recording(app: AppHandle, state: State<AppState>) -> Result<String, Str
     let (tx, rx) = std::sync::mpsc::channel();
     let mic = simstim_capture::mic::start_mic(tx.clone()).map_err(|e| e.to_string())?;
     let speaker = simstim_capture::speaker::start_speaker(tx).map_err(|e| e.to_string())?;
-    let out = simstim_transcript::default_output_path(chrono::Local::now());
+    let out = simstim_transcript::output_path(&Config::load().output_dir, chrono::Local::now());
     let emitter = app.clone();
     let session = session::Session::start(rx, out.clone(), move |line| {
         let _ = emitter.emit("transcript-line", line);
@@ -64,12 +67,42 @@ fn stop_recording(state: State<AppState>) -> Result<String, String> {
     Ok(path.display().to_string())
 }
 
+#[tauri::command]
+fn get_config() -> Config {
+    Config::load()
+}
+
+#[tauri::command]
+fn set_output_dir(path: String) -> Result<(), String> {
+    let mut cfg = Config::load();
+    cfg.output_dir = PathBuf::from(path);
+    cfg.save().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn set_active_model(id: String) -> Result<(), String> {
+    // Single known id for stage 0.5. Once Task 2's `models.rs` registry
+    // lands, this should validate against `models::REGISTRY` ids instead.
+    if id != config::KNOWN_MODEL_ID {
+        return Err(format!("unknown model id: {id}"));
+    }
+    let mut cfg = Config::load();
+    cfg.active_model = id;
+    cfg.save().map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(AppState(Mutex::new(None)))
-        .invoke_handler(tauri::generate_handler![start_recording, stop_recording])
+        .invoke_handler(tauri::generate_handler![
+            start_recording,
+            stop_recording,
+            get_config,
+            set_output_dir,
+            set_active_model
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

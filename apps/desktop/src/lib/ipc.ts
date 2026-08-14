@@ -1,0 +1,66 @@
+/**
+ * Single source of truth for the Tauri IPC surface: TS types mirroring the
+ * Rust shapes exactly (see docs/plans/2026-08-14-stage-0.5.md "Global
+ * Constraints") plus typed invoke wrappers. Both the main screen (Task 4)
+ * and the settings dialog (Task 5) import from here instead of calling
+ * `invoke` directly, so the contract only needs to be kept in sync in one
+ * place.
+ */
+import { invoke } from "@tauri-apps/api/core";
+
+/** Mirrors `config::Config` (apps/desktop/src-tauri/src/config.rs). */
+export interface AppConfig {
+  output_dir: string;
+  active_model: string;
+}
+
+/** Mirrors `models::ModelInfo` (apps/desktop/src-tauri/src/models.rs). */
+export interface ModelInfo {
+  id: string;
+  name: string;
+  size_mb: number;
+  downloaded: boolean;
+  active: boolean;
+}
+
+export type DownloadPhase = "download" | "extract" | "done" | "error";
+
+/**
+ * Mirrors `models::ProgressPayload`, the `model-download-progress` event
+ * payload. `message` is only present when `phase === "error"`.
+ */
+export interface DownloadProgress {
+  id: string;
+  phase: DownloadPhase;
+  received: number;
+  total: number;
+  message?: string;
+}
+
+export function getConfig(): Promise<AppConfig> {
+  return invoke("get_config");
+}
+
+export function setOutputDir(path: string): Promise<void> {
+  return invoke("set_output_dir", { path });
+}
+
+export function setActiveModel(id: string): Promise<void> {
+  return invoke("set_active_model", { id });
+}
+
+export function listModels(): Promise<ModelInfo[]> {
+  return invoke("list_models");
+}
+
+export function downloadModel(id: string): Promise<void> {
+  return invoke("download_model", { id });
+}
+
+export function startRecording(): Promise<string> {
+  return invoke("start_recording");
+}
+
+export function stopRecording(): Promise<string> {
+  return invoke("stop_recording");
+}

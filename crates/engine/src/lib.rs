@@ -40,7 +40,72 @@ impl Engine {
         let stream = self.recognizer.create_stream();
         stream.accept_waveform(16000, samples);
         self.recognizer.decode(&stream);
-        stream.get_result().map(|r| r.text).unwrap_or_default()
+        stream
+            .get_result()
+            .map(|r| clean_unk(&r.text))
+            .unwrap_or_default()
+    }
+}
+
+fn is_cyrillic(c: char) -> bool {
+    matches!(c, 'а'..='я' | 'А'..='Я' | 'ё' | 'Ё')
+}
+
+/// Parakeet TDT v3's vocabulary has no "ё" at all (tokens.txt contains zero
+/// tokens with it), so the model emits a literal "<unk>" wherever that letter
+/// was spoken. Standard Russian text normalization maps ё->е, so an <unk>
+/// adjacent to Cyrillic is restored as "е" (or "Е" word-initially); any other
+/// <unk> is dropped, collapsing the space it leaves behind.
+fn clean_unk(text: &str) -> String {
+    const UNK: &str = "<unk>";
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(pos) = rest.find(UNK) {
+        out.push_str(&rest[..pos]);
+        rest = &rest[pos + UNK.len()..];
+        let prev = out.chars().last();
+        let next = rest.chars().next();
+        if prev.is_some_and(is_cyrillic) {
+            out.push('е');
+        } else if next.is_some_and(is_cyrillic) {
+            out.push('Е');
+        } else if prev == Some(' ') && next == Some(' ') {
+            rest = &rest[1..];
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+#[cfg(test)]
+mod unk_tests {
+    use super::clean_unk;
+
+    #[test]
+    fn restores_yo_as_ye_after_cyrillic() {
+        assert_eq!(clean_unk("Да ещ<unk>"), "Да еще");
+        assert_eq!(clean_unk("ч<unk>?"), "че?");
+    }
+
+    #[test]
+    fn restores_word_initial_yo_as_capital_ye() {
+        assert_eq!(clean_unk("<unk>лка"), "Елка");
+    }
+
+    #[test]
+    fn drops_isolated_unk_and_collapses_space() {
+        assert_eq!(clean_unk("hello <unk> world"), "hello world");
+        assert_eq!(clean_unk("<unk>"), "");
+    }
+
+    #[test]
+    fn leaves_clean_text_untouched() {
+        assert_eq!(clean_unk("обычный текст, no tags"), "обычный текст, no tags");
+    }
+
+    #[test]
+    fn handles_multiple_unks() {
+        assert_eq!(clean_unk("вс<unk> ещ<unk> тут"), "все еще тут");
     }
 }
 

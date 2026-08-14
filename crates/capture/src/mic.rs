@@ -1,9 +1,9 @@
 //! Microphone capture: default input device, resampled to 16 kHz mono.
 
-use crate::{resample_to_16k, CaptureHandle, Channel, Chunk};
-use anyhow::{anyhow, Result};
+use crate::{CaptureHandle, Channel, Chunk, resample_to_16k};
+use anyhow::{Result, anyhow};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use std::sync::mpsc::{channel, Sender};
+use std::sync::mpsc::{Sender, channel};
 
 /// Starts capturing from the default input device and sends resampled 16 kHz
 /// mono [`Chunk`]s (tagged [`Channel::Me`]) to `tx`.

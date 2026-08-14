@@ -67,9 +67,7 @@ pub(crate) fn resample_to_16k(input: &[f32], from_rate: u32, carry: &mut Vec<f32
     // within `[-1, ratio - 1)` (see below), `i + 1` never runs past the end
     // of `input`, so this never needs to look ahead into data we don't have
     // yet.
-    let sample_at = |i: i64| -> f32 {
-        if i < 0 { prev_last } else { input[i as usize] }
-    };
+    let sample_at = |i: i64| -> f32 { if i < 0 { prev_last } else { input[i as usize] } };
 
     let mut out = Vec::with_capacity((len / ratio) as usize + 2);
     while pos < len - 1.0 {

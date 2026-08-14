@@ -50,15 +50,24 @@ pub fn find(id: &str) -> Option<&'static ModelSpec> {
     REGISTRY.iter().find(|m| m.id == id)
 }
 
+/// Files `Engine::new` (crates/engine/src/lib.rs) requires inside a model's
+/// extracted directory: the vocabulary plus all three transducer weights.
+const REQUIRED_MODEL_FILES: &[&str] = &[
+    "tokens.txt",
+    "encoder.int8.onnx",
+    "decoder.int8.onnx",
+    "joiner.int8.onnx",
+];
+
 /// Whether every file a model needs is present under `models_dir`: the
-/// extracted directory with `tokens.txt` and `encoder.int8.onnx`, plus each
-/// of `extra_files`.
+/// extracted directory with all of `REQUIRED_MODEL_FILES`, plus each of
+/// `extra_files`.
 pub fn is_downloaded(spec: &ModelSpec, models_dir: &Path) -> bool {
     let dir = models_dir.join(spec.dir_name);
-    if !dir.join("tokens.txt").is_file() {
-        return false;
-    }
-    if !dir.join("encoder.int8.onnx").is_file() {
+    if !REQUIRED_MODEL_FILES
+        .iter()
+        .all(|filename| dir.join(filename).is_file())
+    {
         return false;
     }
     spec.extra_files
@@ -171,7 +180,9 @@ async fn run_download(app: &AppHandle, spec: &ModelSpec) -> Result<(), String> {
 
     let models_dir = simstim_engine::models_dir();
     std::fs::create_dir_all(&models_dir).map_err(|e| e.to_string())?;
-    let tmp_path = models_dir.join(".download.tmp");
+    // Id-scoped so a future second registry entry can download in parallel
+    // without colliding on the same tmp path.
+    let tmp_path = models_dir.join(format!(".download-{}.tmp", spec.id));
 
     let client = reqwest::Client::new();
 
@@ -321,6 +332,32 @@ mod tests {
         let model_dir = dir.path().join("test-model");
         std::fs::create_dir_all(&model_dir).unwrap();
         std::fs::write(model_dir.join("tokens.txt"), b"x").unwrap();
+        std::fs::write(model_dir.join("decoder.int8.onnx"), b"x").unwrap();
+        std::fs::write(model_dir.join("joiner.int8.onnx"), b"x").unwrap();
+        std::fs::write(dir.path().join("extra.onnx"), b"x").unwrap();
+        assert!(!is_downloaded(&test_spec(), dir.path()));
+    }
+
+    #[test]
+    fn not_downloaded_when_decoder_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_dir = dir.path().join("test-model");
+        std::fs::create_dir_all(&model_dir).unwrap();
+        std::fs::write(model_dir.join("tokens.txt"), b"x").unwrap();
+        std::fs::write(model_dir.join("encoder.int8.onnx"), b"x").unwrap();
+        std::fs::write(model_dir.join("joiner.int8.onnx"), b"x").unwrap();
+        std::fs::write(dir.path().join("extra.onnx"), b"x").unwrap();
+        assert!(!is_downloaded(&test_spec(), dir.path()));
+    }
+
+    #[test]
+    fn not_downloaded_when_joiner_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let model_dir = dir.path().join("test-model");
+        std::fs::create_dir_all(&model_dir).unwrap();
+        std::fs::write(model_dir.join("tokens.txt"), b"x").unwrap();
+        std::fs::write(model_dir.join("encoder.int8.onnx"), b"x").unwrap();
+        std::fs::write(model_dir.join("decoder.int8.onnx"), b"x").unwrap();
         std::fs::write(dir.path().join("extra.onnx"), b"x").unwrap();
         assert!(!is_downloaded(&test_spec(), dir.path()));
     }
@@ -332,6 +369,8 @@ mod tests {
         std::fs::create_dir_all(&model_dir).unwrap();
         std::fs::write(model_dir.join("tokens.txt"), b"x").unwrap();
         std::fs::write(model_dir.join("encoder.int8.onnx"), b"x").unwrap();
+        std::fs::write(model_dir.join("decoder.int8.onnx"), b"x").unwrap();
+        std::fs::write(model_dir.join("joiner.int8.onnx"), b"x").unwrap();
         assert!(!is_downloaded(&test_spec(), dir.path()));
     }
 
@@ -342,6 +381,8 @@ mod tests {
         std::fs::create_dir_all(&model_dir).unwrap();
         std::fs::write(model_dir.join("tokens.txt"), b"x").unwrap();
         std::fs::write(model_dir.join("encoder.int8.onnx"), b"x").unwrap();
+        std::fs::write(model_dir.join("decoder.int8.onnx"), b"x").unwrap();
+        std::fs::write(model_dir.join("joiner.int8.onnx"), b"x").unwrap();
         std::fs::write(dir.path().join("extra.onnx"), b"x").unwrap();
         assert!(is_downloaded(&test_spec(), dir.path()));
     }

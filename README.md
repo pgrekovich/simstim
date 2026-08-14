@@ -14,3 +14,13 @@ Granola streams your audio to cloud ASR. The open-source alternatives lock
 transcripts in SQLite and ship accounts, subscriptions, and telemetry.
 This tool does one thing: transcribe → `.md` on disk. Sharing is `cp`.
 Insights are whatever agent you point at the folder.
+
+## Setup
+
+Requires macOS 14.2+ on Apple Silicon. Download ASR models (one-time, ~500 MB):
+
+```sh
+./scripts/download-models.sh
+```
+
+Models are cached in `~/Library/Application Support/simstim/models/`.

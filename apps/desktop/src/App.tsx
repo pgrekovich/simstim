@@ -1,49 +1,68 @@
-import { useState } from "react";
-import reactLogo from "./assets/react.svg";
+import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import "./App.css";
 
-function App() {
-  const [greetMsg, setGreetMsg] = useState("");
-  const [name, setName] = useState("");
+type Status =
+  | { kind: "idle" }
+  | { kind: "recording"; outputPath: string }
+  | { kind: "error"; message: string };
 
-  async function greet() {
-    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-    setGreetMsg(await invoke("greet", { name }));
+function App() {
+  const [status, setStatus] = useState<Status>({ kind: "idle" });
+  const [lines, setLines] = useState<string[]>([]);
+  const busyRef = useRef(false);
+
+  useEffect(() => {
+    const unlisten = listen<string>("transcript-line", (event) => {
+      setLines((prev) => [...prev, event.payload]);
+    });
+    return () => {
+      unlisten.then((f) => f());
+    };
+  }, []);
+
+  async function handleToggle() {
+    if (busyRef.current) return;
+    busyRef.current = true;
+    try {
+      if (status.kind === "recording") {
+        const path = await invoke<string>("stop_recording");
+        setStatus({ kind: "idle" });
+        void path;
+      } else {
+        setLines([]);
+        const path = await invoke<string>("start_recording");
+        setStatus({ kind: "recording", outputPath: path });
+      }
+    } catch (err) {
+      setStatus({ kind: "error", message: String(err) });
+    } finally {
+      busyRef.current = false;
+    }
   }
+
+  const isRecording = status.kind === "recording";
 
   return (
     <main className="container">
-      <h1>Welcome to Tauri + React</h1>
-
-      <div className="row">
-        <a href="https://vite.dev" target="_blank">
-          <img src="/vite.svg" className="logo vite" alt="Vite logo" />
-        </a>
-        <a href="https://tauri.app" target="_blank">
-          <img src="/tauri.svg" className="logo tauri" alt="Tauri logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <p>Click on the Tauri, Vite, and React logos to learn more.</p>
-
-      <form
-        className="row"
-        onSubmit={(e) => {
-          e.preventDefault();
-          greet();
-        }}
+      <button
+        className={isRecording ? "toggle recording" : "toggle"}
+        onClick={handleToggle}
       >
-        <input
-          id="greet-input"
-          onChange={(e) => setName(e.currentTarget.value)}
-          placeholder="Enter a name..."
-        />
-        <button type="submit">Greet</button>
-      </form>
-      <p>{greetMsg}</p>
+        {isRecording ? "Stop" : "Start"}
+      </button>
+
+      <p className={status.kind === "error" ? "status error" : "status"}>
+        {status.kind === "idle" && "idle"}
+        {status.kind === "recording" &&
+          `recording -> ${status.outputPath}`}
+        {status.kind === "error" && status.message}
+      </p>
+
+      <pre className="transcript">
+        {lines.length > 0 ? lines.join("\n") : "..."}
+      </pre>
     </main>
   );
 }

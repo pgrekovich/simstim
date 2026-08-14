@@ -9,6 +9,7 @@ pub fn models_dir() -> PathBuf {
     dirs::data_dir().expect("no data dir").join("simstim/models")
 }
 
+#[derive(Debug, Clone)]
 pub struct Segment {
     pub start_sample: usize,
     pub samples: Vec<f32>,
@@ -80,6 +81,15 @@ impl Vad {
     }
 
     pub fn flush(&mut self) -> Vec<Segment> {
+        if !self.pending.is_empty() {
+            // `pending` always holds fewer than VAD_WINDOW samples here (push()
+            // drains every full window as it arrives), so this is the final,
+            // partial window of the stream. Zero-pad it to a full window and
+            // feed it rather than silently dropping the trailing audio.
+            let mut window = std::mem::take(&mut self.pending);
+            window.resize(VAD_WINDOW, 0.0);
+            self.vad.accept_waveform(&window);
+        }
         self.vad.flush();
         let mut out = Vec::new();
         self.drain_segments(&mut out);

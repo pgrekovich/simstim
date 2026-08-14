@@ -52,3 +52,39 @@ fn vad_segments_speech_from_test_wav() {
     assert!(!segs.is_empty(), "vad found no speech in a speech wav");
     assert!(segs[0].samples.len() > 1600, "segment implausibly short");
 }
+
+// Real callers (the capture pipeline) never hand the VAD a whole utterance in
+// one call; audio arrives in small chunks that don't line up with the
+// internal 512-sample window, and the stream almost never ends on a window
+// boundary. This exercises that pattern and, via the ragged tail left after
+// the last chunk, the flush()-pads-and-feeds-the-remainder path.
+#[test]
+fn vad_segments_speech_when_fed_in_small_chunks() {
+    let dir = models_dir();
+    let wav = dir.join("parakeet-tdt-0.6b-v3-int8/test_wavs/en.wav");
+    let samples = load_wav_16k_mono(&wav);
+
+    let mut single_shot = Vad::new(&dir).unwrap();
+    let mut single_segs = single_shot.push(&samples);
+    single_segs.extend(single_shot.flush());
+    let single_total: usize = single_segs.iter().map(|s| s.samples.len()).sum();
+
+    let mut chunked = Vad::new(&dir).unwrap();
+    let mut chunked_segs = Vec::new();
+    for chunk in samples.chunks(160) {
+        chunked_segs.extend(chunked.push(chunk));
+    }
+    chunked_segs.extend(chunked.flush());
+    let chunked_total: usize = chunked_segs.iter().map(|s| s.samples.len()).sum();
+
+    assert!(
+        !chunked_segs.is_empty(),
+        "chunked feeding found no speech in a speech wav"
+    );
+    let diff = single_total.abs_diff(chunked_total);
+    assert!(
+        diff <= 512,
+        "chunked total ({chunked_total}) vs single-shot total ({single_total}) \
+         differ by more than one VAD window; the tail may have been dropped"
+    );
+}

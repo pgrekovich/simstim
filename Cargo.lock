@@ -845,11 +845,18 @@ dependencies = [
 name = "desktop"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "chrono",
+ "hound",
  "serde",
  "serde_json",
+ "simstim-capture",
+ "simstim-engine",
+ "simstim-transcript",
  "tauri",
  "tauri-build",
  "tauri-plugin-opener",
+ "tempfile",
 ]
 
 [[package]]

@@ -22,4 +22,13 @@ tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+anyhow = { workspace = true }
+chrono = "0.4"
+simstim-capture = { path = "../../../crates/capture" }
+simstim-engine = { path = "../../../crates/engine" }
+simstim-transcript = { path = "../../../crates/transcript" }
+
+[dev-dependencies]
+hound = "3"
+tempfile = "3"
 

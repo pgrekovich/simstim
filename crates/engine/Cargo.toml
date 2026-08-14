@@ -4,3 +4,9 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+sherpa-onnx = "1.13.5"
+anyhow = { workspace = true }
+dirs = "6"
+
+[dev-dependencies]
+hound = "3"

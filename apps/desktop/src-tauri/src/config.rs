@@ -2,10 +2,9 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-/// Single known model id for stage 0.5. `set_active_model` validates against
-/// this constant directly; once Task 2's `models.rs` registry lands, this
-/// constant should be dropped in favor of validating against
-/// `models::REGISTRY` ids.
+/// Default active model id, matching the single entry in `models::REGISTRY`.
+/// `set_active_model` validates ids against the registry itself, not this
+/// constant; this only seeds `Config::default()`.
 pub const KNOWN_MODEL_ID: &str = "parakeet-tdt-0.6b-v3-int8";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

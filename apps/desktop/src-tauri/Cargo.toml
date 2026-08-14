@@ -28,6 +28,11 @@ dirs = "6"
 simstim-capture = { path = "../../../crates/capture" }
 simstim-engine = { path = "../../../crates/engine" }
 simstim-transcript = { path = "../../../crates/transcript" }
+reqwest = { version = "0.13", default-features = false, features = ["stream", "rustls"] }
+tokio = { version = "1", default-features = false, features = ["fs", "io-util"] }
+futures-util = "0.3"
+tar = "0.4"
+bzip2 = "0.4"
 
 [dev-dependencies]
 hound = "3"

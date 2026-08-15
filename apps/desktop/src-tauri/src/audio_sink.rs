@@ -30,6 +30,26 @@
 //! fails, the WAV is kept instead of deleted (losing the call's audio
 //! entirely is worse than leaving a bigger file on disk) and the WAV's own
 //! path is returned in place of the FLAC's, alongside the reported error.
+//!
+//! ## Crash safety of the in-progress WAV
+//!
+//! `hound::WavWriter` leaves the RIFF/data-chunk length fields at 0 until
+//! [`hound::WavWriter::finalize`] runs (the clean-stop path in
+//! [`AudioSink::finish`]) or its `Drop` impl does a best-effort finalize --
+//! which does not run on a SIGKILL, a panic that unwinds past it, or a power
+//! loss. Verified empirically against hound 3.5.1: a writer abandoned
+//! without ever calling `flush()`/`finalize()` reads back as 0 samples, no
+//! matter how much was actually written -- a crash mid-call would lose the
+//! ENTIRE session's audio, not just the tail since the last write. `push`
+//! therefore calls [`hound::WavWriter::flush`] (which patches the header's
+//! length fields and flushes the underlying `BufWriter` -- otherwise the
+//! default 8KB buffer would also hold back the most recent audio past
+//! whatever the OS already has) every [`FLUSH_INTERVAL_FRAMES`] frames (2
+//! seconds of audio). That interval is the resulting data-loss window: a
+//! crash can only ever lose up to the last 2 seconds pushed, not the whole
+//! file. (This flushes to the OS, not an `fsync`; the same durability level
+//! `simstim_transcript::Transcript::save`'s write-then-rename already relies
+//! on elsewhere in this codebase.)
 
 use std::collections::VecDeque;
 use std::fs::File;
@@ -47,6 +67,12 @@ const SAMPLE_RATE: u32 = 16_000;
 /// by more than this many samples (1 second at 16 kHz), its excess is
 /// written against silence instead of waiting for the lagging channel.
 const MAX_LEAD_SAMPLES: usize = SAMPLE_RATE as usize;
+
+/// Crash-safety flush cadence (see the module docs): [`AudioSink::push`]
+/// flushes the WAV writer every this many stereo frames written -- 2
+/// seconds of audio at 16 kHz. This is also the data-loss window: a crash
+/// between flushes can lose at most the last 2 seconds pushed.
+const FLUSH_INTERVAL_FRAMES: usize = SAMPLE_RATE as usize * 2;
 
 /// The `.flac` sibling of a session's `.md` path (same basename, Global
 /// Constraints). Used by [`AudioSink::new`]/[`AudioSink::finish`] and by
@@ -193,6 +219,10 @@ pub struct AudioSink {
     writer: hound::WavWriter<BufWriter<File>>,
     queue_me: VecDeque<f32>,
     queue_them: VecDeque<f32>,
+    /// Stereo frames written since the last [`hound::WavWriter::flush`]
+    /// (see the module docs' crash-safety section). Reset to 0 every time
+    /// [`AudioSink::push`] triggers a flush at [`FLUSH_INTERVAL_FRAMES`].
+    frames_since_flush: usize,
 }
 
 impl AudioSink {
@@ -214,21 +244,36 @@ impl AudioSink {
             writer,
             queue_me: VecDeque::new(),
             queue_them: VecDeque::new(),
+            frames_since_flush: 0,
         })
     }
 
-    /// Queues `samples` for `channel` and immediately writes whatever the
-    /// sync rule ([`drain_sync_frames`]) allows. `on_error` receives a
-    /// message if the underlying WAV write fails; the sink otherwise carries
-    /// on (Global Constraints: a sink problem must not kill the recording).
+    /// Queues `samples` for `channel`, immediately writes whatever the sync
+    /// rule ([`drain_sync_frames`]) allows, and flushes the WAV writer every
+    /// [`FLUSH_INTERVAL_FRAMES`] frames so a crash never loses more than
+    /// that cadence's worth of audio (see the module docs' crash-safety
+    /// section). `on_error` receives a message if the underlying WAV write
+    /// or flush fails; the sink otherwise carries on (Global Constraints: a
+    /// sink problem must not kill the recording).
     pub fn push(&mut self, channel: Channel, samples: &[f32], on_error: &impl Fn(String)) {
         match channel {
             Channel::Me => self.queue_me.extend(samples.iter().copied()),
             Channel::Them => self.queue_them.extend(samples.iter().copied()),
         }
         let frames = drain_sync_frames(&mut self.queue_me, &mut self.queue_them);
+        if frames.is_empty() {
+            return;
+        }
         if let Err(e) = write_frames(&mut self.writer, &frames) {
             on_error(format!("audio sink: wav write failed: {e}"));
+            return;
+        }
+        self.frames_since_flush += frames.len();
+        if self.frames_since_flush >= FLUSH_INTERVAL_FRAMES {
+            if let Err(e) = self.writer.flush() {
+                on_error(format!("audio sink: wav flush failed: {e}"));
+            }
+            self.frames_since_flush = 0;
         }
     }
 
@@ -374,6 +419,46 @@ mod tests {
         assert_eq!(
             wav_path_for(md),
             Path::new("/tmp/2026-08-15 14-30-05 call.wav")
+        );
+    }
+
+    /// Regression test for the crash-safety fix (see the module docs): before
+    /// `push` flushed periodically, `hound::WavWriter` left the RIFF/data
+    /// length fields at 0 until `finalize()` or `Drop`, neither of which runs
+    /// on a SIGKILL or power loss -- so a crash mid-recording read back as a
+    /// 0-sample file, losing the ENTIRE session's audio rather than just the
+    /// tail. This pushes past one flush interval and deliberately never
+    /// calls `finish()` (simulating exactly that crash), then opens the wav
+    /// with a fresh `WavReader` -- proving the file is readable up to the
+    /// last flush instead of appearing empty.
+    #[test]
+    fn push_flushes_periodically_so_a_crash_leaves_a_readable_wav() {
+        let dir = tempfile::tempdir().unwrap();
+        let md_path = dir.path().join("call.md");
+        let mut sink = AudioSink::new(&md_path).unwrap();
+        let no_op = |_msg: String| {};
+
+        // Lockstep on both channels so the sync rule passes every sample
+        // straight through, and comfortably past one flush interval so the
+        // threshold is crossed at least once.
+        let chunk = vec![0.25f32; 4000];
+        let chunks_needed = FLUSH_INTERVAL_FRAMES / chunk.len() + 1;
+        for _ in 0..chunks_needed {
+            sink.push(Channel::Me, &chunk, &no_op);
+            sink.push(Channel::Them, &chunk, &no_op);
+        }
+
+        // No finish() call -- this is the simulated crash. A separate
+        // `WavReader` (not the sink's own writer) proves the OS-visible file
+        // is valid and readable right now, not just after a clean stop.
+        let wav_path = wav_path_for(&md_path);
+        let reader = hound::WavReader::open(&wav_path).unwrap();
+        let readable_frames = reader.len() as usize / 2; // interleaved stereo
+        assert!(
+            readable_frames >= FLUSH_INTERVAL_FRAMES,
+            "expected at least one flush interval's worth of frames \
+             ({FLUSH_INTERVAL_FRAMES}) to be readable without finish(), \
+             got {readable_frames}"
         );
     }
 

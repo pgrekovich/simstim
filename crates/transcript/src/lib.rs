@@ -35,6 +35,10 @@ pub struct Transcript {
     notes: String,
     duration_secs: Option<u64>,
     lines: Vec<Line>,
+    /// When set, overrides the rendered `## Transcript` section body with
+    /// this exact string instead of re-serializing `lines`. See
+    /// [`Transcript::set_raw_transcript`].
+    transcript_override: Option<String>,
 }
 
 impl Transcript {
@@ -46,6 +50,7 @@ impl Transcript {
             notes: String::new(),
             duration_secs: None,
             lines: Vec::new(),
+            transcript_override: None,
         }
     }
 
@@ -69,6 +74,22 @@ impl Transcript {
     /// traveling, or before a timezone change).
     pub fn set_raw_date(&mut self, raw: String) {
         self.date_override = Some(raw);
+    }
+
+    /// Overrides the rendered `## Transcript` section body with this exact
+    /// string instead of re-serializing `lines`.
+    ///
+    /// For rewriting an existing file (`sessions::rewrite_session`):
+    /// reparsing `[hh:mm:ss] Who: text` lines back into structured `Line`s
+    /// and re-adding them via [`Transcript::add`] silently drops any line
+    /// that doesn't match that exact shape -- including a hand-added
+    /// annotation a user typed directly into the file. Carrying the
+    /// original section text through verbatim instead preserves it
+    /// byte-exact across a title/notes save. Mirrors [`Self::set_raw_date`]:
+    /// once set, `lines` (and anything added via `add` afterward) is never
+    /// consulted by `render`.
+    pub fn set_raw_transcript(&mut self, raw: String) {
+        self.transcript_override = Some(raw);
     }
 
     /// Sets the final duration, rendered as a `duration: <minutes>m` frontmatter
@@ -131,20 +152,27 @@ impl Transcript {
             out.push_str("\n\n");
         }
         out.push_str("## Transcript\n\n");
-        for l in &self.lines {
-            let s = l.offset_secs as u64;
-            let who = match l.speaker {
-                Speaker::Me => "Me",
-                Speaker::Them => "Them",
-            };
-            out.push_str(&format!(
-                "[{:02}:{:02}:{:02}] {}: {}\n",
-                s / 3600,
-                (s % 3600) / 60,
-                s % 60,
-                who,
-                l.text
-            ));
+        if let Some(raw) = &self.transcript_override {
+            out.push_str(raw);
+            if !raw.is_empty() {
+                out.push('\n');
+            }
+        } else {
+            for l in &self.lines {
+                let s = l.offset_secs as u64;
+                let who = match l.speaker {
+                    Speaker::Me => "Me",
+                    Speaker::Them => "Them",
+                };
+                out.push_str(&format!(
+                    "[{:02}:{:02}:{:02}] {}: {}\n",
+                    s / 3600,
+                    (s % 3600) / 60,
+                    s % 60,
+                    who,
+                    l.text
+                ));
+            }
         }
         out
     }
@@ -400,6 +428,26 @@ mod tests {
         assert!(
             !md.contains(&default_date_line),
             "started_at's own formatting should not leak in once overridden"
+        );
+    }
+
+    #[test]
+    fn set_raw_transcript_overrides_the_rendered_section_verbatim() {
+        let mut t = Transcript::new(t0());
+        t.add(Speaker::Me, 3.0, "hi everyone".into());
+        t.set_raw_transcript(
+            "[00:00:01] Me: hi\n-- a hand-added annotation --\n[00:00:04] Them: hey".to_string(),
+        );
+        let md = t.render();
+        assert!(
+            md.ends_with(
+                "## Transcript\n\n[00:00:01] Me: hi\n-- a hand-added annotation --\n[00:00:04] Them: hey\n"
+            ),
+            "raw override should be emitted verbatim, not the lines added via add(): {md}"
+        );
+        assert!(
+            !md.contains("hi everyone"),
+            "lines added via add() must not leak in once the raw override is set"
         );
     }
 

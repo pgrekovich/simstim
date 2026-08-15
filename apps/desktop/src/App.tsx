@@ -35,18 +35,20 @@ import { truncateMiddle } from "@/lib/utils";
 const MODEL_LOAD_FALLBACK_MS = 15_000;
 
 /**
- * Seed data for `SessionView` while viewing the active recording. A freshly
- * started recording always begins as an untitled, empty-notes file (there is
- * no prior content to load), and `SessionView` only reads `initialData` once
- * on mount -- so this constant is only ever the starting point for title and
- * notes; the live transcript comes from `lines`/interim state instead. Its
- * `transcript` and `date` fields are unused while `isActive` is true.
+ * Starting title/notes for a freshly started recording (there is no prior
+ * content to load). `activeTitle`/`activeNotes` state below starts here on
+ * every `handleStart`, and is kept live thereafter via `SessionView`'s
+ * `onActiveEdit` callback -- so a `SessionView` remount for the active
+ * session (switching away and back while still recording) always seeds from
+ * the last actually-typed title/notes instead of resetting to this
+ * placeholder. See `SessionView`'s class doc comment for why a fixed
+ * placeholder here was the bug. The `transcript` and `date` fields are
+ * unused while `isActive` is true (the live transcript comes from
+ * `lines`/interim state instead), so they stay fixed.
  */
-const ACTIVE_SESSION_PLACEHOLDER: SessionData = {
+const ACTIVE_SESSION_PLACEHOLDER: Pick<SessionData, "title" | "notes"> = {
   title: "Untitled",
-  date: "",
   notes: "",
-  transcript: "",
 };
 
 type Status =
@@ -74,6 +76,12 @@ function App() {
   // pane should show the live in-memory `lines` instead of reading the file
   // from disk: see the `viewingActiveSession` comment below.
   const [activePath, setActivePath] = useState<string | null>(null);
+  // The active session's title/notes, lifted out of SessionView so they
+  // survive a remount (switching away from the active session and back):
+  // see ACTIVE_SESSION_PLACEHOLDER and SessionView's `onActiveEdit` prop.
+  // Reset to the placeholder in handleStart, kept live by onActiveEdit.
+  const [activeTitle, setActiveTitle] = useState(ACTIVE_SESSION_PLACEHOLDER.title);
+  const [activeNotes, setActiveNotes] = useState(ACTIVE_SESSION_PLACEHOLDER.notes);
   const [sessionData, setSessionData] = useState<SessionData | null>(null);
   const [sessionDataError, setSessionDataError] = useState<string | null>(null);
   // Set only on the SessionView instance rendered for the active recording
@@ -183,6 +191,28 @@ function App() {
     };
   }, [refreshSessions]);
 
+  // The sidebar's one-time refresh at `start_recording`'s resolution (in
+  // handleStart below) fires before the session file necessarily exists on
+  // disk: the engine/VAD load on the worker thread first, and only once
+  // that's done does it do its first save (see session.rs's module docs) --
+  // seconds away, with nothing else to prompt a re-scan in the meantime. So
+  // a recording in progress can be invisible in the sidebar for that whole
+  // stretch. `status.kind` flips "loading-model" -> "recording" right as
+  // that gap closes (either the first transcript line arriving, or --
+  // silence for the whole window -- the `MODEL_LOAD_FALLBACK_MS` fallback
+  // above), so refreshing exactly on that transition, watched here rather
+  // than duplicated in both of those call sites, covers both triggers with
+  // one `refreshSessions()` per recording (the transition only ever happens
+  // once: after "recording", status only moves on to "saved"/"error", not
+  // back to "loading-model", until a whole new handleStart).
+  const prevStatusKindRef = useRef(status.kind);
+  useEffect(() => {
+    if (prevStatusKindRef.current === "loading-model" && status.kind === "recording") {
+      refreshSessions();
+    }
+    prevStatusKindRef.current = status.kind;
+  }, [status.kind, refreshSessions]);
+
   // Loads the selected session for SessionView. The one exception is the
   // session currently being recorded (`activePath`): its file is being
   // written by the worker in the background and may lag or race a direct
@@ -231,6 +261,8 @@ function App() {
     setLines([]);
     setInterimMe("");
     setInterimThem("");
+    setActiveTitle(ACTIVE_SESSION_PLACEHOLDER.title);
+    setActiveNotes(ACTIVE_SESSION_PLACEHOLDER.notes);
     try {
       const path = await startRecording();
       setRecordingStartedAt(Date.now());
@@ -275,7 +307,18 @@ function App() {
     }
   }
 
-  const sessionActive = status.kind === "loading-model" || status.kind === "recording";
+  // Whether a recording is in progress, independent of `status`: derived
+  // from `activePath` (set for as long as the worker is running, cleared
+  // only by a successful stop) rather than `status.kind`. A session-error or
+  // a failed save mid-recording flips `status` to `{ kind: "error" }` without
+  // the worker actually stopping -- `status` is display-only. If the record
+  // control's mode (and its `onClick` target below) were derived from
+  // `status.kind` instead, that error would silently swap the button back to
+  // "Record" while still genuinely recording: clicking it would run
+  // handleStart against an already-running session (wiping the in-memory
+  // `lines` and getting an "already recording" rejection back) with no way
+  // left in the UI to actually stop.
+  const sessionActive = activePath !== null;
   const viewingActiveSession = selectedPath !== null && selectedPath === activePath;
   // The model-missing hint only replaces the status text while there is no
   // more specific status to show (idle, not recording): once a real status
@@ -345,12 +388,16 @@ function App() {
               key={selectedPath}
               path={selectedPath}
               isActive
-              initialData={ACTIVE_SESSION_PLACEHOLDER}
+              initialData={{ title: activeTitle, notes: activeNotes, date: "", transcript: "" }}
               liveLines={lines}
               interimMe={interimMe}
               interimThem={interimThem}
               onTitleChange={refreshSessions}
               onSaveError={(message) => setStatus({ kind: "error", message })}
+              onActiveEdit={(title, notes) => {
+                setActiveTitle(title);
+                setActiveNotes(notes);
+              }}
             />
           ) : sessionDataError ? (
             <p className="text-sm text-destructive">{sessionDataError}</p>

@@ -18,6 +18,16 @@ interface SessionViewProps {
   /** Notifies the caller after a title save resolves, so it can refresh the sidebar. */
   onTitleChange?: () => void;
   /**
+   * Fires synchronously on every title/notes change (including the
+   * empty-title-\>-"Untitled" normalization on commit), for the active
+   * session only. Undebounced and independent of save success: App uses
+   * this to cache the latest typed title/notes across a remount (see
+   * `ACTIVE_SESSION_PLACEHOLDER` / `activeTitle`/`activeNotes` in App.tsx),
+   * so switching away from the active session and back doesn't reseed this
+   * component with stale/blank content.
+   */
+  onActiveEdit?: (title: string, notes: string) => void;
+  /**
    * A title/notes save rejected (rare: a real backend failure, not the
    * ordinary no-op-when-unchanged skip). Surfaced through the same status
    * line App already uses for `session-error` events, since a save failure
@@ -48,6 +58,16 @@ export interface SessionViewHandle {
  * would have to distinguish "the path changed" from "the same session's data
  * was refetched out from under an in-progress edit".
  *
+ * For the active session specifically, `initialData` on any given mount is
+ * NOT a fixed placeholder: App lifts the active session's title/notes into
+ * its own state (updated live via `onActiveEdit`, called on every keystroke
+ * and on the empty-title normalization) and passes that back in as
+ * `initialData` on the next mount. Without this, switching away from the
+ * active session and back would remount this component seeded with a stale
+ * "Untitled"/"" placeholder instead of what was actually last typed, and the
+ * very next keystroke would then debounce-save that near-empty state over
+ * the real notes.
+ *
  * Routing: while `isActive`, edits go through `update_active_session` --
  * the worker owns that file under the single-writer rule (see
  * `src-tauri/src/session.rs`). Once recording stops, `isActive` flips to
@@ -74,7 +94,17 @@ export interface SessionViewHandle {
  * `handleStop`.
  */
 export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(function SessionView(
-  { path, isActive, initialData, liveLines, interimMe, interimThem, onTitleChange, onSaveError },
+  {
+    path,
+    isActive,
+    initialData,
+    liveLines,
+    interimMe,
+    interimThem,
+    onTitleChange,
+    onSaveError,
+    onActiveEdit,
+  },
   ref
 ) {
   const [title, setTitle] = useState(initialData.title);
@@ -115,6 +145,7 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
     if (value !== rawValue) {
       setTitle(value);
       titleRef.current = value;
+      onActiveEdit?.(titleRef.current, notesRef.current);
     }
     if (value === savedTitleRef.current) return Promise.resolve();
     savedTitleRef.current = value;
@@ -190,6 +221,7 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
     const value = e.target.value;
     setTitle(value);
     titleRef.current = value;
+    onActiveEdit?.(titleRef.current, notesRef.current);
   }
 
   // Enter blurs the input, which triggers the save via onBlur below.
@@ -204,6 +236,7 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
     const value = e.target.value;
     setNotes(value);
     notesRef.current = value;
+    onActiveEdit?.(titleRef.current, notesRef.current);
     if (notesTimeoutRef.current !== null) {
       window.clearTimeout(notesTimeoutRef.current);
     }

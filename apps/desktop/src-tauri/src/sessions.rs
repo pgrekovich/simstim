@@ -24,7 +24,7 @@ use serde::Serialize;
 use std::path::Path;
 use tauri::State;
 
-use simstim_transcript::{parse_meta, parse_session, Speaker, Transcript};
+use simstim_transcript::{parse_meta, parse_session, Transcript};
 
 use crate::config::Config;
 use crate::AppState;
@@ -118,10 +118,9 @@ pub fn save_session_at(
 
 /// Rewrites `path` with new title/notes, preserving date, asr and duration
 /// frontmatter and the transcript section verbatim. Reconstructs a
-/// `Transcript` from the parsed file (duration -> `set_duration_secs`,
-/// transcript lines re-added via `add`) and reuses its `render`/`save` so the
-/// on-disk format stays defined in exactly one place
-/// (`simstim_transcript::Transcript`) rather than duplicated here.
+/// `Transcript` from the parsed file (duration -> `set_duration_secs`) and
+/// reuses its `render`/`save` so the on-disk format stays defined in exactly
+/// one place (`simstim_transcript::Transcript`) rather than duplicated here.
 ///
 /// The date is carried through via `set_raw_date` (the original string,
 /// byte-exact) rather than parsed into a `DateTime<Local>` and reformatted:
@@ -134,6 +133,17 @@ pub fn save_session_at(
 /// there (shouldn't happen -- `parse_session` already required a `date`
 /// field to exist) falls back to `Local::now()` rather than erroring the
 /// whole rewrite.
+///
+/// The transcript section itself is carried through the same way, via
+/// `set_raw_transcript`, rather than reparsed into `(Speaker, offset, text)`
+/// triples and re-added via `Transcript::add`. An earlier version did the
+/// reparse: it recognized only `[hh:mm:ss] Who: text` lines and silently
+/// skipped anything else, which meant any hand-added annotation a user typed
+/// directly into the `## Transcript` section (this being a plain `.md` file,
+/// nothing stops that) was silently destroyed the next time the title or
+/// notes were saved. Carrying the raw section through verbatim makes a
+/// title/notes save touch only the frontmatter and `## Notes`, never the
+/// transcript body.
 ///
 /// The `asr` field itself isn't read back from the file at all: `Transcript`
 /// always renders the single asr id this codebase currently supports
@@ -156,38 +166,8 @@ fn rewrite_session(path: &Path, title: &str, notes: &str) -> Result<()> {
     if let Some(duration_secs) = meta.duration_secs {
         transcript.set_duration_secs(duration_secs);
     }
-    for (speaker, offset_secs, text) in parse_transcript_lines(&existing.transcript) {
-        transcript.add(speaker, offset_secs, text);
-    }
+    transcript.set_raw_transcript(existing.transcript.clone());
     transcript.save(path)
-}
-
-/// Parses `[hh:mm:ss] Who: text` lines (the exact shape `Transcript::render`
-/// produces) back into `(Speaker, offset_secs, text)` triples for feeding
-/// back through `Transcript::add`. Lines that don't match this shape are
-/// skipped rather than erroring: a hand-edited file with a stray line
-/// shouldn't make the whole rewrite fail.
-fn parse_transcript_lines(raw: &str) -> Vec<(Speaker, f64, String)> {
-    raw.lines().filter_map(parse_transcript_line).collect()
-}
-
-fn parse_transcript_line(line: &str) -> Option<(Speaker, f64, String)> {
-    let rest = line.trim().strip_prefix('[')?;
-    let (timestamp, rest) = rest.split_once(']')?;
-    let rest = rest.strip_prefix(' ').unwrap_or(rest);
-    let mut parts = timestamp.splitn(3, ':');
-    let h: u64 = parts.next()?.parse().ok()?;
-    let m: u64 = parts.next()?.parse().ok()?;
-    let s: u64 = parts.next()?.parse().ok()?;
-    let offset_secs = (h * 3600 + m * 60 + s) as f64;
-
-    let (who, text) = rest.split_once(": ")?;
-    let speaker = match who {
-        "Me" => Speaker::Me,
-        "Them" => Speaker::Them,
-        _ => return None,
-    };
-    Some((speaker, offset_secs, text.to_string()))
 }
 
 #[tauri::command]
@@ -215,6 +195,7 @@ pub fn save_session(
 mod tests {
     use super::*;
     use chrono::TimeZone;
+    use simstim_transcript::Speaker;
 
     fn t(hour: u32, min: u32, sec: u32) -> DateTime<Local> {
         Local.with_ymd_and_hms(2026, 8, 14, hour, min, sec).unwrap()
@@ -350,6 +331,36 @@ mod tests {
             date_line, "date: 2026-06-01T09:00:00-05:00",
             "the -05:00 offset must survive byte-exact, not get reformatted under the local timezone"
         );
+    }
+
+    #[test]
+    fn rewrite_preserves_hand_edited_transcript_lines_byte_exact() {
+        // Regression test for the final-review Important finding: an
+        // earlier version of `rewrite_session` reparsed `[hh:mm:ss] Who:
+        // text` lines back into structured entries via `Transcript::add`,
+        // silently dropping any line that didn't match that exact shape --
+        // including a hand-added annotation typed directly into the file.
+        // A title/notes save must leave the transcript section untouched,
+        // stray line and all.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("call.md");
+        let content = "---\ndate: 2026-06-01T09:00:00+02:00\ntitle: Old title\nasr: parakeet-tdt-0.6b-v3\n---\n\n## Notes\n\nOld notes\n\n## Transcript\n\n[00:00:01] Me: hi\n-- stray hand-added annotation, not a real transcript line --\n[00:00:04] Them: hey\n";
+        std::fs::write(&path, content).unwrap();
+
+        save_session_at(&path, "New title", "New notes", None).unwrap();
+
+        let after = std::fs::read_to_string(&path).unwrap();
+        let marker = "## Transcript\n\n";
+        let transcript_idx = after.find(marker).expect("transcript section missing");
+        let transcript_section = &after[transcript_idx + marker.len()..];
+        assert_eq!(
+            transcript_section,
+            "[00:00:01] Me: hi\n-- stray hand-added annotation, not a real transcript line --\n[00:00:04] Them: hey\n",
+            "hand-edited transcript section must survive byte-exact across a title/notes save"
+        );
+        assert!(after.contains("title: New title"));
+        assert!(after.contains("New notes"));
+        assert!(!after.contains("Old notes"));
     }
 
     #[test]

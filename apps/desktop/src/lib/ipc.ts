@@ -103,8 +103,17 @@ export function downloadModel(id: string): Promise<void> {
   return invoke("download_model", { id });
 }
 
-export function startRecording(): Promise<string> {
-  return invoke("start_recording");
+/**
+ * Starts recording. `path: null` starts a brand-new session (the previous
+ * behavior). `path: <a session's path>` instead continues that existing
+ * session: the worker loads its title/notes/transcript/date/duration and
+ * appends to it rather than overwriting, with new timestamps continuing from
+ * where the file left off. Mirrors `start_recording`
+ * (apps/desktop/src-tauri/src/lib.rs). Resolves with the path recorded into
+ * either way.
+ */
+export function startRecording(path: string | null): Promise<string> {
+  return invoke("start_recording", { path });
 }
 
 export function stopRecording(): Promise<string> {

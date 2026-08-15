@@ -126,6 +126,50 @@ describe("App: active-session notes survive a switch-away-and-back (final review
   });
 });
 
+describe("App: record continues into the open note (behavior fix)", () => {
+  it("passes null to start_recording when no session is selected", async () => {
+    render(<App />);
+
+    const recordButton = await screen.findByRole("button", { name: /^record$/i });
+    fireEvent.click(recordButton);
+
+    await waitFor(() => expect(ipc.startRecording).toHaveBeenCalledWith(null));
+  });
+
+  it("passes the selected session's path to start_recording, and seeds the view from its existing content", async () => {
+    const sessions: SessionMeta[] = [
+      { path: "/tmp/other.md", title: "Other call", date: new Date().toISOString(), duration_secs: null },
+    ];
+    vi.mocked(ipc.listSessions).mockResolvedValue(sessions);
+    vi.mocked(ipc.readSession).mockResolvedValue({
+      title: "Other call",
+      date: "",
+      notes: "old notes",
+      transcript: "[00:00:01] Me: hi",
+    });
+    vi.mocked(ipc.startRecording).mockResolvedValue("/tmp/other.md");
+
+    render(<App />);
+
+    const otherRow = await screen.findByRole("button", { name: /other call/i });
+    fireEvent.click(otherRow);
+    await screen.findByDisplayValue("old notes");
+
+    const recordButton = await screen.findByRole("button", { name: /^record$/i });
+    fireEvent.click(recordButton);
+
+    await waitFor(() => expect(ipc.startRecording).toHaveBeenCalledWith("/tmp/other.md"));
+    // Title/notes stay seeded from the file (not reset to "Untitled"/empty)
+    // once the session flips to actively recording.
+    await screen.findByDisplayValue("Other call");
+    await screen.findByDisplayValue("old notes");
+    // The existing transcript line must still be visible: recording into an
+    // open note must not lose what was already there.
+    await waitFor(() => expect(document.body.textContent).toContain("00:00:01"));
+    await waitFor(() => expect(document.body.textContent).toContain("hi"));
+  });
+});
+
 describe("App: sidebar refresh on model-ready (final review Important finding)", () => {
   it("refreshes the session list exactly once when the model finishes loading, not on every later line", async () => {
     render(<App />);

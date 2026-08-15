@@ -36,15 +36,20 @@ import { truncateMiddle } from "@/lib/utils";
 const MODEL_LOAD_FALLBACK_MS = 15_000;
 
 /**
- * Starting title/notes for a freshly started recording (there is no prior
- * content to load). `activeTitle`/`activeNotes` state below starts here on
- * every `handleStart`, and is kept live thereafter via `SessionView`'s
- * `onActiveEdit` callback -- so a `SessionView` remount for the active
- * session (switching away and back while still recording) always seeds from
- * the last actually-typed title/notes instead of resetting to this
+ * Starting title/notes for a freshly started recording that has no session
+ * selected to continue (there is no prior content to load). `handleStart`
+ * seeds `activeTitle`/`activeNotes` from here only when starting brand-new;
+ * when Record is pressed with a session selected, it instead reads that
+ * session's own title/notes/transcript and seeds from those (see
+ * `handleStart`'s "continuePath" handling) -- that's the behavior fix:
+ * recording continues the open note rather than always creating a new one.
+ * Either way, `activeTitle`/`activeNotes` are kept live thereafter via
+ * `SessionView`'s `onActiveEdit` callback, so a `SessionView` remount for the
+ * active session (switching away and back while still recording) always
+ * seeds from the last actually-typed title/notes instead of resetting to a
  * placeholder. See `SessionView`'s class doc comment for why a fixed
- * placeholder here was the bug. The `transcript` and `date` fields are
- * unused while `isActive` is true (the live transcript comes from
+ * placeholder here was the original bug. The `transcript` and `date` fields
+ * are unused while `isActive` is true (the live transcript comes from
  * `lines`/interim state instead), so they stay fixed.
  */
 const ACTIVE_SESSION_PLACEHOLDER: Pick<SessionData, "title" | "notes"> = {
@@ -259,13 +264,31 @@ function App() {
   async function handleStart() {
     if (busy) return;
     setBusy(true);
-    setLines([]);
     setInterimMe("");
     setInterimThem("");
-    setActiveTitle(ACTIVE_SESSION_PLACEHOLDER.title);
-    setActiveNotes(ACTIVE_SESSION_PLACEHOLDER.notes);
+    // Record into the currently selected session if there is one, else start
+    // a fresh one (Global Constraints / behavior fix: Record must continue
+    // the open note, not always create a new one). Read the existing
+    // session once, right here at start, so the live view can seed its
+    // transcript/title/notes from what's actually on disk instead of the
+    // "Untitled"/empty placeholder -- new lines from this recording are
+    // appended after it by the `transcript-line` listener above, never
+    // re-rendering what's already seeded.
+    const continuePath = selectedPath;
     try {
-      const path = await startRecording();
+      let seedTitle = ACTIVE_SESSION_PLACEHOLDER.title;
+      let seedNotes = ACTIVE_SESSION_PLACEHOLDER.notes;
+      let seedLines: string[] = [];
+      if (continuePath !== null) {
+        const existing = await readSession(continuePath);
+        seedTitle = existing.title;
+        seedNotes = existing.notes;
+        seedLines = existing.transcript.split("\n").filter((line) => line.length > 0);
+      }
+      setLines(seedLines);
+      setActiveTitle(seedTitle);
+      setActiveNotes(seedNotes);
+      const path = await startRecording(continuePath);
       setRecordingStartedAt(Date.now());
       setActivePath(path);
       setSelectedPath(path);

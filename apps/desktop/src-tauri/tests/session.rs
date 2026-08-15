@@ -98,6 +98,7 @@ fn session_transcribes_fake_channel_stream() {
     let session = desktop_lib::session::Session::start(
         rx,
         out.clone(),
+        None,
         no_pending_edits(),
         |_| {},
         |_, _| {},
@@ -128,6 +129,7 @@ fn session_stop_with_no_chunks_still_produces_valid_file() {
     let session = desktop_lib::session::Session::start(
         rx,
         out.clone(),
+        None,
         no_pending_edits(),
         |_| {},
         |_, _| {},
@@ -163,8 +165,15 @@ fn pending_edits_set_before_start_land_in_the_saved_file() {
         .unwrap()
         .update(Some("Live edited title".into()), Some("Live notes".into()));
 
-    let session =
-        desktop_lib::session::Session::start(rx, out.clone(), pending, |_| {}, |_, _| {}, |_| {});
+    let session = desktop_lib::session::Session::start(
+        rx,
+        out.clone(),
+        None,
+        pending,
+        |_| {},
+        |_, _| {},
+        |_| {},
+    );
     for chunk in samples.chunks(1600) {
         tx.send(Chunk {
             channel: Channel::Them,
@@ -196,6 +205,7 @@ fn save_failures_are_reported_via_on_error_and_stop_returns_err() {
     let session = desktop_lib::session::Session::start(
         rx,
         out,
+        None,
         no_pending_edits(),
         |_| {},
         |_, _| {},
@@ -213,4 +223,163 @@ fn save_failures_are_reported_via_on_error_and_stop_returns_err() {
         !errors.lock().unwrap().is_empty(),
         "expected at least one session-error message reported"
     );
+}
+
+/// Parses a `[hh:mm:ss] ...` line's leading timestamp into total seconds,
+/// mirroring `format_line`'s own output shape (test-local, not the
+/// production `last_offset_secs` this exercises).
+fn parse_offset_secs(line: &str) -> Option<u64> {
+    let rest = line.strip_prefix('[')?;
+    let (ts, _) = rest.split_once(']')?;
+    let mut parts = ts.splitn(3, ':');
+    let h: u64 = parts.next()?.parse().ok()?;
+    let m: u64 = parts.next()?.parse().ok()?;
+    let s: u64 = parts.next()?.parse().ok()?;
+    Some(h * 3600 + m * 60 + s)
+}
+
+// Behavior fix: "I create a new note, press Record, and it creates ANOTHER
+// new note" -- start_recording(path) must continue an existing session file
+// rather than always writing a new one. This exercises the whole
+// `ContinueFrom` seeding path (title/notes/date/duration/transcript) through
+// a real `Session::start` continuation, not just `load_continue_from` in
+// isolation.
+#[test]
+fn continuing_an_existing_session_appends_after_existing_content_with_continued_timestamps_title_notes_date_and_duration(
+) {
+    let samples = load_wav_16k_mono(&test_wav_path());
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("call.md");
+
+    // A pre-existing session: real title/notes/duration, a hand-edited
+    // annotation mixed into the transcript, and a UTC offset that differs
+    // from local time (so the date-preservation guard, and not a lucky
+    // coincidence with this machine's own offset, is what's under test).
+    let existing = "---\n\
+        date: 2026-06-01T09:00:00-05:00\n\
+        title: Weekly sync\n\
+        asr: parakeet-tdt-0.6b-v3\n\
+        duration: 5m\n\
+        ---\n\n\
+        ## Notes\n\nSome notes\n\n\
+        ## Transcript\n\n\
+        [00:00:01] Me: hi\n\
+        -- a hand-added annotation --\n\
+        [00:04:50] Them: hey\n";
+    std::fs::write(&out, existing).unwrap();
+
+    let seed = desktop_lib::session::load_continue_from(&out).unwrap();
+    assert_eq!(seed.title, "Weekly sync");
+    assert_eq!(seed.notes, "Some notes");
+    assert_eq!(seed.raw_date, "2026-06-01T09:00:00-05:00");
+    assert_eq!(seed.previous_duration_secs, 300);
+    assert_eq!(seed.base_offset_secs, 290.0, "4m50s = 290s, the last real timestamp");
+
+    let (tx, rx) = channel();
+    let session = desktop_lib::session::Session::start(
+        rx,
+        out.clone(),
+        Some(seed),
+        no_pending_edits(),
+        |_| {},
+        |_, _| {},
+        |_| {},
+    );
+    for chunk in samples.chunks(1600) {
+        tx.send(Chunk {
+            channel: Channel::Them,
+            samples: chunk.to_vec(),
+        })
+        .unwrap();
+    }
+    drop(tx);
+    let path = session.stop().unwrap();
+    assert_eq!(path, out, "continuing a session must write to the same file, never a new one");
+    let md = std::fs::read_to_string(&path).unwrap();
+
+    assert!(md.contains("title: Weekly sync"), "title not preserved:\n{md}");
+    assert!(md.contains("Some notes"), "notes not preserved:\n{md}");
+    let date_line = md.lines().find(|l| l.starts_with("date:")).unwrap();
+    assert_eq!(
+        date_line, "date: 2026-06-01T09:00:00-05:00",
+        "original date (and its foreign UTC offset) must survive byte-exact"
+    );
+    assert!(
+        md.contains("[00:00:01] Me: hi\n-- a hand-added annotation --\n[00:04:50] Them: hey"),
+        "existing transcript content (hand-edited line included) must survive byte-exact:\n{md}"
+    );
+
+    let transcript_idx = md.find("## Transcript\n\n").unwrap();
+    let transcript_section = &md[transcript_idx..];
+    let existing_line_end = transcript_section.find("[00:04:50] Them: hey").unwrap()
+        + "[00:04:50] Them: hey".len();
+    let new_content = &transcript_section[existing_line_end..];
+    let new_lines: Vec<&str> = new_content.lines().filter(|l| !l.is_empty()).collect();
+    assert!(
+        !new_lines.is_empty(),
+        "expected at least one brand-new transcribed line after the existing content:\n{md}"
+    );
+    for line in &new_lines {
+        let offset = parse_offset_secs(line)
+            .unwrap_or_else(|| panic!("new line doesn't parse as a timestamped line: {line}"));
+        assert!(
+            offset >= 290,
+            "new line's timestamp {offset}s looks reset near 0 instead of continuing from 290s: {line}"
+        );
+    }
+
+    let duration_line = md.lines().find(|l| l.starts_with("duration:")).unwrap();
+    let minutes: u64 = duration_line
+        .trim_start_matches("duration: ")
+        .trim_end_matches('m')
+        .parse()
+        .unwrap();
+    assert!(
+        minutes >= 5,
+        "duration should accumulate on top of the previous 5m, got: {duration_line}"
+    );
+}
+
+#[test]
+fn continuing_a_session_with_no_prior_transcript_starts_offsets_at_zero() {
+    // A freshly created empty note (title "Untitled", no transcript yet):
+    // continuing it should behave like a normal first recording, not
+    // introduce a stray offset or leading blank line.
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("call.md");
+    simstim_transcript::Transcript::new(chrono::Local::now())
+        .save(&out)
+        .unwrap();
+
+    let seed = desktop_lib::session::load_continue_from(&out).unwrap();
+    assert_eq!(seed.base_offset_secs, 0.0);
+    assert_eq!(seed.previous_duration_secs, 0);
+    assert_eq!(seed.transcript_prefix, "");
+
+    let samples = load_wav_16k_mono(&test_wav_path());
+    let (tx, rx) = channel();
+    let session = desktop_lib::session::Session::start(
+        rx,
+        out.clone(),
+        Some(seed),
+        no_pending_edits(),
+        |_| {},
+        |_, _| {},
+        |_| {},
+    );
+    for chunk in samples.chunks(1600) {
+        tx.send(Chunk {
+            channel: Channel::Them,
+            samples: chunk.to_vec(),
+        })
+        .unwrap();
+    }
+    drop(tx);
+    let path = session.stop().unwrap();
+    let md = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        !md.contains("## Transcript\n\n\n"),
+        "empty prefix must not leave a stray leading blank line:\n{md}"
+    );
+    assert!(md.contains("Them:"), "expected a transcribed line:\n{md}");
 }

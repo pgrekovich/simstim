@@ -72,9 +72,31 @@ impl AppState {
     }
 }
 
+/// Whether starting a recording into `path` should be rejected because it
+/// equals the currently-active session's path. Recording into an
+/// already-recording session is impossible via the UI (the Record button
+/// becomes Stop while a session is active, so `path` would never even be
+/// offered), but the backend still guards it explicitly rather than relying
+/// solely on that. Factored out as a pure function so it's directly
+/// unit-testable without a running Tauri `State`.
+fn rejects_recording_into_active_path(path: Option<&std::path::Path>, active: Option<&std::path::Path>) -> bool {
+    path.is_some() && path == active
+}
+
+/// `start_recording(path: None)` starts a brand-new session, exactly as
+/// before. `start_recording(path: Some(p))` instead continues the existing
+/// session at `p`: the worker loads its title/notes/transcript/date/duration
+/// and appends to it rather than overwriting, with new timestamps
+/// continuing from where the file left off (see `session::ContinueFrom`'s
+/// docs). Returns the path recorded into either way.
 #[tauri::command]
-fn start_recording(app: AppHandle, state: State<AppState>) -> Result<String, String> {
+fn start_recording(app: AppHandle, path: Option<String>, state: State<AppState>) -> Result<String, String> {
+    let path = path.map(PathBuf::from);
     let mut guard = state.0.lock().unwrap();
+    let active_path = guard.as_ref().map(|r| r.path.as_path());
+    if rejects_recording_into_active_path(path.as_deref(), active_path) {
+        return Err("cannot record into a session that is already recording".into());
+    }
     if guard.is_some() {
         return Err("already recording".into());
     }
@@ -85,10 +107,19 @@ fn start_recording(app: AppHandle, state: State<AppState>) -> Result<String, Str
             .unwrap_or(cfg.active_model.as_str());
         return Err(format!("model not downloaded: {name}"));
     }
+    let (out, continue_from) = match &path {
+        Some(p) => {
+            let seed = session::load_continue_from(p).map_err(|e| e.to_string())?;
+            (p.clone(), Some(seed))
+        }
+        None => (
+            simstim_transcript::output_path(&cfg.output_dir, chrono::Local::now()),
+            None,
+        ),
+    };
     let (tx, rx) = std::sync::mpsc::channel();
     let mic = simstim_capture::mic::start_mic(tx.clone()).map_err(|e| e.to_string())?;
     let speaker = simstim_capture::speaker::start_speaker(tx).map_err(|e| e.to_string())?;
-    let out = simstim_transcript::output_path(&cfg.output_dir, chrono::Local::now());
     let pending_edits = Arc::new(Mutex::new(PendingEdits::default()));
     let line_emitter = app.clone();
     let interim_emitter = app.clone();
@@ -96,6 +127,7 @@ fn start_recording(app: AppHandle, state: State<AppState>) -> Result<String, Str
     let session = session::Session::start(
         rx,
         out.clone(),
+        continue_from,
         pending_edits.clone(),
         move |line| {
             let _ = line_emitter.emit("transcript-line", line);
@@ -204,4 +236,44 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn rejects_recording_into_active_path_is_false_when_nothing_is_active() {
+        assert!(!rejects_recording_into_active_path(
+            Some(Path::new("/tmp/call.md")),
+            None
+        ));
+    }
+
+    #[test]
+    fn rejects_recording_into_active_path_is_false_for_a_different_path() {
+        assert!(!rejects_recording_into_active_path(
+            Some(Path::new("/tmp/call.md")),
+            Some(Path::new("/tmp/other.md"))
+        ));
+    }
+
+    #[test]
+    fn rejects_recording_into_active_path_is_false_when_starting_fresh() {
+        // path: None ("start a new session") is never rejected, regardless
+        // of what's active -- there's nothing to collide with.
+        assert!(!rejects_recording_into_active_path(
+            None,
+            Some(Path::new("/tmp/call.md"))
+        ));
+    }
+
+    #[test]
+    fn rejects_recording_into_active_path_is_true_when_path_equals_active() {
+        assert!(rejects_recording_into_active_path(
+            Some(Path::new("/tmp/call.md")),
+            Some(Path::new("/tmp/call.md"))
+        ));
+    }
 }

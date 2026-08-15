@@ -73,7 +73,7 @@ use std::time::{Duration, Instant};
 use chrono::Local;
 use simstim_capture::{Channel, Chunk};
 use simstim_engine::{models_dir, Engine, Segment, Vad};
-use simstim_transcript::{Speaker, Transcript};
+use simstim_transcript::{last_offset_secs, parse_meta, parse_session, Speaker, Transcript};
 
 /// Minimum gap between edit-triggered saves (saves that happen only because
 /// a pending title/notes edit landed with no segment finalizing alongside
@@ -210,6 +210,51 @@ fn apply_pending_edits(pending: &Mutex<PendingEdits>, transcript: &mut Transcrip
     applied
 }
 
+/// Data loaded from an existing session file when `start_recording` is asked
+/// to continue it rather than start a fresh one (the `path` IPC parameter:
+/// "record into the open note" behavior fix). Fully resolved up front so
+/// `run_worker` only has to apply it, not reparse anything itself:
+///
+/// - `title`/`notes`/`raw_date` seed the worker's `Transcript` so its own
+///   saves don't wipe them back to "Untitled"/empty/today (the worker's
+///   `PendingEdits` still apply on top of this base, same as ever).
+/// - `transcript_prefix` is the existing `## Transcript` section text,
+///   verbatim (may hold hand edits) -- fed to
+///   [`Transcript::set_transcript_prefix`] so new lines render after it
+///   instead of replacing it.
+/// - `base_offset_secs` is [`last_offset_secs`] of that same text: added (as
+///   samples) to both channels' starting sample-offset bookkeeping so new
+///   timestamps continue from where the file left off instead of restarting
+///   at 00:00:00.
+/// - `previous_duration_secs` is the file's existing `duration:` frontmatter
+///   (0 if it had none), added to this recording's own elapsed time on stop.
+pub struct ContinueFrom {
+    pub title: String,
+    pub notes: String,
+    pub raw_date: String,
+    pub transcript_prefix: String,
+    pub base_offset_secs: f64,
+    pub previous_duration_secs: u64,
+}
+
+/// Loads `path`'s existing content into a [`ContinueFrom`] seed for
+/// [`Session::start`]. `path` must already parse as a session file (same
+/// requirement `sessions::read_session_at` has); a junk or missing file
+/// returns `Err`.
+pub fn load_continue_from(path: &Path) -> anyhow::Result<ContinueFrom> {
+    let data = parse_session(path)?;
+    let meta = parse_meta(path)?;
+    let base_offset_secs = last_offset_secs(&data.transcript);
+    Ok(ContinueFrom {
+        title: data.title,
+        notes: data.notes,
+        raw_date: data.date,
+        transcript_prefix: data.transcript,
+        base_offset_secs,
+        previous_duration_secs: meta.duration_secs.unwrap_or(0),
+    })
+}
+
 /// A running recording session. Drop or call [`Session::stop`] to tear it
 /// down; `stop` blocks until the worker has flushed and saved everything.
 pub struct Session {
@@ -229,9 +274,15 @@ impl Session {
     /// disk. `on_error` fires on engine/VAD init failures and save failures
     /// (these are also always `eprintln!`-ed, so `on_error` failing to reach
     /// a UI never loses the diagnostic entirely).
+    ///
+    /// `continue_from`: `None` starts a brand-new session at `out_path` (the
+    /// existing behavior). `Some` continues an existing session already at
+    /// `out_path` instead -- see [`ContinueFrom`]'s docs for exactly what
+    /// gets seeded/offset.
     pub fn start(
         chunk_rx: Receiver<Chunk>,
         out_path: PathBuf,
+        continue_from: Option<ContinueFrom>,
         pending_edits: Arc<Mutex<PendingEdits>>,
         on_line: impl Fn(String) + Send + 'static,
         on_interim: impl Fn(Channel, String) + Send + 'static,
@@ -243,6 +294,7 @@ impl Session {
             run_worker(
                 chunk_rx,
                 out_path,
+                continue_from,
                 pending_edits,
                 on_line,
                 on_interim,
@@ -277,9 +329,11 @@ fn report_error(on_error: &impl Fn(String), msg: String) {
     on_error(msg);
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_worker(
     chunk_rx: Receiver<Chunk>,
     out_path: PathBuf,
+    continue_from: Option<ContinueFrom>,
     pending_edits: Arc<Mutex<PendingEdits>>,
     on_line: impl Fn(String),
     on_interim: impl Fn(Channel, String),
@@ -302,8 +356,31 @@ fn run_worker(
         e
     })?;
     let mut transcript = Transcript::new(started_at);
-    let mut interim_me = ChannelInterim::default();
-    let mut interim_them = ChannelInterim::default();
+
+    // Seed the transcript from the existing file when continuing one, and
+    // compute the sample offset that keeps new timestamps continuing from
+    // where it left off instead of restarting at 00:00:00. See
+    // `ContinueFrom`'s docs.
+    let previous_duration_secs = continue_from.as_ref().map_or(0, |c| c.previous_duration_secs);
+    let base_offset_samples = match continue_from {
+        Some(seed) => {
+            transcript.set_title(seed.title);
+            transcript.set_notes(seed.notes);
+            transcript.set_raw_date(seed.raw_date);
+            let base_offset_secs = seed.base_offset_secs;
+            transcript.set_transcript_prefix(seed.transcript_prefix);
+            (base_offset_secs * 16000.0).round() as usize
+        }
+        None => 0,
+    };
+    let mut interim_me = ChannelInterim {
+        epoch_base_samples: base_offset_samples,
+        ..Default::default()
+    };
+    let mut interim_them = ChannelInterim {
+        epoch_base_samples: base_offset_samples,
+        ..Default::default()
+    };
 
     // Save once up front so the file exists even if the session ends (stop
     // called, or the sender is dropped) before any speech is detected.
@@ -387,7 +464,7 @@ fn run_worker(
     }
 
     let elapsed_secs = (Local::now() - started_at).num_seconds().max(0) as u64;
-    transcript.set_duration_secs(elapsed_secs);
+    transcript.set_duration_secs(previous_duration_secs + elapsed_secs);
     if let Err(e) = transcript.save(&out_path) {
         report_error(
             &on_error,

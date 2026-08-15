@@ -39,6 +39,10 @@ pub struct Transcript {
     /// this exact string instead of re-serializing `lines`. See
     /// [`Transcript::set_raw_transcript`].
     transcript_override: Option<String>,
+    /// When set (and `transcript_override` is not), rendered verbatim ahead
+    /// of `lines` in the `## Transcript` section. See
+    /// [`Transcript::set_transcript_prefix`].
+    transcript_prefix: Option<String>,
 }
 
 impl Transcript {
@@ -51,6 +55,7 @@ impl Transcript {
             duration_secs: None,
             lines: Vec::new(),
             transcript_override: None,
+            transcript_prefix: None,
         }
     }
 
@@ -90,6 +95,28 @@ impl Transcript {
     /// consulted by `render`.
     pub fn set_raw_transcript(&mut self, raw: String) {
         self.transcript_override = Some(raw);
+    }
+
+    /// Sets a verbatim prefix for the `## Transcript` section: `render()`
+    /// emits this exact text first (if non-empty), followed by a newline,
+    /// then whatever `lines` holds (via [`Transcript::add`]) rendered as
+    /// usual.
+    ///
+    /// For continuing an existing session (`start_recording`'s `path`
+    /// parameter, see `session.rs`'s "continuing a session" docs): the
+    /// existing transcript text (which may hold hand edits, see
+    /// [`Self::set_raw_transcript`]'s docs for why that must never be
+    /// reparsed) needs to survive byte-exact while new lines from this
+    /// recording are appended after it. `set_raw_transcript` can't be reused
+    /// for this: it OVERRIDES the section outright, so anything added via
+    /// `add()` afterward would never render at all. This is deliberately a
+    /// separate field rather than unified with `transcript_override` --
+    /// `rewrite_session`'s rewrite path (title/notes edits on an inactive,
+    /// already-fully-written session) never adds new lines afterward, so its
+    /// override-everything semantics stay exactly as before, untouched by
+    /// this addition.
+    pub fn set_transcript_prefix(&mut self, raw: String) {
+        self.transcript_prefix = Some(raw);
     }
 
     /// Sets the final duration, rendered as a `duration: <minutes>m` frontmatter
@@ -158,6 +185,12 @@ impl Transcript {
                 out.push('\n');
             }
         } else {
+            if let Some(prefix) = &self.transcript_prefix
+                && !prefix.is_empty()
+            {
+                out.push_str(prefix);
+                out.push('\n');
+            }
             for l in &self.lines {
                 let s = l.offset_secs as u64;
                 let who = match l.speaker {
@@ -192,6 +225,37 @@ pub fn output_path(dir: &Path, started_at: DateTime<Local>) -> PathBuf {
         "{} call.md",
         started_at.format("%Y-%m-%d %H-%M-%S")
     ))
+}
+
+/// Computes the base offset (whole seconds) to continue new timestamps from
+/// when recording into a session that already has transcript content: the
+/// LAST `[hh:mm:ss] ...` timestamp found in `raw`, scanning from the end and
+/// skipping any line that doesn't parse as one (a hand-written annotation,
+/// or any other garbage a user may have typed directly into the file).
+/// Returns `0.0` if no line in `raw` parses as a timestamp, including an
+/// empty block -- a continuation with no prior lines has nothing to offset
+/// from.
+///
+/// For `start_recording`'s `path` parameter (see `session.rs`'s "continuing
+/// a session" docs): this is added to every new line's offset for the
+/// recording being continued, so new timestamps don't restart at 00:00:00
+/// and collide with (or read as earlier than) what's already on disk.
+pub fn last_offset_secs(raw: &str) -> f64 {
+    raw.lines().rev().find_map(parse_line_offset_secs).unwrap_or(0.0)
+}
+
+/// Parses a `[hh:mm:ss] ...` line's leading timestamp into total seconds.
+/// `None` for anything that doesn't start with a `[hh:mm:ss]`-shaped prefix
+/// (a hand-written annotation, a blank line, or any other non-matching
+/// content).
+fn parse_line_offset_secs(line: &str) -> Option<f64> {
+    let rest = line.strip_prefix('[')?;
+    let (ts, _) = rest.split_once(']')?;
+    let mut parts = ts.splitn(3, ':');
+    let h: u64 = parts.next()?.parse().ok()?;
+    let m: u64 = parts.next()?.parse().ok()?;
+    let s: u64 = parts.next()?.parse().ok()?;
+    Some((h * 3600 + m * 60 + s) as f64)
 }
 
 /// Full contents of a parsed session file, as read by the UI's session view.
@@ -591,6 +655,87 @@ mod tests {
         let meta = parse_meta(&path).unwrap();
         assert_eq!(meta.title, "Untitled");
         assert_eq!(meta.duration_secs, None);
+    }
+
+    #[test]
+    fn set_transcript_prefix_renders_prefix_then_new_lines_after_it() {
+        let mut t = Transcript::new(t0());
+        t.set_transcript_prefix(
+            "[00:00:01] Me: hi\n-- a hand-added annotation --\n[00:04:50] Them: hey".to_string(),
+        );
+        t.add(Speaker::Me, 300.0, "welcome back".into());
+        let md = t.render();
+        assert!(
+            md.ends_with(
+                "## Transcript\n\n[00:00:01] Me: hi\n-- a hand-added annotation --\n\
+                 [00:04:50] Them: hey\n[00:05:00] Me: welcome back\n"
+            ),
+            "prefix should render verbatim, followed by newly added lines: {md}"
+        );
+    }
+
+    #[test]
+    fn set_transcript_prefix_empty_renders_only_new_lines() {
+        // Continuing a session with no prior transcript content (e.g. a
+        // freshly created empty note): an empty prefix must not insert a
+        // stray leading blank line before the new content.
+        let mut t = Transcript::new(t0());
+        t.set_transcript_prefix(String::new());
+        t.add(Speaker::Me, 3.0, "hi".into());
+        let md = t.render();
+        assert!(
+            md.ends_with("## Transcript\n\n[00:00:03] Me: hi\n"),
+            "empty prefix should not add a leading blank line: {md}"
+        );
+    }
+
+    #[test]
+    fn set_raw_transcript_still_overrides_even_with_lines_added_and_no_prefix_set() {
+        // Regression guard: adding set_transcript_prefix must not change
+        // set_raw_transcript's existing override-everything behavior when
+        // transcript_prefix is never set (the rewrite_session path).
+        let mut t = Transcript::new(t0());
+        t.add(Speaker::Me, 3.0, "hi everyone".into());
+        t.set_raw_transcript("verbatim override".to_string());
+        let md = t.render();
+        assert!(md.ends_with("## Transcript\n\nverbatim override\n"));
+        assert!(!md.contains("hi everyone"));
+    }
+
+    #[test]
+    fn last_offset_secs_is_zero_for_an_empty_block() {
+        assert_eq!(last_offset_secs(""), 0.0);
+    }
+
+    #[test]
+    fn last_offset_secs_finds_the_last_timestamp() {
+        let raw = "[00:00:01] Me: hi\n[00:00:04] Them: hey\n[00:04:50] Me: bye";
+        assert_eq!(last_offset_secs(raw), 290.0);
+    }
+
+    #[test]
+    fn last_offset_secs_ignores_trailing_hand_written_garbage() {
+        let raw = "[00:00:01] Me: hi\n[00:04:50] Them: hey\n-- a hand-added annotation --";
+        assert_eq!(
+            last_offset_secs(raw),
+            290.0,
+            "should skip the unparseable trailing line and find the last real timestamp"
+        );
+    }
+
+    #[test]
+    fn last_offset_secs_ignores_a_garbage_line_with_a_bracket_but_no_valid_timestamp() {
+        let raw = "[00:00:01] Me: hi\n[not-a-timestamp] Them: hey";
+        assert_eq!(
+            last_offset_secs(raw),
+            1.0,
+            "a bracketed but non-numeric line should be skipped, not crash or misparse"
+        );
+    }
+
+    #[test]
+    fn last_offset_secs_returns_zero_when_no_line_parses_at_all() {
+        assert_eq!(last_offset_secs("just some plain hand-written text\nno timestamps here"), 0.0);
     }
 
     #[test]

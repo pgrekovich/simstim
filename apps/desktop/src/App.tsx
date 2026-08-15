@@ -53,8 +53,10 @@ function App() {
     getConfig()
       .then((config) => initTheme(config.theme))
       .catch(() => {
-        // No config yet (e.g. first launch before it's ever been written):
-        // the pre-paint script's system guess stands.
+        // Defensive only: `get_config` doesn't actually reject on a missing
+        // config file (`Config::load` falls back to `Config::default()`), so
+        // this is just guarding against an unexpected IPC failure. If it
+        // ever does fire, the pre-paint script's system guess stands.
       });
   }, []);
 

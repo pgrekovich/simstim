@@ -59,6 +59,8 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [choosingDir, setChoosingDir] = useState(false);
+  const [themeError, setThemeError] = useState<string | null>(null);
+  const [folderError, setFolderError] = useState<string | null>(null);
   const [progress, setProgress] = useState<Record<string, DownloadProgress>>({});
   const [busyIds, setBusyIds] = useState<Set<string>>(new Set());
   const onModelsChangedRef = useRef(onModelsChanged);
@@ -125,23 +127,37 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
   }, [refresh]);
 
   async function handleSetTheme(theme: string) {
-    if (theme === config?.theme) return;
+    const previous = config?.theme;
+    if (theme === previous || previous === undefined) return;
+    setThemeError(null);
     // Apply immediately (no waiting on the round-trip) so the toggle feels
     // instant; the optimistic `config` update below keeps the active button
-    // in sync even though `refresh()` isn't called here.
+    // in sync even though `refresh()` isn't called here. If the IPC call
+    // below rejects (e.g. Config::save disk error), both are rolled back so
+    // the applied class and the highlighted button never diverge from what
+    // actually got persisted.
     applyTheme(theme);
     setConfig((prev) => (prev ? { ...prev, theme } : prev));
-    await setTheme(theme);
+    try {
+      await setTheme(theme);
+    } catch (err) {
+      applyTheme(previous);
+      setConfig((prev) => (prev ? { ...prev, theme: previous } : prev));
+      setThemeError(String(err));
+    }
   }
 
   async function handleChooseFolder() {
     setChoosingDir(true);
+    setFolderError(null);
     try {
       const selected = await open({ directory: true });
       if (typeof selected === "string") {
         await setOutputDir(selected);
         await refresh();
       }
+    } catch (err) {
+      setFolderError(String(err));
     } finally {
       setChoosingDir(false);
     }
@@ -213,6 +229,7 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
               </Button>
             ))}
           </div>
+          {themeError && <span className="text-xs text-destructive">{themeError}</span>}
         </section>
 
         <section className="flex flex-col gap-2">
@@ -230,6 +247,7 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
               Choose folder
             </Button>
           </div>
+          {folderError && <span className="text-xs text-destructive">{folderError}</span>}
         </section>
 
         <section className="flex flex-col gap-2">

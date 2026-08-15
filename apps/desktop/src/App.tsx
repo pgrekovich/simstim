@@ -2,15 +2,10 @@ import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { RecordButton } from "@/components/RecordButton";
 import { TranscriptView } from "@/components/TranscriptView";
-import { getConfig, listModels, startRecording, stopRecording } from "@/lib/ipc";
+import { SettingsDialog } from "@/components/SettingsDialog";
+import { startRecording, stopRecording, type AppConfig, type ModelInfo } from "@/lib/ipc";
 
 /**
  * The engine (VAD + ASR) loads in a worker thread after `start_recording`
@@ -40,22 +35,13 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const loadingFallbackRef = useRef<number | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    Promise.all([getConfig(), listModels()])
-      .then(([config, models]) => {
-        if (cancelled) return;
-        const active = models.find((m) => m.id === config.active_model);
-        setModelReady(Boolean(active?.downloaded));
-      })
-      .catch(() => {
-        // Can't determine model status: don't block Start on a guess, let
-        // start_recording's own "model not downloaded" error surface instead.
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  // The settings dialog owns fetching config/models (on mount, on open, and
+  // on download completion) and reports back through this callback, so the
+  // "model not downloaded" gate here updates without an app restart.
+  function handleModelsChanged(config: AppConfig, models: ModelInfo[]) {
+    const active = models.find((m) => m.id === config.active_model);
+    setModelReady(Boolean(active?.downloaded));
+  }
 
   useEffect(() => {
     const unlisten = listen<string>("transcript-line", (event) => {
@@ -162,14 +148,11 @@ function App() {
 
       <TranscriptView lines={lines} />
 
-      <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Settings</DialogTitle>
-          </DialogHeader>
-          <p className="text-sm text-muted-foreground">coming in the next task</p>
-        </DialogContent>
-      </Dialog>
+      <SettingsDialog
+        open={settingsOpen}
+        onOpenChange={setSettingsOpen}
+        onModelsChanged={handleModelsChanged}
+      />
     </main>
   );
 }

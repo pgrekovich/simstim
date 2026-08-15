@@ -102,6 +102,7 @@ fn set_active_model(id: String) -> Result<(), String> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(AppState(Mutex::new(None)))
         .manage(DownloadState::default())
         .invoke_handler(tauri::generate_handler![

@@ -52,6 +52,8 @@ beforeEach(() => {
   vi.mocked(ipc.startRecording).mockClear();
   vi.mocked(ipc.stopRecording).mockClear();
   vi.mocked(ipc.listSessions).mockClear();
+  vi.mocked(ipc.saveSession).mockClear();
+  vi.mocked(ipc.updateActiveSession).mockClear();
   vi.mocked(listen).mockClear();
 });
 
@@ -167,6 +169,55 @@ describe("App: record continues into the open note (behavior fix)", () => {
     // open note must not lose what was already there.
     await waitFor(() => expect(document.body.textContent).toContain("00:00:01"));
     await waitFor(() => expect(document.body.textContent).toContain("hi"));
+  });
+
+  it("flushes a pending, still-debouncing notes edit via save_session before start_recording is called (lost-edit race fix)", async () => {
+    // Reproduces the bug: with a session selected (inactive), typing a note
+    // and hitting Record right away -- well within the 500ms debounce --
+    // used to lose the edit outright. save_session was still the correct
+    // route (the session is not active yet), but start_recording flips
+    // AppState's active path synchronously, so a debounce firing even
+    // slightly late would get rejected by save_session's single-writer
+    // guard with nothing left to retry. handleStart must flush the pending
+    // edit itself, before ever calling start_recording.
+    const sessions: SessionMeta[] = [
+      { path: "/tmp/other.md", title: "Other call", date: new Date().toISOString(), duration_secs: null },
+    ];
+    vi.mocked(ipc.listSessions).mockResolvedValue(sessions);
+    vi.mocked(ipc.readSession).mockResolvedValue({
+      title: "Other call",
+      date: "",
+      notes: "old notes",
+      transcript: "",
+    });
+    vi.mocked(ipc.startRecording).mockResolvedValue("/tmp/other.md");
+
+    render(<App />);
+
+    const otherRow = await screen.findByRole("button", { name: /other call/i });
+    fireEvent.click(otherRow);
+    const notes = await screen.findByDisplayValue("old notes");
+
+    // Deliberately no blur and no timer advance: the edit is still only
+    // sitting in the debounce, exactly as it would be right after typing.
+    fireEvent.change(notes, { target: { value: "quick note before recording" } });
+    expect(ipc.saveSession).not.toHaveBeenCalled();
+
+    const recordButton = await screen.findByRole("button", { name: /^record$/i });
+    fireEvent.click(recordButton);
+
+    await waitFor(() => expect(ipc.startRecording).toHaveBeenCalledTimes(1));
+    expect(ipc.saveSession).toHaveBeenCalledWith(
+      "/tmp/other.md",
+      "Other call",
+      "quick note before recording"
+    );
+
+    // Not just "called at some point" -- the flush must complete BEFORE
+    // start_recording is invoked, not merely before it resolves.
+    const saveOrder = vi.mocked(ipc.saveSession).mock.invocationCallOrder[0];
+    const startOrder = vi.mocked(ipc.startRecording).mock.invocationCallOrder[0];
+    expect(saveOrder).toBeLessThan(startOrder);
   });
 });
 

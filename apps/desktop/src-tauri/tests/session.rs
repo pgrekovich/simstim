@@ -383,3 +383,65 @@ fn continuing_a_session_with_no_prior_transcript_starts_offsets_at_zero() {
     );
     assert!(md.contains("Them:"), "expected a transcribed line:\n{md}");
 }
+
+// Fix-review Critical finding: `previous_duration_secs` was computed but
+// never applied to the seeded `Transcript` before the worker's up-front save
+// (or any mid-recording save) -- only the final, clean-stop save ever set
+// duration_secs. So continuing a session with `duration: 5m` on disk wiped
+// that line from the very first save, and a crash (or force-quit) before a
+// clean stop lost it permanently. This asserts the fix by reading the file
+// WHILE the worker is still running, before ever calling `stop()`.
+#[test]
+fn continuing_a_session_does_not_wipe_its_existing_duration_before_the_final_save() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("call.md");
+    let existing = "---\ndate: 2026-06-01T09:00:00+02:00\ntitle: Weekly sync\nasr: parakeet-tdt-0.6b-v3\nduration: 5m\n---\n\n## Notes\n\nSome notes\n\n## Transcript\n\n[00:00:01] Me: hi\n";
+    std::fs::write(&out, existing).unwrap();
+
+    let seed = desktop_lib::session::load_continue_from(&out).unwrap();
+    assert_eq!(seed.previous_duration_secs, 300);
+
+    let (tx, rx) = channel::<Chunk>();
+    let session = desktop_lib::session::Session::start(
+        rx,
+        out.clone(),
+        Some(seed),
+        no_pending_edits(),
+        |_| {},
+        |_, _| {},
+        |_| {},
+    );
+
+    // Poll the file until the worker's up-front save lands (it happens
+    // right after engine/VAD init, before the main loop) -- deliberately
+    // BEFORE calling stop(), since stop() blocks until the worker's own
+    // final save has already happened, which would hide exactly the bug
+    // this test guards against.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let mut seen_duration = false;
+    while std::time::Instant::now() < deadline {
+        if let Ok(md) = std::fs::read_to_string(&out) {
+            if md.contains("duration:") {
+                assert!(
+                    md.contains("duration: 5m"),
+                    "duration must never regress below the previous 5m before the final save:\n{md}"
+                );
+                seen_duration = true;
+                break;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(
+        seen_duration,
+        "expected the up-front save (well before stop()) to already carry the previous duration"
+    );
+
+    drop(tx);
+    let path = session.stop().unwrap();
+    let md = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        md.contains("duration:"),
+        "duration should still be present after a clean stop:\n{md}"
+    );
+}

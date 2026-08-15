@@ -367,8 +367,18 @@ fn run_worker(
             transcript.set_title(seed.title);
             transcript.set_notes(seed.notes);
             transcript.set_raw_date(seed.raw_date);
-            let base_offset_secs = seed.base_offset_secs;
             transcript.set_transcript_prefix(seed.transcript_prefix);
+            // Critical fix-review finding: without this, the file's
+            // existing `duration:` frontmatter (if any) was wiped the
+            // instant this worker did ANY save before the clean final one
+            // below (the up-front save right after this, or any
+            // edit-triggered save mid-recording) -- duration_secs stayed
+            // `None` until then, so a crash before a clean stop lost it
+            // permanently. Seeding it here means every save this worker
+            // ever does renders at least the previous total; the final
+            // save below still overwrites with the accumulated total.
+            transcript.set_duration_secs(seed.previous_duration_secs);
+            let base_offset_secs = seed.base_offset_secs;
             (base_offset_secs * 16000.0).round() as usize
         }
         None => 0,

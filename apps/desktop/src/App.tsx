@@ -90,12 +90,22 @@ function App() {
   const [activeNotes, setActiveNotes] = useState(ACTIVE_SESSION_PLACEHOLDER.notes);
   const [sessionData, setSessionData] = useState<SessionData | null>(null);
   const [sessionDataError, setSessionDataError] = useState<string | null>(null);
-  // Set only on the SessionView instance rendered for the active recording
-  // (see the JSX below). handleStop reads this to flush any pending
-  // title/notes edit through update_active_session BEFORE calling
-  // stop_recording -- see SessionView's class doc comment for why that
-  // ordering, not the instance's own unmount cleanup, is what actually has
-  // to do this flush.
+  // Attached to WHICHEVER SessionView is currently mounted -- active or
+  // inactive (see the JSX below, both branches carry this ref). handleStop
+  // reads this to flush any pending title/notes edit through
+  // update_active_session BEFORE calling stop_recording -- see SessionView's
+  // class doc comment for why that ordering, not the instance's own unmount
+  // cleanup, is what actually has to do this flush.
+  //
+  // handleStart reads it too (Critical fix-review finding): pressing Record
+  // on a selected, still-inactive session with an unflushed, still-debouncing
+  // edit used to lose that edit outright. The instance is inactive at that
+  // point, so its pending edit still routes through save_session -- but
+  // start_recording flips AppState's active path synchronously, so if the
+  // debounce fired even slightly late, save_session would reject it (this
+  // path just became the active recording) with nothing left to retry.
+  // Flushing here, before start_recording is ever called, closes that
+  // window entirely instead of narrowing it.
   const activeSessionViewRef = useRef<SessionViewHandle>(null);
 
   // The settings dialog owns fetching config/models (on mount, on open, and
@@ -276,6 +286,14 @@ function App() {
     // re-rendering what's already seeded.
     const continuePath = selectedPath;
     try {
+      // Flush any pending, still-debouncing title/notes edit on the
+      // currently mounted SessionView (whichever session is selected, still
+      // inactive at this point) before doing anything else -- see
+      // `activeSessionViewRef`'s doc comment for the lost-edit race this
+      // closes. A no-op (resolves immediately) if there's nothing pending or
+      // no SessionView mounted at all (nothing selected).
+      await activeSessionViewRef.current?.flushPendingEdits();
+
       let seedTitle = ACTIVE_SESSION_PLACEHOLDER.title;
       let seedNotes = ACTIVE_SESSION_PLACEHOLDER.notes;
       let seedLines: string[] = [];
@@ -454,6 +472,7 @@ function App() {
             <p className="text-sm text-muted-foreground">loading...</p>
           ) : (
             <SessionView
+              ref={activeSessionViewRef}
               key={selectedPath}
               path={selectedPath}
               isActive={false}

@@ -139,6 +139,17 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
   // otherwise the sidebar would show an empty row for it. `save_session`
   // takes the full title+notes pair (it rewrites the whole file), so the
   // inactive branch sends the current notes alongside.
+  //
+  // `savedTitleRef` only advances once the IPC call actually resolves
+  // (Critical fix-review finding): an earlier version set it eagerly,
+  // before awaiting the result, so a rejected save (e.g. `save_session`
+  // rejecting because this path just became the active recording, right as
+  // App's `handleStart` flips `AppState` synchronously) was marked "saved"
+  // anyway -- the edit was shown in the UI but silently never written, and
+  // nothing would ever retry it since the next blur/debounce would see the
+  // value already matching `savedTitleRef` and skip. Not advancing on
+  // failure is itself the "revert": a later commit with the same value
+  // will retry instead of no-op-ing.
   function commitTitle(): Promise<void> {
     const rawValue = titleRef.current;
     const value = rawValue.trim().length > 0 ? rawValue : "Untitled";
@@ -148,12 +159,12 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
       onActiveEdit?.(titleRef.current, notesRef.current);
     }
     if (value === savedTitleRef.current) return Promise.resolve();
-    savedTitleRef.current = value;
     const result = isActiveRef.current
       ? updateActiveSession(value, undefined)
       : saveSession(path, value, notesRef.current);
     return result
       .then(() => {
+        savedTitleRef.current = value;
         onTitleChange?.();
       })
       .catch((err) => {
@@ -167,9 +178,10 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
       });
   }
 
-  // Same shape as `commitTitle` for notes. Also clears any pending debounce
-  // timer, so it's safe to call this directly (blur, unmount, explicit
-  // flush) without a duplicate save firing later.
+  // Same shape as `commitTitle` for notes (see its doc comment for why
+  // `savedNotesRef` only advances after a successful save). Also clears any
+  // pending debounce timer, so it's safe to call this directly (blur,
+  // unmount, explicit flush) without a duplicate save firing later.
   function commitNotes(): Promise<void> {
     if (notesTimeoutRef.current !== null) {
       window.clearTimeout(notesTimeoutRef.current);
@@ -177,15 +189,18 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
     }
     const value = notesRef.current;
     if (value === savedNotesRef.current) return Promise.resolve();
-    savedNotesRef.current = value;
     const result = isActiveRef.current
       ? updateActiveSession(undefined, value)
       : saveSession(path, titleRef.current, value);
-    return result.catch((err) => {
-      // See commitTitle.
-      console.error("failed to save session notes", err);
-      onSaveError?.(String(err));
-    });
+    return result
+      .then(() => {
+        savedNotesRef.current = value;
+      })
+      .catch((err) => {
+        // See commitTitle.
+        console.error("failed to save session notes", err);
+        onSaveError?.(String(err));
+      });
   }
 
   // The explicit flush App calls before stop_recording (see the class doc

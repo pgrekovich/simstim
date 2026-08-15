@@ -109,8 +109,12 @@ pub fn save_session_at(
     active_path: Option<&Path>,
 ) -> Result<()> {
     if active_path == Some(path) {
+        // User-facing (Important fix-review finding): the previous wording
+        // ("use update_active_session instead") leaked an internal IPC
+        // command name into a message a real user could see surfaced as a
+        // save error.
         return Err(anyhow!(
-            "cannot save: this session is currently recording (use update_active_session instead)"
+            "this note is currently recording; edits are saved automatically"
         ));
     }
     rewrite_session(path, title, notes)

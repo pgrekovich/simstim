@@ -102,9 +102,18 @@ export function Sidebar({
                     type="button"
                     onClick={() => onSelect(session.path)}
                     className={cn(
-                      "flex w-full cursor-pointer items-center gap-2 rounded-md border-l-2 border-transparent px-2 py-1.5 text-left text-sm transition-colors hover:bg-sidebar-accent/50",
-                      selected &&
-                        "border-primary bg-sidebar-accent font-medium text-sidebar-accent-foreground"
+                      "flex w-full cursor-pointer items-center gap-2 rounded-md border-l-2 border-transparent px-2 py-1.5 text-left text-sm transition-colors",
+                      // The hover tint and the selected background must not
+                      // both apply at once: a bare `hover:bg-sidebar-accent/50`
+                      // alongside the selected row's full-opacity
+                      // `bg-sidebar-accent` would still win on hover (later in
+                      // the cascade, matching twMerge's same-bucket dedupe),
+                      // visibly *dimming* the selected row instead of
+                      // reinforcing it. So the selected branch gets its own
+                      // same-color hover instead, keeping full opacity.
+                      selected
+                        ? "border-primary bg-sidebar-accent font-medium text-sidebar-accent-foreground hover:bg-sidebar-accent"
+                        : "hover:bg-sidebar-accent/50"
                     )}
                   >
                     <span className="flex min-w-0 flex-1 items-center gap-1.5">
@@ -112,10 +121,14 @@ export function Sidebar({
                         <span
                           data-testid="recording-dot"
                           aria-hidden="true"
-                          className="size-1.5 shrink-0 animate-pulse rounded-full bg-red-500"
+                          className="size-1.5 shrink-0 animate-pulse rounded-full bg-destructive"
                         />
                       )}
                       <span className="min-w-0 truncate">{session.title}</span>
+                      {/* Appended AFTER the title text so it doesn't become
+                          the row button's primary accessible name (App.test.tsx
+                          matches the active row by /^untitled/i). */}
+                      {recording && <span className="sr-only">recording</span>}
                     </span>
                     <span className="shrink-0 text-xs text-muted-foreground">
                       {formatTime(session.date)}

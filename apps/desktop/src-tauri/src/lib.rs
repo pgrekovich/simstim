@@ -7,6 +7,7 @@ use config::Config;
 use models::DownloadState;
 use serde::Serialize;
 use session::PendingEdits;
+use simstim_capture::Channel;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, State};
@@ -17,6 +18,22 @@ use tauri::{AppHandle, Emitter, State};
 #[derive(Clone, Serialize)]
 struct SessionErrorPayload {
     message: String,
+}
+
+/// `transcript-interim` event payload (Global Constraints): `channel` is
+/// `"me"` or `"them"`; an empty `text` clears that channel's draft. Never
+/// written to disk, see `session.rs`'s module docs.
+#[derive(Clone, Serialize)]
+struct TranscriptInterimPayload {
+    channel: &'static str,
+    text: String,
+}
+
+fn channel_str(channel: Channel) -> &'static str {
+    match channel {
+        Channel::Me => "me",
+        Channel::Them => "them",
+    }
 }
 
 /// A live recording: the session worker plus the two capture handles that
@@ -74,6 +91,7 @@ fn start_recording(app: AppHandle, state: State<AppState>) -> Result<String, Str
     let out = simstim_transcript::output_path(&cfg.output_dir, chrono::Local::now());
     let pending_edits = Arc::new(Mutex::new(PendingEdits::default()));
     let line_emitter = app.clone();
+    let interim_emitter = app.clone();
     let error_emitter = app.clone();
     let session = session::Session::start(
         rx,
@@ -81,6 +99,15 @@ fn start_recording(app: AppHandle, state: State<AppState>) -> Result<String, Str
         pending_edits.clone(),
         move |line| {
             let _ = line_emitter.emit("transcript-line", line);
+        },
+        move |channel, text| {
+            let _ = interim_emitter.emit(
+                "transcript-interim",
+                TranscriptInterimPayload {
+                    channel: channel_str(channel),
+                    text,
+                },
+            );
         },
         move |message| {
             let _ = error_emitter.emit("session-error", SessionErrorPayload { message });

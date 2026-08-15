@@ -95,8 +95,14 @@ fn session_transcribes_fake_channel_stream() {
     // before the worker thread gets a chance to save into it.
     let dir = tempfile::tempdir().unwrap();
     let out = dir.path().join("call.md");
-    let session =
-        desktop_lib::session::Session::start(rx, out.clone(), no_pending_edits(), |_| {}, |_| {});
+    let session = desktop_lib::session::Session::start(
+        rx,
+        out.clone(),
+        no_pending_edits(),
+        |_| {},
+        |_, _| {},
+        |_| {},
+    );
     for chunk in samples.chunks(1600) {
         tx.send(Chunk {
             channel: Channel::Them,
@@ -119,8 +125,14 @@ fn session_stop_with_no_chunks_still_produces_valid_file() {
     let (_tx, rx) = channel::<Chunk>();
     let dir = tempfile::tempdir().unwrap();
     let out = dir.path().join("call.md");
-    let session =
-        desktop_lib::session::Session::start(rx, out.clone(), no_pending_edits(), |_| {}, |_| {});
+    let session = desktop_lib::session::Session::start(
+        rx,
+        out.clone(),
+        no_pending_edits(),
+        |_| {},
+        |_, _| {},
+        |_| {},
+    );
     let path = session.stop().unwrap();
     let md = std::fs::read_to_string(&path).unwrap();
     assert!(md.starts_with("---\n"), "missing frontmatter:\n{md}");
@@ -151,7 +163,8 @@ fn pending_edits_set_before_start_land_in_the_saved_file() {
         .unwrap()
         .update(Some("Live edited title".into()), Some("Live notes".into()));
 
-    let session = desktop_lib::session::Session::start(rx, out.clone(), pending, |_| {}, |_| {});
+    let session =
+        desktop_lib::session::Session::start(rx, out.clone(), pending, |_| {}, |_, _| {}, |_| {});
     for chunk in samples.chunks(1600) {
         tx.send(Chunk {
             channel: Channel::Them,
@@ -185,6 +198,7 @@ fn save_failures_are_reported_via_on_error_and_stop_returns_err() {
         out,
         no_pending_edits(),
         |_| {},
+        |_, _| {},
         move |msg| {
             errors_for_worker.lock().unwrap().push(msg);
         },

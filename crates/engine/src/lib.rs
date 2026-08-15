@@ -113,6 +113,34 @@ impl Vad {
         out
     }
 
+    /// Whether the detector currently considers itself mid-speech (Silero's
+    /// own running judgment, via `VoiceActivityDetector::detected`). Session
+    /// interim decoding uses this to gate accumulating/decoding a draft
+    /// buffer, and the max-speech forced-finalize backstop uses it to know
+    /// whether a long-running buffer is still one continuous utterance.
+    pub fn speech_active(&self) -> bool {
+        self.vad.detected()
+    }
+
+    /// Discards the detector's in-flight (not-yet-finalized) segment state
+    /// and zeros its internal absolute-sample counter (verified empirically:
+    /// see the stage-0.6 task-3 report's MAX_SPEECH investigation).
+    ///
+    /// Used only by session.rs's max-speech forced-finalize backstop: once a
+    /// channel's own accumulated buffer has force-finalized ~10s of
+    /// continuous speech as a line, the underlying detector's notion of that
+    /// segment is redundant (and would otherwise eventually finalize the
+    /// *entire* overlong run itself, duplicating audio already emitted).
+    /// Resetting here throws that away and lets the detector start tracking
+    /// a fresh segment from this point, for the speech that (as far as the
+    /// caller can tell) is still ongoing. Callers must track their own
+    /// cumulative sample offset from here on, since any `Segment` this VAD
+    /// produces after a reset reports `start_sample` relative to zero again,
+    /// not to the stream as a whole.
+    pub fn reset(&mut self) {
+        self.vad.reset();
+    }
+
     pub fn flush(&mut self) -> Vec<Segment> {
         if !self.pending.is_empty() {
             // `pending` always holds fewer than VAD_WINDOW samples here (push()

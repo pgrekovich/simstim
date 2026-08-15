@@ -55,6 +55,11 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
   const [busyIds, setBusyIds] = useState<Set<string>>(new Set());
   const onModelsChangedRef = useRef(onModelsChanged);
   onModelsChangedRef.current = onModelsChanged;
+  // Synchronous (ref, not state) guard against a double-click firing
+  // `downloadModel` twice before the first progress event or re-render has
+  // landed: state updates alone aren't enough since two click events can, in
+  // principle, both run before React commits the first one.
+  const inFlightDownloadsRef = useRef<Set<string>>(new Set());
 
   const refresh = useCallback(async () => {
     const [freshConfig, freshModels] = await Promise.all([getConfig(), listModels()]);
@@ -90,12 +95,20 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
       const payload = event.payload;
       setProgress((prev) => ({ ...prev, [payload.id]: payload }));
       if (payload.phase === "done") {
-        setProgress((prev) => {
-          const next = { ...prev };
-          delete next[payload.id];
-          return next;
-        });
-        refresh().catch(() => {});
+        // Refetch (and let the row flip to "Active"/"Use" via the fresh
+        // `model.downloaded`) before dropping the progress entry: deleting
+        // it first would leave a gap, with `model.downloaded` still stale
+        // (false) and no progress entry, where the row briefly renders a
+        // "Download" button for an already-finished download.
+        refresh()
+          .catch(() => {})
+          .finally(() => {
+            setProgress((prev) => {
+              const next = { ...prev };
+              delete next[payload.id];
+              return next;
+            });
+          });
       }
     });
     return () => {
@@ -131,20 +144,33 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
   }
 
   async function handleDownload(id: string) {
-    setProgress((prev) => {
-      const next = { ...prev };
-      delete next[id];
-      return next;
-    });
+    if (inFlightDownloadsRef.current.has(id)) return;
+    inFlightDownloadsRef.current.add(id);
+    // Set a placeholder "download" progress entry synchronously (in the same
+    // tick as the click) so the Download button disappears immediately,
+    // rather than waiting for the first real progress event (which can be
+    // seconds away on a slow connection) - that gap is what let a double
+    // click fire `downloadModel` twice.
+    setProgress((prev) => ({
+      ...prev,
+      [id]: { id, phase: "download", received: 0, total: 0 },
+    }));
     try {
       await downloadModel(id);
     } catch (err) {
-      // Covers rejections that never made it to a progress event (e.g. the
-      // backend's concurrent-download guard rejecting immediately).
-      setProgress((prev) => ({
-        ...prev,
-        [id]: { id, phase: "error", received: 0, total: 0, message: String(err) },
-      }));
+      const message = String(err);
+      // A rejection carrying the backend's concurrency-guard message means
+      // a real download for this id is already in flight (and its progress
+      // events are landing via the global listener) - don't clobber that
+      // live state with a false "error" row.
+      if (!message.includes("already downloading")) {
+        setProgress((prev) => ({
+          ...prev,
+          [id]: { id, phase: "error", received: 0, total: 0, message },
+        }));
+      }
+    } finally {
+      inFlightDownloadsRef.current.delete(id);
     }
   }
 

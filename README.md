@@ -17,7 +17,7 @@ Insights are whatever agent you point at the folder.
 
 ## Setup
 
-Requires macOS 14.2+ on Apple Silicon. Download ASR models (one-time, ~500 MB):
+Requires macOS 14.2+ on Apple Silicon. ASR models download inside the app on first run (Settings > Models). For terminal, use the shell script alternative:
 
 ```sh
 ./scripts/download-models.sh
@@ -31,8 +31,7 @@ Models are cached in `~/Library/Application Support/simstim/models/`.
 cd apps/desktop && pnpm install && pnpm tauri dev
 ```
 
-Click Start/Stop in the window. The transcript lands on the Desktop as
-`YYYY-MM-DD HH-mm call.md`.
+Click Start/Stop in the window. Transcripts land on the Desktop as `YYYY-MM-DD HH-mm call.md` (configurable in Settings > gear icon). Config lives at `~/Library/Application Support/simstim/config.json`.
 
 ## macOS permissions (dev builds)
 
@@ -51,6 +50,4 @@ so this only matters for `pnpm tauri dev`.
 
 ## Status
 
-MVP-0 works (known gaps: no interim decoding so lines appear on pauses;
-Parakeet Russian quality is mediocre, whisper re-transcribe pass is
-planned).
+stage 0.5 shipped: shadcn UI, settings (output folder picker, model manager with in-app download). Known gaps: no interim decoding so lines appear on pauses; Parakeet Russian quality is mediocre, whisper re-transcribe pass is planned.

@@ -135,6 +135,8 @@ crashing or pegging the CPU.
 
 Status (2026-08-14): shipped and verified e2e.
 
+Status (2026-08-15): stage 0.5 shipped: shadcn UI, settings dialog (output folder picker, model registry with in-app download + progress), model-ready guard on Start.
+
 ## Milestones after MVP-0
 
 1. Audio file kept next to the .md; re-transcribe command (whisper turbo).

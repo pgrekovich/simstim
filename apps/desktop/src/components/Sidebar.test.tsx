@@ -69,7 +69,7 @@ describe("Sidebar: recording indicator", () => {
 });
 
 describe("Sidebar: selected styling", () => {
-  it("applies the selected row's distinct background/border only to selectedPath", () => {
+  it("applies the selected row's distinct fill and weight only to selectedPath", () => {
     const sessions = makeSessions();
     render(
       <Sidebar
@@ -84,19 +84,18 @@ describe("Sidebar: selected styling", () => {
     const rowA = screen.getByRole("button", { name: /session a/i });
     const rowB = screen.getByRole("button", { name: /session b/i });
 
-    // Use exact classList tokens rather than substring matching on
-    // className: "border-transparent" (the unselected default) and
-    // "border-sidebar-accent"-style opacity variants like
-    // "hover:bg-sidebar-accent/50" would otherwise false-positive a
-    // substring check against "bg-sidebar-accent".
-    expect(rowB.classList.contains("bg-sidebar-accent")).toBe(true);
-    expect(rowB.classList.contains("border-primary")).toBe(true);
-    expect(rowA.classList.contains("bg-sidebar-accent")).toBe(false);
-    expect(rowA.classList.contains("border-primary")).toBe(false);
-    expect(rowA.classList.contains("border-transparent")).toBe(true);
+    // Exact classList tokens, not substring matching: the hover variants
+    // carry the same base names at different opacities.
+    expect(rowB.classList.contains("bg-foreground/[0.09]")).toBe(true);
+    expect(rowB.classList.contains("font-medium")).toBe(true);
+    expect(rowA.classList.contains("bg-foreground/[0.09]")).toBe(false);
+    expect(rowA.classList.contains("font-medium")).toBe(false);
+    // No left rule on any row: a border on a rounded row reads as a bracket.
+    expect(rowA.className).not.toContain("border-l");
+    expect(rowB.className).not.toContain("border-l");
   });
 
-  it("gives the selected row its own full-opacity hover instead of the unselected 50%-tint hover", () => {
+  it("gives the selected row a deeper hover than the unselected rows", () => {
     const sessions = makeSessions();
     render(
       <Sidebar
@@ -111,14 +110,13 @@ describe("Sidebar: selected styling", () => {
     const rowA = screen.getByRole("button", { name: /session a/i });
     const rowB = screen.getByRole("button", { name: /session b/i });
 
-    // Regression test: a bare `hover:bg-sidebar-accent/50` alongside the
-    // selected row's full-opacity `bg-sidebar-accent` would still win on
-    // hover, visibly dimming the selected row instead of reinforcing it.
-    // The selected row must get a same-color, full-opacity hover instead.
-    expect(rowB.classList.contains("hover:bg-sidebar-accent")).toBe(true);
-    expect(rowB.classList.contains("hover:bg-sidebar-accent/50")).toBe(false);
-    expect(rowA.classList.contains("hover:bg-sidebar-accent/50")).toBe(true);
-    expect(rowA.classList.contains("hover:bg-sidebar-accent")).toBe(false);
+    // Regression test: a lower-opacity hover shared with the selected row
+    // would win the cascade on hover and visibly dim it instead of
+    // reinforcing it, so each state carries its own hover step.
+    expect(rowB.classList.contains("hover:bg-foreground/[0.12]")).toBe(true);
+    expect(rowB.classList.contains("hover:bg-foreground/[0.05]")).toBe(false);
+    expect(rowA.classList.contains("hover:bg-foreground/[0.05]")).toBe(true);
+    expect(rowA.classList.contains("hover:bg-foreground/[0.12]")).toBe(false);
   });
 });
 

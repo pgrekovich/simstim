@@ -72,9 +72,14 @@ export function Sidebar({
   return (
     <aside className="flex h-full w-60 shrink-0 flex-col border-r bg-sidebar text-sidebar-foreground">
       <div className="border-b border-sidebar-border px-2 py-2">
+        {/* Surfaces are alpha over `foreground` rather than the sidebar-accent
+            token: in the light theme that token (0.97) sits so close to the
+            sidebar background (0.985) that hover and selection are invisible.
+            Alpha over foreground inverts with the theme, so one value reads
+            correctly in both. */}
         <Button
           variant="ghost"
-          className="w-full justify-start gap-2 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+          className="w-full justify-start gap-2 transition-colors duration-150 hover:bg-foreground/[0.06] active:bg-foreground/[0.11]"
           onClick={onNewSession}
         >
           <Plus className="size-4" />
@@ -102,18 +107,15 @@ export function Sidebar({
                     type="button"
                     onClick={() => onSelect(session.path)}
                     className={cn(
-                      "flex w-full cursor-pointer items-center gap-2 rounded-md border-l-2 border-transparent px-2 py-1.5 text-left text-sm transition-colors",
-                      // The hover tint and the selected background must not
-                      // both apply at once: a bare `hover:bg-sidebar-accent/50`
-                      // alongside the selected row's full-opacity
-                      // `bg-sidebar-accent` would still win on hover (later in
-                      // the cascade, matching twMerge's same-bucket dedupe),
-                      // visibly *dimming* the selected row instead of
-                      // reinforcing it. So the selected branch gets its own
-                      // same-color hover instead, keeping full opacity.
+                      "flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors duration-150",
+                      // Selection reads as a filled pill plus weight, with no
+                      // left rule: a border on a rounded row renders as a
+                      // detached bracket. Each state gets its own hover so the
+                      // selected row deepens on hover instead of being dimmed
+                      // by a lower-opacity tint winning the cascade.
                       selected
-                        ? "border-primary bg-sidebar-accent font-medium text-sidebar-accent-foreground hover:bg-sidebar-accent"
-                        : "hover:bg-sidebar-accent/50"
+                        ? "bg-foreground/[0.09] font-medium text-foreground hover:bg-foreground/[0.12]"
+                        : "text-foreground/75 hover:bg-foreground/[0.05] hover:text-foreground active:bg-foreground/[0.09]"
                     )}
                   >
                     <span className="flex min-w-0 flex-1 items-center gap-1.5">

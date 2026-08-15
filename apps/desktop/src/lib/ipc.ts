@@ -123,6 +123,16 @@ export function readSession(path: string): Promise<SessionData> {
   return invoke("read_session", { path });
 }
 
+/**
+ * Creates a new, empty session note (title "Untitled", no notes, no
+ * transcript) the user can type into without recording. Mirrors
+ * `sessions::create_session` (apps/desktop/src-tauri/src/sessions.rs).
+ * Resolves with the new file's path.
+ */
+export function createSession(): Promise<string> {
+  return invoke("create_session");
+}
+
 export function saveSession(path: string, title: string, notes: string): Promise<void> {
   return invoke("save_session", { path, title, notes });
 }

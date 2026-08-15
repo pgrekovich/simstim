@@ -7,6 +7,7 @@ import { SessionView, type SessionViewHandle } from "@/components/SessionView";
 import { Sidebar } from "@/components/Sidebar";
 import { SettingsDialog } from "@/components/SettingsDialog";
 import {
+  createSession,
   getConfig,
   listSessions,
   readSession,
@@ -307,6 +308,25 @@ function App() {
     }
   }
 
+  // Creates a new, empty note the user can type into right away -- no
+  // recording involved. Deliberately leaves `activePath`/recording state
+  // untouched: this is just another (inactive) session file that happens to
+  // start selected, not a substitute for `handleStart`. Recording always
+  // creates its own file via `start_recording`, independent of this one.
+  async function handleNewSession() {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const path = await createSession();
+      await refreshSessions();
+      setSelectedPath(path);
+    } catch (err) {
+      setStatus({ kind: "error", message: String(err) });
+    } finally {
+      setBusy(false);
+    }
+  }
+
   // Whether a recording is in progress, independent of `status`: derived
   // from `activePath` (set for as long as the worker is running, cleared
   // only by a successful stop) rather than `status.kind`. A session-error or
@@ -339,7 +359,13 @@ function App() {
 
   return (
     <div className="flex h-screen">
-      <Sidebar sessions={sessions} selectedPath={selectedPath} onSelect={setSelectedPath} />
+      <Sidebar
+        sessions={sessions}
+        selectedPath={selectedPath}
+        activePath={activePath}
+        onSelect={setSelectedPath}
+        onNewSession={handleNewSession}
+      />
 
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="flex h-12 shrink-0 items-center gap-3 border-b px-4">

@@ -1,10 +1,15 @@
+import { Plus } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { SessionMeta } from "@/lib/ipc";
 
 interface SidebarProps {
   sessions: SessionMeta[];
   selectedPath: string | null;
+  /** The path currently being recorded, if any; shows a pulsing dot next to that row's title. */
+  activePath: string | null;
   onSelect: (path: string) => void;
+  onNewSession: () => void;
 }
 
 interface SessionGroup {
@@ -55,13 +60,26 @@ function groupSessions(sessions: SessionMeta[]): SessionGroup[] {
   return groups;
 }
 
-export function Sidebar({ sessions, selectedPath, onSelect }: SidebarProps) {
+export function Sidebar({
+  sessions,
+  selectedPath,
+  activePath,
+  onSelect,
+  onNewSession,
+}: SidebarProps) {
   const groups = groupSessions(sessions);
 
   return (
     <aside className="flex h-full w-60 shrink-0 flex-col border-r bg-sidebar text-sidebar-foreground">
-      <div className="px-4 py-3">
-        <span className="font-mono text-sm lowercase text-muted-foreground">simstim</span>
+      <div className="border-b border-sidebar-border px-2 py-2">
+        <Button
+          variant="ghost"
+          className="w-full justify-start gap-2 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+          onClick={onNewSession}
+        >
+          <Plus className="size-4" />
+          New note
+        </Button>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
@@ -75,23 +93,36 @@ export function Sidebar({ sessions, selectedPath, onSelect }: SidebarProps) {
               <div className="px-2 py-1 text-xs font-medium text-muted-foreground">
                 {group.label}
               </div>
-              {group.sessions.map((session) => (
-                <button
-                  key={session.path}
-                  type="button"
-                  onClick={() => onSelect(session.path)}
-                  className={cn(
-                    "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-sidebar-accent",
-                    selectedPath === session.path &&
-                      "bg-sidebar-accent text-sidebar-accent-foreground"
-                  )}
-                >
-                  <span className="min-w-0 flex-1 truncate">{session.title}</span>
-                  <span className="shrink-0 text-xs text-muted-foreground">
-                    {formatTime(session.date)}
-                  </span>
-                </button>
-              ))}
+              {group.sessions.map((session) => {
+                const selected = selectedPath === session.path;
+                const recording = activePath === session.path;
+                return (
+                  <button
+                    key={session.path}
+                    type="button"
+                    onClick={() => onSelect(session.path)}
+                    className={cn(
+                      "flex w-full cursor-pointer items-center gap-2 rounded-md border-l-2 border-transparent px-2 py-1.5 text-left text-sm transition-colors hover:bg-sidebar-accent/50",
+                      selected &&
+                        "border-primary bg-sidebar-accent font-medium text-sidebar-accent-foreground"
+                    )}
+                  >
+                    <span className="flex min-w-0 flex-1 items-center gap-1.5">
+                      {recording && (
+                        <span
+                          data-testid="recording-dot"
+                          aria-hidden="true"
+                          className="size-1.5 shrink-0 animate-pulse rounded-full bg-red-500"
+                        />
+                      )}
+                      <span className="min-w-0 truncate">{session.title}</span>
+                    </span>
+                    <span className="shrink-0 text-xs text-muted-foreground">
+                      {formatTime(session.date)}
+                    </span>
+                  </button>
+                );
+              })}
             </div>
           ))
         )}

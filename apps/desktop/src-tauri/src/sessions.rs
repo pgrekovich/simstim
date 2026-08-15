@@ -21,7 +21,7 @@
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, FixedOffset, Local};
 use serde::Serialize;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tauri::State;
 
 use simstim_transcript::{parse_meta, parse_session, Transcript};
@@ -170,9 +170,48 @@ fn rewrite_session(path: &Path, title: &str, notes: &str) -> Result<()> {
     transcript.save(path)
 }
 
+/// Creates a new, empty session note for the user to type into without
+/// recording -- a real, first-class way to start a session (Global
+/// Constraints, stage-0.6 polish): title "Untitled", empty notes, empty
+/// transcript, timestamped `now`. Returns the created file's path.
+///
+/// Collision guard: `output_path` names files by whole second, the same
+/// granularity `start_recording` already relies on never colliding within a
+/// single recording. Two calls landing in the same second (or a manual note
+/// racing a recording that starts that same second) would otherwise silently
+/// overwrite one another's file. A session file is user data, so this
+/// refuses to overwrite: it errors instead of overwriting or bumping the
+/// filename, and the caller can simply retry a moment later -- simpler and
+/// safer than inventing a suffix scheme for a collision this rare.
+pub fn create_session_in(dir: &Path) -> Result<PathBuf> {
+    create_session_at(dir, Local::now())
+}
+
+/// `create_session_in`'s actual logic, parameterized on `now` so a
+/// same-second collision can be tested deterministically instead of racing
+/// the real clock across two `Local::now()` calls.
+fn create_session_at(dir: &Path, now: DateTime<Local>) -> Result<PathBuf> {
+    let path = simstim_transcript::output_path(dir, now);
+    if path.exists() {
+        return Err(anyhow!(
+            "a session file already exists for this moment: {}",
+            path.display()
+        ));
+    }
+    Transcript::new(now).save(&path)?;
+    Ok(path)
+}
+
 #[tauri::command]
 pub fn list_sessions() -> Vec<SessionMeta> {
     list_sessions_in(&Config::load().output_dir)
+}
+
+#[tauri::command]
+pub fn create_session() -> Result<String, String> {
+    create_session_in(&Config::load().output_dir)
+        .map(|path| path.display().to_string())
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -361,6 +400,45 @@ mod tests {
         assert!(after.contains("title: New title"));
         assert!(after.contains("New notes"));
         assert!(!after.contains("Old notes"));
+    }
+
+    #[test]
+    fn create_session_in_writes_a_parseable_untitled_empty_note() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let path = create_session_in(dir.path()).unwrap();
+
+        assert_eq!(path.parent().unwrap(), dir.path());
+        let data = read_session_at(&path).unwrap();
+        assert_eq!(data.title, "Untitled");
+        assert_eq!(data.notes, "");
+        assert_eq!(data.transcript, "");
+    }
+
+    #[test]
+    fn create_session_at_does_not_overwrite_an_existing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        // Pre-create the exact file `create_session_at` would write for this
+        // `now` (same-second collision), with content that would be
+        // destroyed by an overwrite -- a session file is user data. `now` is
+        // fixed and shared with the call below so this doesn't race the real
+        // clock across a second boundary.
+        let now = t(10, 0, 0);
+        let path = simstim_transcript::output_path(dir.path(), now);
+        let mut existing = Transcript::new(now);
+        existing.set_title("Do not touch".into());
+        existing.save(&path).unwrap();
+
+        let err = create_session_at(dir.path(), now).unwrap_err();
+        assert!(
+            err.to_string().contains("already exists"),
+            "unexpected error: {err}"
+        );
+        let data = read_session_at(&path).unwrap();
+        assert_eq!(
+            data.title, "Do not touch",
+            "the pre-existing file must survive untouched"
+        );
     }
 
     #[test]

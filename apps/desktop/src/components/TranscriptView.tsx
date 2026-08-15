@@ -20,14 +20,24 @@ function parseLine(raw: string): ParsedLine {
 
 interface TranscriptViewProps {
   lines: string[];
+  /**
+   * Live (not-yet-finalized) draft text per channel, from the
+   * `transcript-interim` event. Only meaningful for the session currently
+   * being recorded; omit (or pass empty strings) for a static/inactive
+   * session. Rendered dimmed+italic after the finalized `lines`, one per
+   * channel, cleared by the caller on the event's empty-text signal.
+   */
+  interimMe?: string;
+  interimThem?: string;
 }
 
-export function TranscriptView({ lines }: TranscriptViewProps) {
+export function TranscriptView({ lines, interimMe, interimThem }: TranscriptViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   // Tracks whether the user was scrolled to the bottom right before this
   // render's lines changed. Auto-scroll only replays that intent: it never
   // yanks the view back down if the user has scrolled up to read history.
   const wasAtBottomRef = useRef(true);
+  const isEmpty = lines.length === 0 && !interimMe && !interimThem;
 
   function handleScroll() {
     const el = scrollRef.current;
@@ -40,12 +50,12 @@ export function TranscriptView({ lines }: TranscriptViewProps) {
     const el = scrollRef.current;
     if (!el || !wasAtBottomRef.current) return;
     el.scrollTop = el.scrollHeight;
-  }, [lines]);
+  }, [lines, interimMe, interimThem]);
 
   return (
     <Card className="min-h-0 flex-1 flex-col overflow-hidden p-0">
       <div ref={scrollRef} onScroll={handleScroll} className="h-full overflow-y-auto p-4">
-        {lines.length === 0 ? (
+        {isEmpty ? (
           <p className="flex h-full items-center justify-center text-center text-[13px] text-muted-foreground">
             transcript will appear here
           </p>
@@ -76,6 +86,16 @@ export function TranscriptView({ lines }: TranscriptViewProps) {
                 </p>
               );
             })}
+            {interimMe && (
+              <p className="whitespace-pre-wrap italic text-muted-foreground">
+                <span className="text-foreground">Me:</span> {interimMe}
+              </p>
+            )}
+            {interimThem && (
+              <p className="whitespace-pre-wrap italic text-muted-foreground">
+                <span className="text-sky-600 dark:text-sky-400">Them:</span> {interimThem}
+              </p>
+            )}
           </div>
         )}
       </div>

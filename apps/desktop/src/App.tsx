@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { RecordButton } from "@/components/RecordButton";
+import { SessionView } from "@/components/SessionView";
 import { Sidebar } from "@/components/Sidebar";
 import { SettingsDialog } from "@/components/SettingsDialog";
 import {
@@ -16,6 +17,7 @@ import {
   type SessionData,
   type SessionErrorPayload,
   type SessionMeta,
+  type TranscriptInterimPayload,
 } from "@/lib/ipc";
 import { initTheme } from "@/lib/theme";
 import { truncateMiddle } from "@/lib/utils";
@@ -32,6 +34,21 @@ import { truncateMiddle } from "@/lib/utils";
  */
 const MODEL_LOAD_FALLBACK_MS = 15_000;
 
+/**
+ * Seed data for `SessionView` while viewing the active recording. A freshly
+ * started recording always begins as an untitled, empty-notes file (there is
+ * no prior content to load), and `SessionView` only reads `initialData` once
+ * on mount -- so this constant is only ever the starting point for title and
+ * notes; the live transcript comes from `lines`/interim state instead. Its
+ * `transcript` and `date` fields are unused while `isActive` is true.
+ */
+const ACTIVE_SESSION_PLACEHOLDER: SessionData = {
+  title: "Untitled",
+  date: "",
+  notes: "",
+  transcript: "",
+};
+
 type Status =
   | { kind: "idle" }
   | { kind: "loading-model" }
@@ -42,6 +59,8 @@ type Status =
 function App() {
   const [status, setStatus] = useState<Status>({ kind: "idle" });
   const [lines, setLines] = useState<string[]>([]);
+  const [interimMe, setInterimMe] = useState("");
+  const [interimThem, setInterimThem] = useState("");
   const [recordingStartedAt, setRecordingStartedAt] = useState<number | null>(null);
   const [modelReady, setModelReady] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -126,6 +145,23 @@ function App() {
     };
   }, []);
 
+  // Live (not-yet-finalized) per-channel drafts for the session currently
+  // being recorded. An empty `text` in the payload means "clear this
+  // channel's draft" (Global Constraints): the same setter handles both.
+  useEffect(() => {
+    const unlisten = listen<TranscriptInterimPayload>("transcript-interim", (event) => {
+      const { channel, text } = event.payload;
+      if (channel === "me") {
+        setInterimMe(text);
+      } else {
+        setInterimThem(text);
+      }
+    });
+    return () => {
+      unlisten.then((f) => f());
+    };
+  }, []);
+
   // Worker-side errors (engine/VAD init, save failures) surfaced instead of
   // living only in stderr: reflect them in the status line, same as a
   // failed start/stop call, and refresh the sidebar (a save failure can mean
@@ -140,13 +176,12 @@ function App() {
     };
   }, [refreshSessions]);
 
-  // Loads the selected session for the content placeholder. The one
-  // exception is the session currently being recorded (`activePath`): its
-  // file is being written by the worker in the background and may lag or
-  // race a direct read, so for that one session the live in-memory `lines`
-  // (from the transcript-line listener above) are shown instead of a
-  // `read_session` dump. Task 6 replaces all of this with the real
-  // SessionView.
+  // Loads the selected session for SessionView. The one exception is the
+  // session currently being recorded (`activePath`): its file is being
+  // written by the worker in the background and may lag or race a direct
+  // read, so for that one session the live in-memory `lines` (from the
+  // transcript-line listener above) are shown instead of a `read_session`
+  // dump -- see `viewingActiveSession` below.
   //
   // `sessionData`/`sessionDataError` are cleared unconditionally at the top,
   // before the early return and before kicking off the fetch: switching
@@ -187,6 +222,8 @@ function App() {
     if (busy) return;
     setBusy(true);
     setLines([]);
+    setInterimMe("");
+    setInterimThem("");
     try {
       const path = await startRecording();
       setRecordingStartedAt(Date.now());
@@ -214,6 +251,8 @@ function App() {
       const path = await stopRecording();
       setRecordingStartedAt(null);
       setActivePath(null);
+      setInterimMe("");
+      setInterimThem("");
       setStatus({ kind: "saved", path });
       refreshSessions();
     } catch (err) {
@@ -282,29 +321,37 @@ function App() {
           </Button>
         </header>
 
-        <div className="min-h-0 flex-1 overflow-y-auto p-6">
+        <div className="flex min-h-0 flex-1 flex-col p-6">
           {selectedPath === null ? (
             <p className="flex h-full items-center justify-center text-center text-sm text-muted-foreground">
               select a session or start recording
             </p>
           ) : viewingActiveSession ? (
-            <pre className="whitespace-pre-wrap font-mono text-[13px] leading-relaxed">
-              {lines.length === 0 ? "transcript will appear here" : lines.join("\n")}
-            </pre>
+            <SessionView
+              key={selectedPath}
+              path={selectedPath}
+              isActive
+              initialData={ACTIVE_SESSION_PLACEHOLDER}
+              liveLines={lines}
+              interimMe={interimMe}
+              interimThem={interimThem}
+              onTitleChange={refreshSessions}
+            />
           ) : sessionDataError ? (
             <p className="text-sm text-destructive">{sessionDataError}</p>
           ) : sessionData === null ? (
             <p className="text-sm text-muted-foreground">loading...</p>
           ) : (
-            <div className="flex flex-col gap-4">
-              <h2 className="text-lg font-semibold">{sessionData.title}</h2>
-              <pre className="whitespace-pre-wrap font-mono text-[13px] leading-relaxed">
-                {sessionData.notes}
-              </pre>
-              <pre className="whitespace-pre-wrap font-mono text-[13px] leading-relaxed">
-                {sessionData.transcript}
-              </pre>
-            </div>
+            <SessionView
+              key={selectedPath}
+              path={selectedPath}
+              isActive={false}
+              initialData={sessionData}
+              liveLines={lines}
+              interimMe={interimMe}
+              interimThem={interimThem}
+              onTitleChange={refreshSessions}
+            />
           )}
         </div>
       </div>

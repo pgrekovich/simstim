@@ -58,6 +58,17 @@ export interface SessionErrorPayload {
   message: string;
 }
 
+/**
+ * Mirrors `TranscriptInterimPayload` (apps/desktop/src-tauri/src/lib.rs), the
+ * `transcript-interim` event payload: a live (not-yet-finalized) draft for
+ * one channel. An empty `text` means "clear this channel's draft" (the
+ * segment finalized or speech stopped). Never written to disk.
+ */
+export interface TranscriptInterimPayload {
+  channel: "me" | "them";
+  text: string;
+}
+
 export type DownloadPhase = "download" | "extract" | "done" | "error";
 
 /**

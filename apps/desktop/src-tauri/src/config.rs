@@ -14,6 +14,11 @@ fn default_theme() -> String {
     "system".to_string()
 }
 
+/// Default for `keep_audio` (Global Constraints: retention defaults on).
+fn default_keep_audio() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Config {
     pub output_dir: PathBuf,
@@ -23,6 +28,13 @@ pub struct Config {
     /// "system") instead of failing deserialization entirely.
     #[serde(default = "default_theme")]
     pub theme: String,
+    /// Whether the session worker keeps a stereo audio file (WAV during
+    /// capture, FLAC after stop) next to the transcript. `serde(default)` so
+    /// config.json files written before this field existed still load
+    /// (defaulting to `true`, per the Global Constraints) instead of failing
+    /// deserialization entirely.
+    #[serde(default = "default_keep_audio")]
+    pub keep_audio: bool,
 }
 
 impl Default for Config {
@@ -31,6 +43,7 @@ impl Default for Config {
             output_dir: dirs::home_dir().expect("no home dir").join("Desktop"),
             active_model: KNOWN_MODEL_ID.to_string(),
             theme: default_theme(),
+            keep_audio: default_keep_audio(),
         }
     }
 }
@@ -56,6 +69,16 @@ pub fn set_theme(theme: String) -> Result<(), String> {
     validate_theme(&theme)?;
     let mut cfg = Config::load();
     cfg.theme = theme;
+    cfg.save().map_err(|e| e.to_string())
+}
+
+/// Sets and persists whether recordings keep an audio file alongside the
+/// transcript (Global Constraints). Task 5 adds the settings toggle; this
+/// command is the wiring for it.
+#[tauri::command]
+pub fn set_keep_audio(keep_audio: bool) -> Result<(), String> {
+    let mut cfg = Config::load();
+    cfg.keep_audio = keep_audio;
     cfg.save().map_err(|e| e.to_string())
 }
 
@@ -118,6 +141,7 @@ mod tests {
             output_dir: PathBuf::from("/tmp/some-output"),
             active_model: "custom-model-id".to_string(),
             theme: "dark".to_string(),
+            keep_audio: false,
         };
         cfg.save_to(&path).unwrap();
         let loaded = Config::load_from(&path);
@@ -127,6 +151,11 @@ mod tests {
     #[test]
     fn theme_defaults_to_system() {
         assert_eq!(Config::default().theme, "system");
+    }
+
+    #[test]
+    fn keep_audio_defaults_to_true() {
+        assert!(Config::default().keep_audio);
     }
 
     #[test]
@@ -142,6 +171,20 @@ mod tests {
         let cfg = Config::load_from(&path);
         assert_eq!(cfg.theme, "system");
         assert_eq!(cfg.output_dir, PathBuf::from("/tmp/some-output"));
+    }
+
+    #[test]
+    fn old_config_json_without_keep_audio_field_loads_with_true_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        // Exactly what stage-0.6 wrote: no "keep_audio" key at all.
+        std::fs::write(
+            &path,
+            r#"{"output_dir":"/tmp/some-output","active_model":"custom-model-id","theme":"dark"}"#,
+        )
+        .unwrap();
+        let cfg = Config::load_from(&path);
+        assert!(cfg.keep_audio);
     }
 
     #[test]

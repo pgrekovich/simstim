@@ -14,6 +14,12 @@ export interface AppConfig {
   active_model: string;
   /** `"system" | "light" | "dark"`. */
   theme: string;
+  /**
+   * Whether recordings keep a stereo audio file (wav during capture, flac
+   * after stop) next to the transcript. Defaults to `true`. No settings UI
+   * yet (Task 5 adds the toggle).
+   */
+  keep_audio: boolean;
 }
 
 /**
@@ -122,6 +128,16 @@ export function stopRecording(): Promise<string> {
 
 export function setTheme(theme: string): Promise<void> {
   return invoke("set_theme", { theme });
+}
+
+/**
+ * Sets and persists whether recordings keep an audio file alongside the
+ * transcript. Mirrors `config::set_keep_audio`
+ * (apps/desktop/src-tauri/src/config.rs). No settings UI calls this yet
+ * (Task 5 adds the toggle).
+ */
+export function setKeepAudio(keepAudio: boolean): Promise<void> {
+  return invoke("set_keep_audio", { keepAudio });
 }
 
 export function listSessions(): Promise<SessionMeta[]> {

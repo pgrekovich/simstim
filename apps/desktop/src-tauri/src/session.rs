@@ -75,6 +75,8 @@ use simstim_capture::{Channel, Chunk};
 use simstim_engine::{models_dir, Engine, Segment, Vad};
 use simstim_transcript::{last_offset_secs, parse_meta, parse_session, Speaker, Transcript};
 
+use crate::audio_sink::AudioSink;
+
 /// Minimum gap between edit-triggered saves (saves that happen only because
 /// a pending title/notes edit landed with no segment finalizing alongside
 /// it). Per-segment saves are unaffected by this throttle.
@@ -279,11 +281,18 @@ impl Session {
     /// existing behavior). `Some` continues an existing session already at
     /// `out_path` instead -- see [`ContinueFrom`]'s docs for exactly what
     /// gets seeded/offset.
+    ///
+    /// `keep_audio` (Global Constraints, config's `keep_audio` field): when
+    /// true, the worker also runs an [`AudioSink`] alongside the transcript,
+    /// writing `<out_path>`'s `.wav`/`.flac` sibling (see `audio_sink`'s
+    /// module docs). When false, no audio file is written at all.
+    #[allow(clippy::too_many_arguments)]
     pub fn start(
         chunk_rx: Receiver<Chunk>,
         out_path: PathBuf,
         continue_from: Option<ContinueFrom>,
         pending_edits: Arc<Mutex<PendingEdits>>,
+        keep_audio: bool,
         on_line: impl Fn(String) + Send + 'static,
         on_interim: impl Fn(Channel, String) + Send + 'static,
         on_error: impl Fn(String) + Send + 'static,
@@ -296,6 +305,7 @@ impl Session {
                 out_path,
                 continue_from,
                 pending_edits,
+                keep_audio,
                 on_line,
                 on_interim,
                 on_error,
@@ -335,6 +345,7 @@ fn run_worker(
     out_path: PathBuf,
     continue_from: Option<ContinueFrom>,
     pending_edits: Arc<Mutex<PendingEdits>>,
+    keep_audio: bool,
     on_line: impl Fn(String),
     on_interim: impl Fn(Channel, String),
     on_error: impl Fn(String),
@@ -355,6 +366,21 @@ fn run_worker(
         report_error(&on_error, format!("session: vad init failed: {e}"));
         e
     })?;
+    // Global Constraints: a problem standing up the audio sink must not
+    // block the recording from starting -- report it and continue with
+    // `audio_sink` left `None` (transcribing without audio) rather than
+    // propagating an `Err` the way engine/VAD init failures above do.
+    let mut audio_sink = if keep_audio {
+        match AudioSink::new(&out_path) {
+            Ok(sink) => Some(sink),
+            Err(e) => {
+                report_error(&on_error, format!("session: audio sink init failed: {e}"));
+                None
+            }
+        }
+    } else {
+        None
+    };
     let mut transcript = Transcript::new(started_at);
 
     // Seed the transcript from the existing file when continuing one, and
@@ -411,6 +437,9 @@ fn run_worker(
 
         match chunk_rx.recv_timeout(Duration::from_millis(200)) {
             Ok(chunk) => {
+                if let Some(sink) = audio_sink.as_mut() {
+                    sink.push(chunk.channel, &chunk.samples, &on_error);
+                }
                 let (vad, interim) = match chunk.channel {
                     Channel::Me => (&mut vad_me, &mut interim_me),
                     Channel::Them => (&mut vad_them, &mut interim_them),
@@ -475,13 +504,30 @@ fn run_worker(
 
     let elapsed_secs = (Local::now() - started_at).num_seconds().max(0) as u64;
     transcript.set_duration_secs(previous_duration_secs + elapsed_secs);
-    if let Err(e) = transcript.save(&out_path) {
+    let save_result = transcript.save(&out_path);
+    if let Err(e) = &save_result {
         report_error(
             &on_error,
             format!("session: final transcript save failed: {e}"),
         );
-        return Err(e);
     }
+
+    // Transcript integrity comes first (Global Constraints): the final
+    // transcript save above always happens, and is reported/returned as the
+    // authoritative failure, before the audio sink's own (slower -- this is
+    // where FLAC encoding happens) finalize runs. That finalize still runs
+    // even if the save just above failed, rather than being skipped: losing
+    // the captured audio too on top of a save problem would only compound
+    // it, and a sink error here is reported the same non-fatal way (Global
+    // Constraints: a sink problem must not kill the recording, or in this
+    // case, its final outcome).
+    if let Some(sink) = audio_sink.take() {
+        if let Err(e) = sink.finish(&on_error) {
+            report_error(&on_error, format!("session: audio sink finish failed: {e}"));
+        }
+    }
+
+    save_result?;
     Ok(out_path)
 }
 

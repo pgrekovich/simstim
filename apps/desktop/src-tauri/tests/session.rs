@@ -100,6 +100,7 @@ fn session_transcribes_fake_channel_stream() {
         out.clone(),
         None,
         no_pending_edits(),
+        true,
         |_| {},
         |_, _| {},
         |_| {},
@@ -121,6 +122,85 @@ fn session_transcribes_fake_channel_stream() {
     );
 }
 
+// Global Constraints: `keep_audio: true` (the config default) means every
+// recording gets a stereo audio file next to the transcript. This wires
+// `Session::start`'s `keep_audio` flag through to a real `AudioSink` and
+// checks the end-to-end result -- the sink's own WAV/FLAC/sync-rule behavior
+// is unit-tested in `audio_sink.rs` directly.
+#[test]
+fn keep_audio_true_produces_a_flac_file_next_to_the_transcript() {
+    let samples = load_wav_16k_mono(&test_wav_path());
+    let (tx, rx) = channel();
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("call.md");
+    let session = desktop_lib::session::Session::start(
+        rx,
+        out.clone(),
+        None,
+        no_pending_edits(),
+        true,
+        |_| {},
+        |_, _| {},
+        |_| {},
+    );
+    for chunk in samples.chunks(1600) {
+        tx.send(Chunk {
+            channel: Channel::Me,
+            samples: chunk.to_vec(),
+        })
+        .unwrap();
+    }
+    drop(tx);
+    let path = session.stop().unwrap();
+
+    let flac_path = desktop_lib::audio_sink::audio_path_for(&path);
+    assert!(
+        flac_path.exists(),
+        "expected a flac file at {flac_path:?} next to the transcript"
+    );
+    assert!(
+        !path.with_extension("wav").exists(),
+        "the in-progress wav should be gone after a clean stop"
+    );
+}
+
+// Global Constraints: `keep_audio: false` writes no audio file at all.
+#[test]
+fn keep_audio_false_writes_no_audio_file() {
+    let samples = load_wav_16k_mono(&test_wav_path());
+    let (tx, rx) = channel();
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("call.md");
+    let session = desktop_lib::session::Session::start(
+        rx,
+        out.clone(),
+        None,
+        no_pending_edits(),
+        false,
+        |_| {},
+        |_, _| {},
+        |_| {},
+    );
+    for chunk in samples.chunks(1600) {
+        tx.send(Chunk {
+            channel: Channel::Me,
+            samples: chunk.to_vec(),
+        })
+        .unwrap();
+    }
+    drop(tx);
+    let path = session.stop().unwrap();
+
+    assert!(
+        !desktop_lib::audio_sink::audio_path_for(&path).exists(),
+        "keep_audio: false must not write a flac file"
+    );
+    assert!(
+        !path.with_extension("wav").exists(),
+        "keep_audio: false must not write a wav file either"
+    );
+}
+
 #[test]
 fn session_stop_with_no_chunks_still_produces_valid_file() {
     let (_tx, rx) = channel::<Chunk>();
@@ -131,6 +211,7 @@ fn session_stop_with_no_chunks_still_produces_valid_file() {
         out.clone(),
         None,
         no_pending_edits(),
+        true,
         |_| {},
         |_, _| {},
         |_| {},
@@ -170,6 +251,7 @@ fn pending_edits_set_before_start_land_in_the_saved_file() {
         out.clone(),
         None,
         pending,
+        true,
         |_| {},
         |_, _| {},
         |_| {},
@@ -207,6 +289,7 @@ fn save_failures_are_reported_via_on_error_and_stop_returns_err() {
         out,
         None,
         no_pending_edits(),
+        true,
         |_| {},
         |_, _| {},
         move |msg| {
@@ -281,6 +364,7 @@ fn continuing_an_existing_session_appends_after_existing_content_with_continued_
         out.clone(),
         Some(seed),
         no_pending_edits(),
+        true,
         |_| {},
         |_, _| {},
         |_| {},
@@ -363,6 +447,7 @@ fn continuing_a_session_with_no_prior_transcript_starts_offsets_at_zero() {
         out.clone(),
         Some(seed),
         no_pending_edits(),
+        true,
         |_| {},
         |_, _| {},
         |_| {},
@@ -407,6 +492,7 @@ fn continuing_a_session_does_not_wipe_its_existing_duration_before_the_final_sav
         out.clone(),
         Some(seed),
         no_pending_edits(),
+        true,
         |_| {},
         |_, _| {},
         |_| {},

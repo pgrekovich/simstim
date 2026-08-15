@@ -34,8 +34,10 @@ tokio = { version = "1", default-features = false, features = ["fs", "io-util"] 
 futures-util = "0.3"
 tar = "0.4"
 bzip2 = "0.4"
+hound = "3"
+flacenc = "0.5"
 
 [dev-dependencies]
-hound = "3"
 tempfile = "3"
+claxon = "0.4"
 

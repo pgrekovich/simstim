@@ -17,10 +17,18 @@ import {
   listModels,
   setActiveModel,
   setOutputDir,
+  setTheme,
   type AppConfig,
   type DownloadProgress,
   type ModelInfo,
 } from "@/lib/ipc";
+import { applyTheme } from "@/lib/theme";
+
+const THEME_OPTIONS: { value: string; label: string }[] = [
+  { value: "system", label: "System" },
+  { value: "light", label: "Light" },
+  { value: "dark", label: "Dark" },
+];
 
 /** Formats a byte count as "487 MB" or "1.2 GB" (one decimal above 1024 MB). */
 function humanBytes(bytes: number): string {
@@ -116,6 +124,16 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
     };
   }, [refresh]);
 
+  async function handleSetTheme(theme: string) {
+    if (theme === config?.theme) return;
+    // Apply immediately (no waiting on the round-trip) so the toggle feels
+    // instant; the optimistic `config` update below keeps the active button
+    // in sync even though `refresh()` isn't called here.
+    applyTheme(theme);
+    setConfig((prev) => (prev ? { ...prev, theme } : prev));
+    await setTheme(theme);
+  }
+
   async function handleChooseFolder() {
     setChoosingDir(true);
     try {
@@ -180,6 +198,22 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
         <DialogHeader>
           <DialogTitle>Settings</DialogTitle>
         </DialogHeader>
+
+        <section className="flex flex-col gap-2">
+          <h3 className="text-sm font-semibold">Appearance</h3>
+          <div className="flex gap-1.5">
+            {THEME_OPTIONS.map((option) => (
+              <Button
+                key={option.value}
+                variant={config?.theme === option.value ? "default" : "outline"}
+                size="sm"
+                onClick={() => handleSetTheme(option.value)}
+              >
+                {option.label}
+              </Button>
+            ))}
+          </div>
+        </section>
 
         <section className="flex flex-col gap-2">
           <h3 className="text-sm font-semibold">Output</h3>

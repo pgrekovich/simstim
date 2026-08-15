@@ -65,7 +65,9 @@ export function TranscriptView({ lines }: TranscriptViewProps) {
                   <span className="text-muted-foreground">[{parsed.timestamp}]</span>{" "}
                   <span
                     className={
-                      parsed.speaker === "Them" ? "text-sky-400" : "text-foreground"
+                      parsed.speaker === "Them"
+                        ? "text-sky-600 dark:text-sky-400"
+                        : "text-foreground"
                     }
                   >
                     {parsed.speaker}:

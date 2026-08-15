@@ -1,10 +1,19 @@
 <!doctype html>
-<html lang="en" class="dark">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/png" href="/icon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>simstim</title>
+    <script>
+      // Pre-paint guess before config.json (the source of truth) has loaded:
+      // follow the system preference so there is no flash of the wrong
+      // theme. src/lib/theme.ts reconciles this against the persisted
+      // config's theme choice once get_config resolves.
+      if (window.matchMedia("(prefers-color-scheme: dark)").matches) {
+        document.documentElement.classList.add("dark");
+      }
+    </script>
   </head>
 
   <body>

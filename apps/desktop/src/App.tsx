@@ -5,7 +5,8 @@ import { Button } from "@/components/ui/button";
 import { RecordButton } from "@/components/RecordButton";
 import { TranscriptView } from "@/components/TranscriptView";
 import { SettingsDialog } from "@/components/SettingsDialog";
-import { startRecording, stopRecording, type AppConfig, type ModelInfo } from "@/lib/ipc";
+import { getConfig, startRecording, stopRecording, type AppConfig, type ModelInfo } from "@/lib/ipc";
+import { initTheme } from "@/lib/theme";
 
 /**
  * The engine (VAD + ASR) loads in a worker thread after `start_recording`
@@ -42,6 +43,20 @@ function App() {
     const active = models.find((m) => m.id === config.active_model);
     setModelReady(Boolean(active?.downloaded));
   }
+
+  // index.html already applied a pre-paint guess (system preference) before
+  // React mounted; reconcile it against the persisted config's theme choice
+  // as soon as it loads. Index.html's own inline script covers the gap
+  // before this resolves, so a brief "system" guess for a "light"/"dark"
+  // override user is the only acceptable flash (per Global Constraints).
+  useEffect(() => {
+    getConfig()
+      .then((config) => initTheme(config.theme))
+      .catch(() => {
+        // No config yet (e.g. first launch before it's ever been written):
+        // the pre-paint script's system guess stands.
+      });
+  }, []);
 
   useEffect(() => {
     const unlisten = listen<string>("transcript-line", (event) => {

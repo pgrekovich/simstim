@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 function formatElapsed(ms: number): string {
   const totalSeconds = Math.max(0, Math.floor(ms / 1000));
@@ -29,6 +30,13 @@ export function RecordButton({
 
   useEffect(() => {
     if (!recording) return;
+    // `now` may be stale (e.g. still holding the mount-time value if
+    // recording started well after mount): reset it the instant recording
+    // flips true instead of waiting for the first 1s interval tick, so the
+    // very first elapsed render is a real "just started" 00:00 rather than
+    // an unrelated negative value that only reads as 00:00 because of the
+    // Math.max clamp below.
+    setNow(Date.now());
     const id = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(id);
   }, [recording]);
@@ -40,7 +48,10 @@ export function RecordButton({
       variant={recording ? "destructive" : "default"}
       disabled={disabled}
       onClick={onClick}
-      className="h-14 rounded-full px-10 text-lg"
+      className={cn(
+        "h-14 rounded-full px-10 text-lg",
+        !recording && "bg-emerald-600 text-white hover:bg-emerald-500"
+      )}
     >
       {recording ? (
         <>

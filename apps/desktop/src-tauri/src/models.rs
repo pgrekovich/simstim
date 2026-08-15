@@ -311,6 +311,20 @@ mod tests {
     }
 
     #[test]
+    fn known_model_id_resolves_in_registry() {
+        assert!(find(crate::config::KNOWN_MODEL_ID).is_some());
+    }
+
+    #[test]
+    fn registry_dir_name_matches_engine_hardcoded_model_dir() {
+        // Engine::new (crates/engine/src/lib.rs) hardcodes the model
+        // directory name "parakeet-tdt-0.6b-v3-int8" rather than reading it
+        // from the registry. This test guards against the registry's
+        // dir_name drifting out of sync with that hardcoded value.
+        assert_eq!(REGISTRY[0].dir_name, "parakeet-tdt-0.6b-v3-int8");
+    }
+
+    #[test]
     fn not_downloaded_when_dir_missing() {
         let dir = tempfile::tempdir().unwrap();
         assert!(!is_downloaded(&test_spec(), dir.path()));

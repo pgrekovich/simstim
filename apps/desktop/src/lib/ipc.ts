@@ -27,7 +27,8 @@ export interface SessionMeta {
   title: string;
   /** RFC3339. */
   date: string;
-  duration_secs?: number;
+  /** Rust `Option<u64>` serializes as an explicit `null`, not a missing key. */
+  duration_secs: number | null;
 }
 
 /**

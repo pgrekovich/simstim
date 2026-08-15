@@ -4,6 +4,12 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
+/// The single ASR backend id this codebase currently writes into the `asr`
+/// frontmatter field. Exposed so callers that reconstruct a `Transcript` from
+/// an existing file (e.g. `sessions::rewrite_session`) can reproduce it
+/// without duplicating the literal.
+pub const ASR_MODEL_ID: &str = "parakeet-tdt-0.6b-v3";
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Speaker {
     Me,
@@ -22,6 +28,9 @@ struct Line {
 /// only, no title, no `## Notes` section).
 pub struct Transcript {
     started_at: DateTime<Local>,
+    /// When set, overrides the rendered `date:` line with this exact string
+    /// instead of formatting `started_at`. See [`Transcript::set_raw_date`].
+    date_override: Option<String>,
     title: String,
     notes: String,
     duration_secs: Option<u64>,
@@ -32,6 +41,7 @@ impl Transcript {
     pub fn new(started_at: DateTime<Local>) -> Self {
         Self {
             started_at,
+            date_override: None,
             title: "Untitled".to_string(),
             notes: String::new(),
             duration_secs: None,
@@ -45,6 +55,20 @@ impl Transcript {
 
     pub fn set_notes(&mut self, notes: String) {
         self.notes = notes;
+    }
+
+    /// Overrides the rendered `date:` frontmatter line with this exact
+    /// string instead of formatting `started_at`.
+    ///
+    /// For rewriting an existing file (`sessions::rewrite_session`): the
+    /// original date string must survive byte-exact, including its original
+    /// UTC offset. Reformatting it through `started_at` (a `DateTime<Local>`)
+    /// would silently convert it to the process's *current* local offset --
+    /// changing the wall-clock date used for sorting/grouping if the file
+    /// was written under a different offset (a call recorded while
+    /// traveling, or before a timezone change).
+    pub fn set_raw_date(&mut self, raw: String) {
+        self.date_override = Some(raw);
     }
 
     /// Sets the final duration, rendered as a `duration: <minutes>m` frontmatter
@@ -89,11 +113,13 @@ impl Transcript {
     /// [00:00:12] Me: ...
     /// ```
     pub fn render(&self) -> String {
-        let mut out = format!(
-            "---\ndate: {}\ntitle: {}\nasr: parakeet-tdt-0.6b-v3\n",
+        let date = self.date_override.clone().unwrap_or_else(|| {
             self.started_at
-                .to_rfc3339_opts(chrono::SecondsFormat::Secs, false),
-            self.title,
+                .to_rfc3339_opts(chrono::SecondsFormat::Secs, false)
+        });
+        let mut out = format!(
+            "---\ndate: {}\ntitle: {}\nasr: {}\n",
+            date, self.title, ASR_MODEL_ID
         );
         if let Some(secs) = self.duration_secs {
             out.push_str(&format!("duration: {}m\n", secs / 60));
@@ -358,6 +384,23 @@ mod tests {
         let md = t.render();
         assert!(md.contains("title: Untitled"));
         assert!(!md.contains("duration:"));
+    }
+
+    #[test]
+    fn set_raw_date_overrides_the_rendered_date_line_verbatim() {
+        let started = t0();
+        let default_date_line = format!(
+            "date: {}\n",
+            started.to_rfc3339_opts(chrono::SecondsFormat::Secs, false)
+        );
+        let mut t = Transcript::new(started);
+        t.set_raw_date("2026-06-01T09:00:00-05:00".to_string());
+        let md = t.render();
+        assert!(md.contains("date: 2026-06-01T09:00:00-05:00\n"));
+        assert!(
+            !md.contains(&default_date_line),
+            "started_at's own formatting should not leak in once overridden"
+        );
     }
 
     #[test]

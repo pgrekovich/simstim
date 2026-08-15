@@ -18,7 +18,7 @@
 //! `State<...>`, so they're unit-testable on tempdir fixtures without a
 //! running Tauri app.
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
 use chrono::{DateTime, FixedOffset, Local};
 use serde::Serialize;
 use std::path::Path;
@@ -118,25 +118,39 @@ pub fn save_session_at(
 
 /// Rewrites `path` with new title/notes, preserving date, asr and duration
 /// frontmatter and the transcript section verbatim. Reconstructs a
-/// `Transcript` from the parsed file (date -> `started_at`, duration ->
-/// `set_duration_secs`, transcript lines re-added via `add`) and reuses its
-/// `render`/`save` so the on-disk format stays defined in exactly one place
+/// `Transcript` from the parsed file (duration -> `set_duration_secs`,
+/// transcript lines re-added via `add`) and reuses its `render`/`save` so the
+/// on-disk format stays defined in exactly one place
 /// (`simstim_transcript::Transcript`) rather than duplicated here.
 ///
+/// The date is carried through via `set_raw_date` (the original string,
+/// byte-exact) rather than parsed into a `DateTime<Local>` and reformatted:
+/// reformatting would silently rewrite the date to the *current* process's
+/// local UTC offset, corrupting the wall-clock date used for sorting and
+/// Today/Yesterday grouping for any file recorded under a different offset
+/// (traveling, or before a timezone change). `started_at` still needs a
+/// placeholder value to satisfy `Transcript::new`, but `set_raw_date`
+/// immediately overrides what actually gets rendered, so a parse failure
+/// there (shouldn't happen -- `parse_session` already required a `date`
+/// field to exist) falls back to `Local::now()` rather than erroring the
+/// whole rewrite.
+///
 /// The `asr` field itself isn't read back from the file at all: `Transcript`
-/// always renders the single asr id this codebase currently supports, so
-/// re-rendering reproduces it exactly. If a future stage supports multiple
-/// ASR backends and mixes their output files, this will need to carry the
-/// original `asr` value through explicitly instead of relying on the
-/// constant -- noted here rather than solved speculatively now.
+/// always renders the single asr id this codebase currently supports
+/// (`simstim_transcript::ASR_MODEL_ID`), so re-rendering reproduces it
+/// exactly. If a future stage supports multiple ASR backends and mixes their
+/// output files, this will need to carry the original `asr` value through
+/// explicitly instead of relying on the constant -- noted here rather than
+/// solved speculatively now.
 fn rewrite_session(path: &Path, title: &str, notes: &str) -> Result<()> {
     let existing = parse_session(path)?;
     let meta = parse_meta(path)?;
     let started_at = DateTime::parse_from_rfc3339(&existing.date)
-        .with_context(|| format!("unparseable date in {}: {}", path.display(), existing.date))?
-        .with_timezone(&Local);
+        .map(|dt| dt.with_timezone(&Local))
+        .unwrap_or_else(|_| Local::now());
 
     let mut transcript = Transcript::new(started_at);
+    transcript.set_raw_date(existing.date.clone());
     transcript.set_title(title.to_string());
     transcript.set_notes(notes.to_string());
     if let Some(duration_secs) = meta.duration_secs {
@@ -314,6 +328,27 @@ mod tests {
         assert_eq!(
             date_line_before, date_line_after,
             "date must be preserved verbatim"
+        );
+    }
+
+    #[test]
+    fn rewrite_preserves_a_foreign_utc_offset_date_byte_exact() {
+        // Reproduces the bug this test guards against: a file recorded under
+        // a non-local UTC offset (traveling, or before a timezone change)
+        // must NOT have its date silently reformatted to whatever offset the
+        // rewriting process's *current* local timezone happens to be.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("call.md");
+        let v1 = "---\ndate: 2026-06-01T09:00:00-05:00\nasr: parakeet-tdt-0.6b-v3\n---\n\n## Transcript\n\n[00:00:01] Me: hi\n";
+        std::fs::write(&path, v1).unwrap();
+
+        save_session_at(&path, "New title", "New notes", None).unwrap();
+
+        let after = std::fs::read_to_string(&path).unwrap();
+        let date_line = after.lines().find(|l| l.starts_with("date:")).unwrap();
+        assert_eq!(
+            date_line, "date: 2026-06-01T09:00:00-05:00",
+            "the -05:00 offset must survive byte-exact, not get reformatted under the local timezone"
         );
     }
 

@@ -5,6 +5,9 @@ use sherpa_onnx::{
 };
 use std::path::{Path, PathBuf};
 
+mod whisper;
+pub use whisper::{WhisperEngine, WhisperSegment};
+
 pub fn models_dir() -> PathBuf {
     dirs::data_dir().expect("no data dir").join("simstim/models")
 }

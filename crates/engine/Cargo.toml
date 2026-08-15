@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 sherpa-onnx = "1.13.5"
+whisper-rs = { version = "0.16", features = ["metal"] }
 anyhow = { workspace = true }
 dirs = "6"
 

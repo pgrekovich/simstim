@@ -18,6 +18,13 @@ interface RecordButtonProps {
   /** `Date.now()` at the moment recording started; used to compute the elapsed timer. */
   startedAt: number | null;
   onClick: () => void;
+  /**
+   * `"default"` is the original large centered-screen pill (Stage 0.5).
+   * `"compact"` is the small header pill used by the Stage 0.6 shell
+   * (Task 5): same green/red + pulse + elapsed logic, just sized to sit
+   * inline next to the status text and gear button.
+   */
+  size?: "default" | "compact";
 }
 
 export function RecordButton({
@@ -25,6 +32,7 @@ export function RecordButton({
   disabled,
   startedAt,
   onClick,
+  size = "default",
 }: RecordButtonProps) {
   const [now, setNow] = useState(() => Date.now());
 
@@ -49,7 +57,7 @@ export function RecordButton({
       disabled={disabled}
       onClick={onClick}
       className={cn(
-        "h-14 rounded-full px-10 text-lg",
+        size === "compact" ? "h-8 rounded-full px-4 text-sm" : "h-14 rounded-full px-10 text-lg",
         !recording && "bg-emerald-600 text-white hover:bg-emerald-500"
       )}
     >
@@ -58,6 +66,8 @@ export function RecordButton({
           <span className="size-2 animate-pulse rounded-full bg-current" />
           Stop {elapsed}
         </>
+      ) : size === "compact" ? (
+        "Record"
       ) : (
         "Start recording"
       )}

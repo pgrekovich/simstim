@@ -1,12 +1,24 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { RecordButton } from "@/components/RecordButton";
-import { TranscriptView } from "@/components/TranscriptView";
+import { Sidebar } from "@/components/Sidebar";
 import { SettingsDialog } from "@/components/SettingsDialog";
-import { getConfig, startRecording, stopRecording, type AppConfig, type ModelInfo } from "@/lib/ipc";
+import {
+  getConfig,
+  listSessions,
+  readSession,
+  startRecording,
+  stopRecording,
+  type AppConfig,
+  type ModelInfo,
+  type SessionData,
+  type SessionErrorPayload,
+  type SessionMeta,
+} from "@/lib/ipc";
 import { initTheme } from "@/lib/theme";
+import { truncateMiddle } from "@/lib/utils";
 
 /**
  * The engine (VAD + ASR) loads in a worker thread after `start_recording`
@@ -36,6 +48,16 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const loadingFallbackRef = useRef<number | null>(null);
 
+  const [sessions, setSessions] = useState<SessionMeta[]>([]);
+  const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  // The path returned by `start_recording`, while a session is actively
+  // being recorded (cleared on stop). Used to decide whether the content
+  // pane should show the live in-memory `lines` instead of reading the file
+  // from disk: see the `viewingActiveSession` comment below.
+  const [activePath, setActivePath] = useState<string | null>(null);
+  const [sessionData, setSessionData] = useState<SessionData | null>(null);
+  const [sessionDataError, setSessionDataError] = useState<string | null>(null);
+
   // The settings dialog owns fetching config/models (on mount, on open, and
   // on download completion) and reports back through this callback, so the
   // "model not downloaded" gate here updates without an app restart.
@@ -60,6 +82,37 @@ function App() {
       });
   }, []);
 
+  const refreshSessions = useCallback(async () => {
+    try {
+      const fresh = await listSessions();
+      setSessions(fresh);
+      return fresh;
+    } catch {
+      // Leave the previous list in place rather than blanking the sidebar
+      // on a transient scan failure.
+      return null;
+    }
+  }, []);
+
+  // Refresh triggers (Global Constraints / Task 5 brief): mount, window
+  // focus, recording start/stop (handled in handleStart/handleStop below),
+  // and session-error (handled in the listener below).
+  useEffect(() => {
+    refreshSessions();
+    function handleFocus() {
+      refreshSessions();
+    }
+    function handleVisibility() {
+      if (document.visibilityState === "visible") refreshSessions();
+    }
+    window.addEventListener("focus", handleFocus);
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => {
+      window.removeEventListener("focus", handleFocus);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
+  }, [refreshSessions]);
+
   useEffect(() => {
     const unlisten = listen<string>("transcript-line", (event) => {
       setLines((prev) => [...prev, event.payload]);
@@ -74,6 +127,47 @@ function App() {
     };
   }, []);
 
+  // Worker-side errors (engine/VAD init, save failures) surfaced instead of
+  // living only in stderr: reflect them in the status line, same as a
+  // failed start/stop call, and refresh the sidebar (a save failure can mean
+  // the on-disk session list changed underneath us).
+  useEffect(() => {
+    const unlisten = listen<SessionErrorPayload>("session-error", (event) => {
+      setStatus({ kind: "error", message: event.payload.message });
+      refreshSessions();
+    });
+    return () => {
+      unlisten.then((f) => f());
+    };
+  }, [refreshSessions]);
+
+  // Loads the selected session for the content placeholder. The one
+  // exception is the session currently being recorded (`activePath`): its
+  // file is being written by the worker in the background and may lag or
+  // race a direct read, so for that one session the live in-memory `lines`
+  // (from the transcript-line listener above) are shown instead of a
+  // `read_session` dump. Task 6 replaces all of this with the real
+  // SessionView.
+  useEffect(() => {
+    if (selectedPath === null || selectedPath === activePath) {
+      setSessionData(null);
+      setSessionDataError(null);
+      return;
+    }
+    let cancelled = false;
+    setSessionDataError(null);
+    readSession(selectedPath)
+      .then((data) => {
+        if (!cancelled) setSessionData(data);
+      })
+      .catch((err) => {
+        if (!cancelled) setSessionDataError(String(err));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedPath, activePath]);
+
   function clearLoadingFallback() {
     if (loadingFallbackRef.current !== null) {
       window.clearTimeout(loadingFallbackRef.current);
@@ -86,14 +180,17 @@ function App() {
     setBusy(true);
     setLines([]);
     try {
-      await startRecording();
+      const path = await startRecording();
       setRecordingStartedAt(Date.now());
+      setActivePath(path);
+      setSelectedPath(path);
       setStatus({ kind: "loading-model" });
       clearLoadingFallback();
       loadingFallbackRef.current = window.setTimeout(() => {
         setStatus((prev) => (prev.kind === "loading-model" ? { kind: "recording" } : prev));
         loadingFallbackRef.current = null;
       }, MODEL_LOAD_FALLBACK_MS);
+      refreshSessions();
     } catch (err) {
       setStatus({ kind: "error", message: String(err) });
     } finally {
@@ -108,7 +205,9 @@ function App() {
     try {
       const path = await stopRecording();
       setRecordingStartedAt(null);
+      setActivePath(null);
       setStatus({ kind: "saved", path });
+      refreshSessions();
     } catch (err) {
       setStatus({ kind: "error", message: String(err) });
     } finally {
@@ -117,60 +216,97 @@ function App() {
   }
 
   const sessionActive = status.kind === "loading-model" || status.kind === "recording";
+  const viewingActiveSession = selectedPath !== null && selectedPath === activePath;
+  // The model-missing hint only replaces the status text while there is no
+  // more specific status to show (idle, not recording): once a real status
+  // exists ("saved to ...", an error, or an active recording) it takes
+  // priority, so a stale model-download reminder never masks it.
+  const showModelHint = !sessionActive && !modelReady && status.kind === "idle";
+  const statusText = showModelHint
+    ? "model not downloaded"
+    : status.kind === "loading-model"
+      ? "loading model"
+      : status.kind === "recording"
+        ? "recording"
+        : status.kind === "saved"
+          ? `saved to ${truncateMiddle(status.path)}`
+          : status.kind === "error"
+            ? status.message
+            : "";
 
   return (
-    <main className="mx-auto flex h-screen max-w-2xl flex-col gap-6 p-6">
-      <header className="flex items-center justify-between">
-        <span className="font-mono text-sm lowercase text-muted-foreground">simstim</span>
-        <Button
-          variant="ghost"
-          size="icon"
-          aria-label="Settings"
-          onClick={() => setSettingsOpen(true)}
-        >
-          <Settings />
-        </Button>
-      </header>
+    <div className="flex h-screen">
+      <Sidebar sessions={sessions} selectedPath={selectedPath} onSelect={setSelectedPath} />
 
-      <div className="flex flex-col items-center gap-3">
-        <RecordButton
-          recording={sessionActive}
-          disabled={busy || (!sessionActive && !modelReady)}
-          startedAt={recordingStartedAt}
-          onClick={sessionActive ? handleStop : handleStart}
-        />
-        {!sessionActive && !modelReady && (
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <span>Model not downloaded</span>
+      <div className="flex min-w-0 flex-1 flex-col">
+        <header className="flex h-12 shrink-0 items-center gap-3 border-b px-4">
+          <RecordButton
+            size="compact"
+            recording={sessionActive}
+            disabled={busy || (!sessionActive && !modelReady)}
+            startedAt={recordingStartedAt}
+            onClick={sessionActive ? handleStop : handleStart}
+          />
+
+          <span
+            className={
+              status.kind === "error"
+                ? "min-w-0 flex-1 truncate text-sm text-destructive"
+                : "min-w-0 flex-1 truncate text-sm text-muted-foreground"
+            }
+          >
+            {statusText}
+          </span>
+
+          {showModelHint && (
             <Button variant="outline" size="sm" onClick={() => setSettingsOpen(true)}>
               Open settings
             </Button>
-          </div>
-        )}
+          )}
+
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label="Settings"
+            onClick={() => setSettingsOpen(true)}
+          >
+            <Settings />
+          </Button>
+        </header>
+
+        <div className="min-h-0 flex-1 overflow-y-auto p-6">
+          {selectedPath === null ? (
+            <p className="flex h-full items-center justify-center text-center text-sm text-muted-foreground">
+              select a session or start recording
+            </p>
+          ) : viewingActiveSession ? (
+            <pre className="whitespace-pre-wrap font-mono text-[13px] leading-relaxed">
+              {lines.length === 0 ? "transcript will appear here" : lines.join("\n")}
+            </pre>
+          ) : sessionDataError ? (
+            <p className="text-sm text-destructive">{sessionDataError}</p>
+          ) : sessionData === null ? (
+            <p className="text-sm text-muted-foreground">loading...</p>
+          ) : (
+            <div className="flex flex-col gap-4">
+              <h2 className="text-lg font-semibold">{sessionData.title}</h2>
+              <pre className="whitespace-pre-wrap font-mono text-[13px] leading-relaxed">
+                {sessionData.notes}
+              </pre>
+              <pre className="whitespace-pre-wrap font-mono text-[13px] leading-relaxed">
+                {sessionData.transcript}
+              </pre>
+            </div>
+          )}
+        </div>
       </div>
-
-      <p
-        className={
-          status.kind === "error"
-            ? "text-center text-sm text-destructive"
-            : "text-center text-sm text-muted-foreground"
-        }
-      >
-        {status.kind === "idle" && "idle"}
-        {status.kind === "loading-model" && "loading model"}
-        {status.kind === "recording" && "recording"}
-        {status.kind === "saved" && `saved to ${status.path}`}
-        {status.kind === "error" && status.message}
-      </p>
-
-      <TranscriptView lines={lines} />
 
       <SettingsDialog
         open={settingsOpen}
         onOpenChange={setSettingsOpen}
         onModelsChanged={handleModelsChanged}
       />
-    </main>
+    </div>
   );
 }
 

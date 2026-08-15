@@ -53,6 +53,11 @@ export interface ModelInfo {
   active: boolean;
 }
 
+/** Mirrors `SessionErrorPayload` (apps/desktop/src-tauri/src/lib.rs), the `session-error` event payload. */
+export interface SessionErrorPayload {
+  message: string;
+}
+
 export type DownloadPhase = "download" | "extract" | "done" | "error";
 
 /**

@@ -171,6 +171,35 @@ effect" (Anarlog-style shell, chosen by Pavel over competitor screenshots).
 Out of 0.6: enhance, whisper engine, meeting detection, tray, calendar,
 audio retention.
 
+## Stage 0.7: audio retention and the whisper pass (approved 2026-08-15)
+
+Attacks the top complaint: Parakeet's Russian is mediocre and its vocabulary
+has no "ё" at all (hard architectural exclusion, not a tuning issue).
+
+- **Audio kept next to the .md**: one stereo FLAC per session, mic = left,
+  system = right, so Me/Them survive a re-transcription. FLAC chosen over
+  Opus: pure Rust (flacenc/claxon), ~130 MB/hour, and macOS plays it
+  natively in QuickTime and Quick Look (Opus in Ogg does not play natively).
+  Written as WAV during capture (incremental, crash-safe) and encoded to
+  FLAC on stop.
+- **Re-transcribe**: an explicit action on a session, running whisper
+  large-v3-turbo (whisper-rs + Metal, q8_0) over the retained audio.
+  Measured on the dev machine: 12x realtime, so a 30 minute call takes
+  about 2.5 minutes. Segment timestamps come from whisper directly.
+  sherpa-onnx's whisper is unusable here: its published models carry no
+  timestamps.
+- **The transcript is app-read-only** (Pavel's ruling): the app never offers
+  transcript editing, so re-transcribing simply REPLACES the section. The
+  old text is not preserved in the file. Hand-editing the .md outside the
+  app stays possible and stays the user's responsibility.
+- **Playback**: clicking a transcript line seeks the audio to that offset.
+  The thing Granola users ask for and cannot have (Granola stores no audio).
+- Two ML runtimes now ship: onnxruntime (live Parakeet) and ggml/whisper.cpp
+  (offline pass). Accepted: the second adds about 3 MB of static libs, and
+  the model file is a download either way.
+
+Out of 0.7: meeting detection, tray, hotkeys, enhance, calendar.
+
 ## Milestones after MVP-0
 
 1. Audio file kept next to the .md; re-transcribe command (whisper turbo).

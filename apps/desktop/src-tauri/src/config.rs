@@ -7,10 +7,22 @@ use std::path::{Path, PathBuf};
 /// constant; this only seeds `Config::default()`.
 pub const KNOWN_MODEL_ID: &str = "parakeet-tdt-0.6b-v3-int8";
 
+/// Valid `theme` values: `set_theme` rejects anything else.
+pub const VALID_THEMES: &[&str] = &["system", "light", "dark"];
+
+fn default_theme() -> String {
+    "system".to_string()
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Config {
     pub output_dir: PathBuf,
     pub active_model: String,
+    /// `"system" | "light" | "dark"`. `serde(default)` so config.json files
+    /// written before this field existed still load (falling back to
+    /// "system") instead of failing deserialization entirely.
+    #[serde(default = "default_theme")]
+    pub theme: String,
 }
 
 impl Default for Config {
@@ -18,8 +30,33 @@ impl Default for Config {
         Self {
             output_dir: dirs::home_dir().expect("no home dir").join("Desktop"),
             active_model: KNOWN_MODEL_ID.to_string(),
+            theme: default_theme(),
         }
     }
+}
+
+/// `Err` with a message naming the allowed values unless `theme` is one of
+/// [`VALID_THEMES`]. Split out from `set_theme` so validation is testable
+/// without touching the real config file on disk.
+fn validate_theme(theme: &str) -> Result<(), String> {
+    if VALID_THEMES.contains(&theme) {
+        Ok(())
+    } else {
+        Err(format!(
+            "invalid theme: {theme} (expected one of {VALID_THEMES:?})"
+        ))
+    }
+}
+
+/// Sets and persists the UI theme. Rejects anything outside
+/// [`VALID_THEMES`] rather than writing an unrecognized value the frontend
+/// wouldn't know how to interpret.
+#[tauri::command]
+pub fn set_theme(theme: String) -> Result<(), String> {
+    validate_theme(&theme)?;
+    let mut cfg = Config::load();
+    cfg.theme = theme;
+    cfg.save().map_err(|e| e.to_string())
 }
 
 /// `~/Library/Application Support/simstim/config.json`: next to the models
@@ -80,10 +117,44 @@ mod tests {
         let cfg = Config {
             output_dir: PathBuf::from("/tmp/some-output"),
             active_model: "custom-model-id".to_string(),
+            theme: "dark".to_string(),
         };
         cfg.save_to(&path).unwrap();
         let loaded = Config::load_from(&path);
         assert_eq!(loaded, cfg);
+    }
+
+    #[test]
+    fn theme_defaults_to_system() {
+        assert_eq!(Config::default().theme, "system");
+    }
+
+    #[test]
+    fn old_config_json_without_theme_field_loads_with_system_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        // Exactly what stage-0.5 wrote: no "theme" key at all.
+        std::fs::write(
+            &path,
+            r#"{"output_dir":"/tmp/some-output","active_model":"custom-model-id"}"#,
+        )
+        .unwrap();
+        let cfg = Config::load_from(&path);
+        assert_eq!(cfg.theme, "system");
+        assert_eq!(cfg.output_dir, PathBuf::from("/tmp/some-output"));
+    }
+
+    #[test]
+    fn validate_theme_accepts_the_three_known_values() {
+        assert!(validate_theme("system").is_ok());
+        assert!(validate_theme("light").is_ok());
+        assert!(validate_theme("dark").is_ok());
+    }
+
+    #[test]
+    fn validate_theme_rejects_unknown_value() {
+        let err = validate_theme("solarized").unwrap_err();
+        assert!(err.contains("solarized"));
     }
 
     #[test]

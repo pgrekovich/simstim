@@ -1,12 +1,23 @@
 pub mod config;
 pub mod models;
 pub mod session;
+pub mod sessions;
 
 use config::Config;
 use models::DownloadState;
+use serde::Serialize;
+use session::PendingEdits;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, State};
+
+/// `session-error` event payload (Global Constraints): worker-side errors
+/// (engine/VAD init, save failures) surfaced to the UI instead of only
+/// living in stderr.
+#[derive(Clone, Serialize)]
+struct SessionErrorPayload {
+    message: String,
+}
 
 /// A live recording: the session worker plus the two capture handles that
 /// feed it. Holding the handles here keeps their streams alive; dropping them
@@ -25,9 +36,24 @@ struct Recording {
     session: session::Session,
     mic: simstim_capture::CaptureHandle,
     speaker: simstim_capture::speaker::SpeakerHandle,
+    /// The file this recording's worker exclusively owns while active (see
+    /// `session.rs`'s single-writer docs). `save_session` reads this via
+    /// `AppState::active_output_path` to reject direct edits to it.
+    path: PathBuf,
+    /// Shared with the worker thread; `update_active_session` writes into it
+    /// instead of touching `path` directly.
+    pending_edits: Arc<Mutex<PendingEdits>>,
 }
 
-struct AppState(Mutex<Option<Recording>>);
+pub struct AppState(Mutex<Option<Recording>>);
+
+impl AppState {
+    /// The currently-recording session's output path, if any. Used by
+    /// `sessions::save_session` to enforce the single-writer rule.
+    fn active_output_path(&self) -> Option<PathBuf> {
+        self.0.lock().unwrap().as_ref().map(|r| r.path.clone())
+    }
+}
 
 #[tauri::command]
 fn start_recording(app: AppHandle, state: State<AppState>) -> Result<String, String> {
@@ -46,16 +72,44 @@ fn start_recording(app: AppHandle, state: State<AppState>) -> Result<String, Str
     let mic = simstim_capture::mic::start_mic(tx.clone()).map_err(|e| e.to_string())?;
     let speaker = simstim_capture::speaker::start_speaker(tx).map_err(|e| e.to_string())?;
     let out = simstim_transcript::output_path(&cfg.output_dir, chrono::Local::now());
-    let emitter = app.clone();
-    let session = session::Session::start(rx, out.clone(), move |line| {
-        let _ = emitter.emit("transcript-line", line);
-    });
+    let pending_edits = Arc::new(Mutex::new(PendingEdits::default()));
+    let line_emitter = app.clone();
+    let error_emitter = app.clone();
+    let session = session::Session::start(
+        rx,
+        out.clone(),
+        pending_edits.clone(),
+        move |line| {
+            let _ = line_emitter.emit("transcript-line", line);
+        },
+        move |message| {
+            let _ = error_emitter.emit("session-error", SessionErrorPayload { message });
+        },
+    );
     *guard = Some(Recording {
         session,
         mic,
         speaker,
+        path: out.clone(),
+        pending_edits,
     });
     Ok(out.display().to_string())
+}
+
+/// Routes title/notes edits for the active recording session into its
+/// worker via `PendingEdits`, rather than writing the file directly (that
+/// would race the worker's own saves). Per the IPC contract, `None` fields
+/// mean "leave unchanged".
+#[tauri::command]
+fn update_active_session(
+    title: Option<String>,
+    notes: Option<String>,
+    state: State<AppState>,
+) -> Result<(), String> {
+    let guard = state.0.lock().unwrap();
+    let recording = guard.as_ref().ok_or("not recording")?;
+    recording.pending_edits.lock().unwrap().update(title, notes);
+    Ok(())
 }
 
 #[tauri::command]
@@ -64,6 +118,7 @@ fn stop_recording(state: State<AppState>) -> Result<String, String> {
         session,
         mic,
         speaker,
+        ..
     } = state.0.lock().unwrap().take().ok_or("not recording")?;
     // Drop the capture handles before joining the session: this stops the
     // mic/speaker streams and drops their Sender<Chunk> halves, disconnecting
@@ -108,11 +163,16 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             start_recording,
             stop_recording,
+            update_active_session,
             get_config,
             set_output_dir,
             set_active_model,
+            config::set_theme,
             models::list_models,
-            models::download_model
+            models::download_model,
+            sessions::list_sessions,
+            sessions::read_session,
+            sessions::save_session
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -12,6 +12,35 @@ import { invoke } from "@tauri-apps/api/core";
 export interface AppConfig {
   output_dir: string;
   active_model: string;
+  /** `"system" | "light" | "dark"`. */
+  theme: string;
+}
+
+/**
+ * Mirrors `sessions::SessionMeta` (apps/desktop/src-tauri/src/sessions.rs):
+ * the sidebar's session list, one entry per output-folder `.md` file that
+ * parses as a transcript. `list_sessions` scans the folder fresh on every
+ * call -- the files are the only store, there is no separate index.
+ */
+export interface SessionMeta {
+  path: string;
+  title: string;
+  /** RFC3339. */
+  date: string;
+  duration_secs?: number;
+}
+
+/**
+ * Mirrors `sessions::SessionDataOut` (apps/desktop/src-tauri/src/sessions.rs):
+ * a full session read for the session view.
+ */
+export interface SessionData {
+  title: string;
+  /** RFC3339. */
+  date: string;
+  notes: string;
+  /** Raw `## Transcript` section text: one `[hh:mm:ss] Who: text` line per entry. */
+  transcript: string;
 }
 
 /** Mirrors `models::ModelInfo` (apps/desktop/src-tauri/src/models.rs). */
@@ -63,4 +92,30 @@ export function startRecording(): Promise<string> {
 
 export function stopRecording(): Promise<string> {
   return invoke("stop_recording");
+}
+
+export function setTheme(theme: string): Promise<void> {
+  return invoke("set_theme", { theme });
+}
+
+export function listSessions(): Promise<SessionMeta[]> {
+  return invoke("list_sessions");
+}
+
+export function readSession(path: string): Promise<SessionData> {
+  return invoke("read_session", { path });
+}
+
+export function saveSession(path: string, title: string, notes: string): Promise<void> {
+  return invoke("save_session", { path, title, notes });
+}
+
+/**
+ * Routes a title/notes edit for the currently-active recording session into
+ * its worker (single-writer rule: the worker, not the UI, owns that file
+ * while recording). `undefined` fields mean "leave unchanged", matching the
+ * Rust side's `Option<String>` parameters.
+ */
+export function updateActiveSession(title?: string, notes?: string): Promise<void> {
+  return invoke("update_active_session", { title, notes });
 }

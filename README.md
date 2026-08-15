@@ -31,7 +31,7 @@ Models are cached in `~/Library/Application Support/simstim/models/`.
 cd apps/desktop && pnpm install && pnpm tauri dev
 ```
 
-Click Start/Stop in the window. Transcripts land on the Desktop as `YYYY-MM-DD HH-mm call.md` (configurable in Settings > gear icon). Config lives at `~/Library/Application Support/simstim/config.json`.
+Click Start/Stop in the window. Transcripts land on the Desktop as `YYYY-MM-DD HH-mm call.md` (configurable in Settings > gear icon). Config lives at `~/Library/Application Support/simstim/config.json`. Your notes live in the same .md file as the transcript; the folder is the database.
 
 ## macOS permissions (dev builds)
 
@@ -50,4 +50,4 @@ so this only matters for `pnpm tauri dev`.
 
 ## Status
 
-stage 0.5 shipped: shadcn UI, settings (output folder picker, model manager with in-app download). Known gaps: no interim decoding so lines appear on pauses; Parakeet Russian quality is mediocre, whisper re-transcribe pass is planned.
+stage 0.6 shipped: notes-app shell (sidebar of sessions read from the output folder, session view with editable title and notes), interim transcript drafts while speaking, light/dark themes following the system. Known gaps: Parakeet Russian quality (whisper re-transcribe planned as the next engine), no meeting detection yet.

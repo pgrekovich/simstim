@@ -137,6 +137,8 @@ Status (2026-08-14): shipped and verified e2e.
 
 Status (2026-08-15): stage 0.5 shipped: shadcn UI, settings dialog (output folder picker, model registry with in-app download + progress), model-ready guard on Start.
 
+Status (2026-08-15): stage 0.6 shipped: Anarlog-style shell (folder-backed sidebar, session view with notes), interim decoding with 10s force-finalize backstop, light/dark themes, file format v2 with round-trip parser.
+
 ## Stage 0.6: the shell (approved 2026-08-15)
 
 Pivot from "process control panel" to "notes app where recording is a side

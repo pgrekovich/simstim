@@ -96,20 +96,19 @@ function App() {
 
   // Refresh triggers (Global Constraints / Task 5 brief): mount, window
   // focus, recording start/stop (handled in handleStart/handleStop below),
-  // and session-error (handled in the listener below).
+  // and session-error (handled in the listener below). Window `focus` alone
+  // covers "the user alt-tabbed/switched back to the app": `focus` and
+  // `visibilitychange` both fire on that same event in a single-window
+  // desktop app, so listening to both would just double the refetch --
+  // only `focus` is wired up.
   useEffect(() => {
     refreshSessions();
     function handleFocus() {
       refreshSessions();
     }
-    function handleVisibility() {
-      if (document.visibilityState === "visible") refreshSessions();
-    }
     window.addEventListener("focus", handleFocus);
-    document.addEventListener("visibilitychange", handleVisibility);
     return () => {
       window.removeEventListener("focus", handleFocus);
-      document.removeEventListener("visibilitychange", handleVisibility);
     };
   }, [refreshSessions]);
 
@@ -148,14 +147,23 @@ function App() {
   // (from the transcript-line listener above) are shown instead of a
   // `read_session` dump. Task 6 replaces all of this with the real
   // SessionView.
+  //
+  // `sessionData`/`sessionDataError` are cleared unconditionally at the top,
+  // before the early return and before kicking off the fetch: switching
+  // straight from one past session to another still changes `selectedPath`
+  // (and both are non-null, neither is `activePath`), so without this the
+  // previous session's title/notes/transcript would stay on screen -- and
+  // look like B's data -- until `readSession(selectedPath)` for the new
+  // path resolves. Resetting here means the pane shows the "loading..."
+  // state for that gap instead. The `cancelled` guard still protects
+  // against an even older fetch resolving after a newer one starts.
   useEffect(() => {
+    setSessionData(null);
+    setSessionDataError(null);
     if (selectedPath === null || selectedPath === activePath) {
-      setSessionData(null);
-      setSessionDataError(null);
       return;
     }
     let cancelled = false;
-    setSessionDataError(null);
     readSession(selectedPath)
       .then((data) => {
         if (!cancelled) setSessionData(data);

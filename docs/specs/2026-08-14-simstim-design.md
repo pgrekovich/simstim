@@ -137,6 +137,38 @@ Status (2026-08-14): shipped and verified e2e.
 
 Status (2026-08-15): stage 0.5 shipped: shadcn UI, settings dialog (output folder picker, model registry with in-app download + progress), model-ready guard on Start.
 
+## Stage 0.6: the shell (approved 2026-08-15)
+
+Pivot from "process control panel" to "notes app where recording is a side
+effect" (Anarlog-style shell, chosen by Pavel over competitor screenshots).
+
+- **Two-pane layout.** Left sidebar: session list read LIVE from the output
+  folder (the .md files ARE the database; grouped Today/Yesterday/date, title
+  + time per row). Right pane: session view. Recording controls move to a
+  compact header (record button + status + elapsed).
+- **Session view**: editable title (stored in frontmatter; filename stays
+  timestamp-based, no renames), user Notes editor on top (Granola: user's
+  notes are primary), transcript below, live-updating for the recording
+  session.
+- **Single-writer model**: while recording, the session worker owns the file;
+  UI notes/title edits route through IPC into the worker. Past sessions are
+  edited via parse -> modify -> atomic rewrite. Never two writers on one file.
+- **File format v2**: frontmatter gains `title` (+ `duration` written on
+  stop), `## Notes` section always present, `## Transcript` unchanged.
+  The transcript crate learns to PARSE its own format (round-trip safe).
+  Filenames gain seconds (`YYYY-MM-DD HH-mm-ss call.md`): kills the
+  same-minute collision from the MVP-0 review.
+- **Interim decoding**: while speech is active, periodically decode the
+  accumulating segment buffer and emit interim (draft) transcript lines,
+  rendered dimmed and replaced by the final line on segment close. Skip-if-
+  busy throttling; investigate why max_speech_duration=8s did not split a
+  15s monologue.
+- **Themes**: light + dark following the system, 3-way override in settings
+  (system | light | dark), persisted in config.
+
+Out of 0.6: enhance, whisper engine, meeting detection, tray, calendar,
+audio retention.
+
 ## Milestones after MVP-0
 
 1. Audio file kept next to the .md; re-transcribe command (whisper turbo).

@@ -56,9 +56,12 @@
 //! [`Vad::reset`] discards that channel's now-redundant in-flight segment so
 //! it doesn't later also finalize (and duplicate) the same audio. Because
 //! `Vad::reset` zeros the detector's own absolute sample counter (verified
-//! empirically), `ChannelInterim::abs_offset_samples` tracks the cumulative
-//! length of prior forced-cut epochs so later timestamps -- both further
-//! forced cuts and the eventual natural finalize -- stay correct.
+//! empirically), `ChannelInterim::epoch_base_samples` tracks the cumulative
+//! length of prior forced-cut epochs, and `epoch_elapsed_samples` tracks how
+//! far into the *current* epoch a finalize (natural or forced) has already
+//! accounted for, so later timestamps -- both further forced cuts and the
+//! eventual natural finalize -- stay correct even when a natural finalize
+//! happens inside the same epoch before a forced cut does.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -97,19 +100,39 @@ const FORCE_FINALIZE_SAMPLES: usize = 10 * 16_000;
 
 /// Per-channel state for interim decoding and the max-speech forced-finalize
 /// backstop. One instance per channel, living for the whole session.
+///
+/// Timestamp bookkeeping is split into two counters because a `Vad`'s own
+/// `start_sample` is only absolute *within the current epoch* (the stretch
+/// since the last `Vad::reset`, see `Vad::reset`'s docs): `epoch_base_samples`
+/// carries the total length of all earlier epochs, and `epoch_elapsed_samples`
+/// tracks how far into the *current* epoch has already been accounted for by
+/// a finalized segment. A previous version of this used a single counter
+/// that only advanced on a forced cut, which meant a natural finalize inside
+/// the same epoch (a normal, common thing) didn't move it at all: a forced
+/// cut following one would report an offset of 0 (or whatever the base was
+/// before that natural finalize) instead of the true elapsed time, and every
+/// segment after it would inherit the corrupted base. See the task-3 report's
+/// fix-pass section for the reproduction.
 #[derive(Default)]
 struct ChannelInterim {
     /// Raw samples of the current in-progress (not-yet-finalized) utterance,
-    /// spanning only the current Vad epoch (see `abs_offset_samples`).
-    /// Cleared whenever a segment finalizes on this channel, naturally or
-    /// via the forced-finalize backstop.
+    /// spanning only the current Vad epoch. Cleared whenever a segment
+    /// finalizes on this channel, naturally or via the forced-finalize
+    /// backstop.
     buf: Vec<f32>,
-    /// Cumulative sample count from earlier forced-finalize epochs on this
-    /// channel. Zero until this channel's first forced cut. Added to any
-    /// offset derived from this channel's `Vad` (its own sample counter
-    /// restarts at zero after `Vad::reset`) so transcript timestamps stay
-    /// correct across a forced cut.
-    abs_offset_samples: usize,
+    /// Cumulative sample count from all epochs closed by an earlier forced
+    /// cut on this channel. Zero until this channel's first forced cut.
+    /// Advances only at `Vad::reset` (folding `epoch_elapsed_samples` in),
+    /// since that's the only thing that zeros the `Vad`'s own counter.
+    epoch_base_samples: usize,
+    /// Position within the *current* epoch (i.e. since `epoch_base_samples`
+    /// was last folded in) that a finalized segment has already accounted
+    /// for -- equivalently, where the next not-yet-finalized `buf` is
+    /// expected to start, in epoch-relative samples. Advances on every
+    /// finalize: to `seg.start_sample + seg.samples.len()` for a natural
+    /// finalize (the segment's own epoch-relative end), or by `+= buf.len()`
+    /// for a forced cut.
+    epoch_elapsed_samples: usize,
     /// When the last interim decode ran for this channel, for the 400ms
     /// cadence floor. `None` means no interim decode has happened yet this
     /// utterance (or session).
@@ -354,9 +377,13 @@ fn run_worker(
                 &on_error,
                 channel,
                 seg,
-                interim.abs_offset_samples,
+                interim.epoch_base_samples,
             );
         }
+        // A channel that was mid-speech when the session stopped may still
+        // have a live interim draft in the UI; clear it unconditionally
+        // (not just on a finalize) so it doesn't orphan there.
+        on_interim(channel, String::new());
     }
 
     let elapsed_secs = (Local::now() - started_at).num_seconds().max(0) as u64;
@@ -376,7 +403,7 @@ fn run_worker(
 /// dropped without touching the file, mirroring `Transcript::add`'s own
 /// silent-drop-on-empty behavior).
 ///
-/// `abs_offset_samples` is the channel's cumulative sample count from any
+/// `epoch_base_samples` is the channel's cumulative sample count from any
 /// earlier forced-finalize epochs (see `ChannelInterim`, zero unless a
 /// max-speech forced cut has happened on this channel): a `Vad`'s
 /// `start_sample` is only absolute over its stream *since the last
@@ -393,9 +420,9 @@ fn finalize_segment(
     on_error: &impl Fn(String),
     channel: Channel,
     seg: Segment,
-    abs_offset_samples: usize,
+    epoch_base_samples: usize,
 ) -> bool {
-    let offset_secs = (abs_offset_samples + seg.start_sample) as f64 / 16000.0;
+    let offset_secs = (epoch_base_samples + seg.start_sample) as f64 / 16000.0;
     finalize_text(
         engine,
         transcript,
@@ -516,6 +543,11 @@ fn process_channel_chunk_with_cap(
     let mut saved = false;
 
     for seg in vad.push(samples) {
+        // Captured before `seg` moves into `finalize_segment`: the
+        // epoch-relative point this segment's audio ends at, which is
+        // exactly where the next (not yet finalized) buffer will start
+        // accumulating from.
+        let seg_end_in_epoch = seg.start_sample + seg.samples.len();
         if finalize_segment(
             engine,
             transcript,
@@ -524,12 +556,14 @@ fn process_channel_chunk_with_cap(
             on_error,
             channel,
             seg,
-            interim.abs_offset_samples,
+            interim.epoch_base_samples,
         ) {
             saved = true;
         }
+        interim.epoch_elapsed_samples = seg_end_in_epoch;
         interim.buf.clear();
         interim.last_interim_len = 0;
+        interim.last_interim_at = None;
         on_interim(channel, String::new());
     }
 
@@ -540,7 +574,14 @@ fn process_channel_chunk_with_cap(
     interim.buf.extend_from_slice(samples);
 
     if interim.buf.len() >= force_finalize_samples {
-        let offset_secs = interim.abs_offset_samples as f64 / 16000.0;
+        // `buf` has been accumulating since `epoch_elapsed_samples` (the
+        // last finalize in this epoch, natural or forced), so that's
+        // exactly where it started -- not 0, and not the stale
+        // `epoch_base_samples` alone; both from a previous version of this
+        // that never advanced its single offset counter on a natural
+        // finalize (see the task-3 report's fix-pass section).
+        let offset_secs =
+            (interim.epoch_base_samples + interim.epoch_elapsed_samples) as f64 / 16000.0;
         if finalize_text(
             engine,
             transcript,
@@ -553,10 +594,17 @@ fn process_channel_chunk_with_cap(
         ) {
             saved = true;
         }
-        interim.abs_offset_samples += interim.buf.len();
+        // Fold this epoch's whole accounted-for length (whatever natural
+        // finalizes already advanced `epoch_elapsed_samples` to, plus the
+        // buffer just cut) into the base, since `Vad::reset` below zeros the
+        // detector's own counter back to this point.
+        interim.epoch_elapsed_samples += interim.buf.len();
+        interim.epoch_base_samples += interim.epoch_elapsed_samples;
         vad.reset();
+        interim.epoch_elapsed_samples = 0;
         interim.buf.clear();
         interim.last_interim_len = 0;
+        interim.last_interim_at = None;
         on_interim(channel, String::new());
         return saved;
     }
@@ -781,8 +829,9 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             let out_path = dir.path().join("call.md");
 
-            // Each forced cut advances `abs_offset_samples` by exactly the
-            // number of samples it just finalized (see
+            // Each forced cut advances `epoch_base_samples` by exactly the
+            // number of samples it just finalized, since this audio never
+            // triggers a natural finalize before the cap is reached (see
             // `process_channel_chunk_with_cap`), so diffing it across
             // chunks recovers every forced-finalized segment's length
             // without needing the callbacks to carry sample counts.
@@ -803,9 +852,9 @@ mod tests {
                     chunk,
                     test_cap,
                 );
-                if interim.abs_offset_samples > last_abs_offset {
-                    finalized_lens.push(interim.abs_offset_samples - last_abs_offset);
-                    last_abs_offset = interim.abs_offset_samples;
+                if interim.epoch_base_samples > last_abs_offset {
+                    finalized_lens.push(interim.epoch_base_samples - last_abs_offset);
+                    last_abs_offset = interim.epoch_base_samples;
                 }
                 // The buffer itself must never be allowed to grow past the
                 // cap plus one chunk's worth of slack (the check happens
@@ -849,7 +898,7 @@ mod tests {
             assert!(
                 last_abs_offset > 0,
                 "expected at least one forced cut over ~27s of continuous speech, \
-                 but abs_offset_samples is still 0 (the backstop never fired)"
+                 but epoch_base_samples is still 0 (the backstop never fired)"
             );
         }
 
@@ -895,9 +944,9 @@ mod tests {
                     Channel::Them,
                     chunk,
                 );
-                if interim.abs_offset_samples > last_abs_offset {
-                    finalized_lens.push(interim.abs_offset_samples - last_abs_offset);
-                    last_abs_offset = interim.abs_offset_samples;
+                if interim.epoch_base_samples > last_abs_offset {
+                    finalized_lens.push(interim.epoch_base_samples - last_abs_offset);
+                    last_abs_offset = interim.epoch_base_samples;
                 }
             }
             for seg in vad.flush() {
@@ -912,6 +961,166 @@ mod tests {
                      {max_allowed}-sample bound (~10s + one chunk)"
                 );
             }
+        }
+
+        /// Parses the `[hh:mm:ss]` prefix `format_line` produces into total
+        /// seconds, so a test can check the offsets actually reaching
+        /// `on_line` without duplicating the offset math it's meant to
+        /// verify.
+        fn parse_offset_secs(line: &str) -> Option<u64> {
+            let rest = line.strip_prefix('[')?;
+            let (ts, _) = rest.split_once(']')?;
+            let mut parts = ts.splitn(3, ':');
+            let h: u64 = parts.next()?.parse().ok()?;
+            let m: u64 = parts.next()?.parse().ok()?;
+            let s: u64 = parts.next()?.parse().ok()?;
+            Some(h * 3600 + m * 60 + s)
+        }
+
+        // Regression test for the fix-pass Critical finding: a previous
+        // version tracked a single "abs_offset_samples" counter that only
+        // advanced on a forced cut, so a natural finalize earlier in the
+        // same Vad epoch didn't move it at all. A forced cut following one
+        // then reported an offset of (whatever the counter was before that
+        // natural finalize) instead of the true elapsed time -- 0.0 in the
+        // simplest case -- and every later segment inherited the corrupted
+        // base. This drives exactly that shape (leading silence, then a
+        // short natural utterance that finalizes on its own, then a gap,
+        // then a monologue long enough to force-cut) and checks the
+        // offsets `on_line` actually receives.
+        #[test]
+        fn offsets_stay_correct_across_a_natural_finalize_then_a_forced_cut() {
+            let models = models_dir();
+            let clip =
+                load_wav_16k_mono(&models.join("parakeet-tdt-0.6b-v3-int8/test_wavs/en.wav"));
+
+            let silence_secs = 3.0_f64;
+            // Just over `min_silence_duration` (0.4s), so the natural
+            // utterance reliably finalizes before the monologue starts,
+            // while keeping the gap small: `epoch_elapsed_samples` marks
+            // where the *previous* segment ended, not where the next
+            // buffer's audio actually resumes after this gap, so the two
+            // diverge by roughly the gap's own length (see the module docs).
+            // A small gap keeps that divergence well under the ~1s
+            // tolerance below; a full multi-second gap would not (and
+            // reflects a different, less realistic scenario than the one
+            // the bug report described: a monologue following close behind
+            // an utterance, not one separated from it by seconds of dead
+            // air).
+            let gap_secs = 0.5_f64;
+            let leading_silence = vec![0.0f32; (silence_secs * 16_000.0) as usize];
+            let gap_silence = vec![0.0f32; (gap_secs * 16_000.0) as usize];
+
+            let mut monologue = Vec::new();
+            for _ in 0..7 {
+                monologue.extend_from_slice(&clip);
+            }
+
+            let mut audio = Vec::new();
+            audio.extend_from_slice(&leading_silence);
+            audio.extend_from_slice(&clip); // finalizes naturally on its own
+            audio.extend_from_slice(&gap_silence);
+            audio.extend_from_slice(&monologue); // long enough to force-cut
+
+            // Known exactly from how `audio` was constructed, independent of
+            // anything the Vad or the code under test decides.
+            let expected_monologue_start_secs =
+                (leading_silence.len() + clip.len() + gap_silence.len()) as f64 / 16_000.0;
+
+            // Must be bigger than one clip (~3.845s = 61521 samples) or the
+            // "natural utterance" would itself get force-cut mid-way instead
+            // of finalizing naturally at the gap -- and well under sherpa's
+            // own observed ~9.5s natural cut point, so the monologue's first
+            // cut is still provably the backstop, not sherpa's own
+            // segmentation.
+            let test_cap = 5 * 16_000;
+
+            let engine = Engine::new(&models).unwrap();
+            let mut vad = Vad::new(&models).unwrap();
+            let mut interim = ChannelInterim::default();
+            let mut transcript = Transcript::new(t0());
+            let dir = tempfile::tempdir().unwrap();
+            let out_path = dir.path().join("call.md");
+            let lines = std::cell::RefCell::new(Vec::<String>::new());
+
+            for chunk in audio.chunks(CHUNK_LEN) {
+                process_channel_chunk_with_cap(
+                    &engine,
+                    &mut vad,
+                    &mut interim,
+                    &mut transcript,
+                    &out_path,
+                    &|line| lines.borrow_mut().push(line),
+                    &|_channel, _text| {},
+                    &|_msg| {},
+                    Channel::Them,
+                    chunk,
+                    test_cap,
+                );
+            }
+            for seg in vad.flush() {
+                finalize_segment(
+                    &engine,
+                    &mut transcript,
+                    &out_path,
+                    &|line| lines.borrow_mut().push(line),
+                    &|_msg| {},
+                    Channel::Them,
+                    seg,
+                    interim.epoch_base_samples,
+                );
+            }
+
+            let offsets: Vec<u64> = lines
+                .borrow()
+                .iter()
+                .filter_map(|l| parse_offset_secs(l))
+                .collect();
+            assert!(
+                offsets.len() >= 2,
+                "expected at least the natural line and one forced-cut line, got {offsets:?}"
+            );
+
+            // The format truncates to whole seconds, so two lines inside the
+            // same second read as equal, but must never go backward -- that
+            // was exactly the bug (a forced cut reporting an *earlier*
+            // offset than the natural line before it).
+            for pair in offsets.windows(2) {
+                assert!(
+                    pair[0] <= pair[1],
+                    "offsets went backward across a natural-finalize-then-forced-cut \
+                     sequence: {offsets:?}"
+                );
+            }
+
+            // The natural line itself should read close to the leading
+            // silence's duration (Silero adds a small pre-roll before it
+            // externally confirms detection, on the order of tens of ms).
+            let natural_offset = offsets[0] as f64;
+            assert!(
+                (natural_offset - silence_secs).abs() <= 1.0,
+                "natural line offset {natural_offset}s not within 1s of the leading \
+                 silence duration {silence_secs}s (offsets: {offsets:?})"
+            );
+
+            // The regression check: the first forced-cut line (right after
+            // the natural line) should read close to the monologue's true
+            // start, not near 0 (the pre-fix bug) and not near
+            // `silence_secs` alone (ignoring the natural utterance and gap).
+            //
+            // Tolerance is 1.5s, not 1.0s: `[hh:mm:ss]` truncates to whole
+            // seconds (up to ~1s of that alone), stacked with the small
+            // amount by which `epoch_elapsed_samples` (pinned to the natural
+            // segment's own end) necessarily lags the buffer's true resumption
+            // point across the `gap_secs` silence required to finalize it in
+            // the first place. Still tight enough to catch the actual
+            // regression (which reported ~0s, not ~6s).
+            let forced_line_offset = offsets[1] as f64;
+            assert!(
+                (forced_line_offset - expected_monologue_start_secs).abs() <= 1.5,
+                "forced-cut line offset {forced_line_offset}s not within 1.5s of the true \
+                 monologue start {expected_monologue_start_secs}s (offsets: {offsets:?})"
+            );
         }
     }
 }

@@ -137,8 +137,19 @@ impl Vad {
     /// cumulative sample offset from here on, since any `Segment` this VAD
     /// produces after a reset reports `start_sample` relative to zero again,
     /// not to the stream as a whole.
+    ///
+    /// Also drops `pending`: up to one window's worth (< 512 samples) of raw
+    /// audio that arrived but hadn't yet been batched up to feed the
+    /// detector. Left alone, those samples would get fed to the *freshly
+    /// reset* detector on the next `push`, i.e. re-fed into a new segment
+    /// after already being included in whatever the caller just
+    /// force-finalized from its own buffer -- a small window of
+    /// double-transcribed audio. Dropping them instead means a sub-32ms gap
+    /// of audio is silently skipped rather than duplicated, which is the
+    /// safer failure mode of the two.
     pub fn reset(&mut self) {
         self.vad.reset();
+        self.pending.clear();
     }
 
     pub fn flush(&mut self) -> Vec<Segment> {

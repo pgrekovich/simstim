@@ -3,7 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { RecordButton } from "@/components/RecordButton";
-import { SessionView } from "@/components/SessionView";
+import { SessionView, type SessionViewHandle } from "@/components/SessionView";
 import { Sidebar } from "@/components/Sidebar";
 import { SettingsDialog } from "@/components/SettingsDialog";
 import {
@@ -76,6 +76,13 @@ function App() {
   const [activePath, setActivePath] = useState<string | null>(null);
   const [sessionData, setSessionData] = useState<SessionData | null>(null);
   const [sessionDataError, setSessionDataError] = useState<string | null>(null);
+  // Set only on the SessionView instance rendered for the active recording
+  // (see the JSX below). handleStop reads this to flush any pending
+  // title/notes edit through update_active_session BEFORE calling
+  // stop_recording -- see SessionView's class doc comment for why that
+  // ordering, not the instance's own unmount cleanup, is what actually has
+  // to do this flush.
+  const activeSessionViewRef = useRef<SessionViewHandle>(null);
 
   // The settings dialog owns fetching config/models (on mount, on open, and
   // on download completion) and reports back through this callback, so the
@@ -248,6 +255,12 @@ function App() {
     setBusy(true);
     clearLoadingFallback();
     try {
+      // Must happen before stop_recording: once the worker is torn down,
+      // update_active_session rejects with "not recording", and by the time
+      // this component's own unmount cleanup runs (after sessionData resets
+      // to null and the active-session JSX branch disappears) it's too
+      // late. See SessionView's class doc comment.
+      await activeSessionViewRef.current?.flushPendingEdits();
       const path = await stopRecording();
       setRecordingStartedAt(null);
       setActivePath(null);
@@ -328,6 +341,7 @@ function App() {
             </p>
           ) : viewingActiveSession ? (
             <SessionView
+              ref={activeSessionViewRef}
               key={selectedPath}
               path={selectedPath}
               isActive
@@ -336,6 +350,7 @@ function App() {
               interimMe={interimMe}
               interimThem={interimThem}
               onTitleChange={refreshSessions}
+              onSaveError={(message) => setStatus({ kind: "error", message })}
             />
           ) : sessionDataError ? (
             <p className="text-sm text-destructive">{sessionDataError}</p>
@@ -351,6 +366,7 @@ function App() {
               interimMe={interimMe}
               interimThem={interimThem}
               onTitleChange={refreshSessions}
+              onSaveError={(message) => setStatus({ kind: "error", message })}
             />
           )}
         </div>

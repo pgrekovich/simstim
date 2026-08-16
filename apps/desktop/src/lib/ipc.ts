@@ -66,6 +66,13 @@ export interface ModelInfo {
   size_mb: number;
   downloaded: boolean;
   active: boolean;
+  /**
+   * Whether this model can become the live ASR engine. `false` for whisper
+   * (stage 0.7): it is a re-transcribe-only engine, so the Settings UI must
+   * not offer a "Use" button for it, driven by this field rather than a
+   * hardcoded model id.
+   */
+  selectable: boolean;
 }
 
 /** Mirrors `SessionErrorPayload` (apps/desktop/src-tauri/src/lib.rs), the `session-error` event payload. */

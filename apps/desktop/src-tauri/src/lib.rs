@@ -294,11 +294,25 @@ fn set_output_dir(path: String, app: AppHandle) -> Result<(), String> {
     set_output_dir_at(&app, &config::config_path(), path)
 }
 
+/// `Err` unless `id` names a registered, `selectable` model. Split out from
+/// `set_active_model` so the rejection logic is testable without touching
+/// the real config file (mirrors `config::validate_theme`'s split for the
+/// same reason). Whisper (stage 0.7) is registered but not `selectable`: it
+/// is a re-transcribe-only engine, never the live pipeline, so this rejects
+/// it even if a UI bug ever tried to offer it.
+fn validate_active_model(id: &str) -> Result<(), String> {
+    match models::find(id) {
+        None => Err(format!("unknown model id: {id}")),
+        Some(spec) if !spec.selectable => {
+            Err(format!("model is not selectable as the live engine: {id}"))
+        }
+        Some(_) => Ok(()),
+    }
+}
+
 #[tauri::command]
 fn set_active_model(id: String) -> Result<(), String> {
-    if models::find(&id).is_none() {
-        return Err(format!("unknown model id: {id}"));
-    }
+    validate_active_model(&id)?;
     let mut cfg = Config::load();
     cfg.active_model = id;
     cfg.save().map_err(|e| e.to_string())
@@ -383,6 +397,26 @@ mod tests {
             Some(Path::new("/tmp/call.md")),
             Some(Path::new("/tmp/call.md"))
         ));
+    }
+
+    #[test]
+    fn validate_active_model_accepts_a_selectable_registered_id() {
+        assert!(validate_active_model("parakeet-tdt-0.6b-v3-int8").is_ok());
+    }
+
+    #[test]
+    fn validate_active_model_rejects_an_unknown_id() {
+        let err = validate_active_model("no-such-model").unwrap_err();
+        assert!(err.contains("no-such-model"));
+    }
+
+    #[test]
+    fn validate_active_model_rejects_whisper_as_not_selectable() {
+        // Global Constraints: whisper is a re-transcribe-only engine and
+        // must never become the live pipeline, even via a direct IPC call
+        // bypassing the Settings UI's own gating.
+        let err = validate_active_model("whisper-large-v3-turbo-q8").unwrap_err();
+        assert!(err.contains("whisper-large-v3-turbo-q8"));
     }
 
     mod asset_scope {

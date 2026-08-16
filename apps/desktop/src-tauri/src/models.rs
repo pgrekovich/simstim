@@ -44,6 +44,12 @@ pub struct ModelSpec {
     /// inside any model-specific directory), e.g. the VAD model shared across
     /// ASR backends. Independent of `layout`; either variant can have extras.
     pub extra_files: &'static [(&'static str, &'static str)],
+    /// Whether this model can become `Config::active_model`, i.e. drive the
+    /// live recording pipeline. `true` for Parakeet; `false` for whisper
+    /// (stage 0.7): whisper is an offline re-transcribe-only engine, so
+    /// `set_active_model` rejects it and the Settings UI never offers a
+    /// "Use" button for it, driven by this field rather than a hardcoded id.
+    pub selectable: bool,
 }
 
 /// The model registry. Adding a model means adding an entry here; no IPC or
@@ -63,6 +69,7 @@ pub static REGISTRY: &[ModelSpec] = &[
             "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx",
             "silero_vad.onnx",
         )],
+        selectable: true,
     },
     ModelSpec {
         // GGUF from the whisper.cpp Hugging Face repo. URL and size (874188075
@@ -76,6 +83,8 @@ pub static REGISTRY: &[ModelSpec] = &[
             file_name: "ggml-large-v3-turbo-q8_0.bin",
         },
         extra_files: &[],
+        // Re-transcribe-only (Global Constraints): never the live pipeline.
+        selectable: false,
     },
 ];
 
@@ -132,6 +141,9 @@ pub struct ModelInfo {
     pub size_mb: u64,
     pub downloaded: bool,
     pub active: bool,
+    /// Mirrors `ModelSpec::selectable`: whether the Settings UI should offer
+    /// a "Use"/"Active" affordance for this model at all.
+    pub selectable: bool,
 }
 
 /// Guards against downloading the same model id twice concurrently.
@@ -185,6 +197,7 @@ pub fn list_models() -> Vec<ModelInfo> {
             size_mb: spec.size_mb,
             downloaded: is_downloaded(spec, &models_dir),
             active: spec.id == cfg.active_model,
+            selectable: spec.selectable,
         })
         .collect()
 }
@@ -359,6 +372,7 @@ mod tests {
                 dir_name: "test-model",
             },
             extra_files: &[("https://example.invalid/extra.onnx", "extra.onnx")],
+            selectable: true,
         }
     }
 
@@ -372,6 +386,7 @@ mod tests {
                 file_name: "model.bin",
             },
             extra_files: &[],
+            selectable: false,
         }
     }
 
@@ -426,6 +441,20 @@ mod tests {
             }
             ModelLayout::Archive { .. } => panic!("whisper entry should be a File layout"),
         }
+    }
+
+    #[test]
+    fn parakeet_registry_entry_is_selectable() {
+        let parakeet = find("parakeet-tdt-0.6b-v3-int8").unwrap();
+        assert!(parakeet.selectable);
+    }
+
+    #[test]
+    fn whisper_registry_entry_is_not_selectable() {
+        // Global Constraints: whisper is a re-transcribe-only engine, never
+        // offered as the live ASR pipeline.
+        let whisper = find("whisper-large-v3-turbo-q8").unwrap();
+        assert!(!whisper.selectable);
     }
 
     #[test]

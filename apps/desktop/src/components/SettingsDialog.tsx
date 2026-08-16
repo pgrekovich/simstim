@@ -10,12 +10,14 @@ import {
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
 import { cn } from "@/lib/utils";
 import {
   downloadModel,
   getConfig,
   listModels,
   setActiveModel,
+  setKeepAudio,
   setOutputDir,
   setTheme,
   type AppConfig,
@@ -61,6 +63,7 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
   const [choosingDir, setChoosingDir] = useState(false);
   const [themeError, setThemeError] = useState<string | null>(null);
   const [folderError, setFolderError] = useState<string | null>(null);
+  const [keepAudioError, setKeepAudioError] = useState<string | null>(null);
   const [progress, setProgress] = useState<Record<string, DownloadProgress>>({});
   const [busyIds, setBusyIds] = useState<Set<string>>(new Set());
   const onModelsChangedRef = useRef(onModelsChanged);
@@ -144,6 +147,24 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
       applyTheme(previous);
       setConfig((prev) => (prev ? { ...prev, theme: previous } : prev));
       setThemeError(String(err));
+    }
+  }
+
+  async function handleSetKeepAudio(keepAudio: boolean) {
+    const previous = config?.keep_audio;
+    if (previous === undefined || keepAudio === previous) return;
+    setKeepAudioError(null);
+    // Optimistic update (same pattern as `handleSetTheme`): flip the
+    // checkbox immediately, then persist. On failure both the checkbox and
+    // the underlying config revert to `previous` rather than leaving the UI
+    // showing a state that was never actually saved.
+    setConfig((prev) => (prev ? { ...prev, keep_audio: keepAudio } : prev));
+    try {
+      await setKeepAudio(keepAudio);
+      await refresh();
+    } catch (err) {
+      setConfig((prev) => (prev ? { ...prev, keep_audio: previous } : prev));
+      setKeepAudioError(String(err));
     }
   }
 
@@ -248,6 +269,22 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
             </Button>
           </div>
           {folderError && <span className="text-xs text-destructive">{folderError}</span>}
+
+          <div className="flex items-start gap-2 pt-2">
+            <Checkbox
+              id="keep-audio"
+              checked={config?.keep_audio ?? false}
+              disabled={!config}
+              onCheckedChange={(checked) => handleSetKeepAudio(checked === true)}
+            />
+            <div className="flex flex-col gap-0.5">
+              <Label htmlFor="keep-audio">Keep call audio</Label>
+              <span className="text-xs text-muted-foreground">
+                Stores a stereo FLAC next to each transcript (about 130 MB per hour). Re-transcribing needs it.
+              </span>
+            </div>
+          </div>
+          {keepAudioError && <span className="text-xs text-destructive">{keepAudioError}</span>}
         </section>
 
         <section className="flex flex-col gap-2">
@@ -263,13 +300,19 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                       <span className="text-sm font-medium">{model.name}</span>
                       <span className="text-xs text-muted-foreground">{humanSizeMb(model.size_mb)}</span>
                     </div>
-                    {model.downloaded && model.active && (
+                    {/* Whisper (selectable: false) is a re-transcribe-only engine: it
+                        never offers Use/Active, just a plain downloaded marker. Driven
+                        by the registry's `selectable` field, not a hardcoded model id. */}
+                    {model.downloaded && model.selectable && model.active && (
                       <span className="text-sm text-muted-foreground">Active</span>
                     )}
-                    {model.downloaded && !model.active && (
+                    {model.downloaded && model.selectable && !model.active && (
                       <Button variant="outline" size="sm" disabled={busy} onClick={() => handleUse(model.id)}>
                         Use
                       </Button>
+                    )}
+                    {model.downloaded && !model.selectable && (
+                      <span className="text-sm text-muted-foreground">Downloaded</span>
                     )}
                     {!model.downloaded && (!p || p.phase === "error") && (
                       <Button variant="outline" size="sm" onClick={() => handleDownload(model.id)}>

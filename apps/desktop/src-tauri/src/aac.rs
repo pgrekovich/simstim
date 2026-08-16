@@ -61,8 +61,11 @@
 //! macOS output stopped honoring the edit list.
 
 use anyhow::{anyhow, Context, Result};
+use std::ffi::OsStr;
+use std::io::Read;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Output, Stdio};
+use std::time::{Duration, Instant};
 
 /// The path (Global Constraints) every AAC recording is forced to, and the
 /// rate [`verify_sample_rate`] checks the encoded file actually landed at --
@@ -74,15 +77,105 @@ pub const TARGET_SAMPLE_RATE_HZ: u32 = 16_000;
 /// the module docs).
 const AAC_BITRATE_BPS: &str = "32000";
 
-/// Runs `afconvert` with the given arguments, returning its stderr as the
-/// error context on a non-zero exit or a failure to even launch the process
-/// (e.g. `/usr/bin/afconvert` missing -- shouldn't happen on macOS, but a
-/// clear message here beats a confusing lower-level I/O error).
-fn run_afconvert(args: &[&std::ffi::OsStr]) -> Result<()> {
-    let output = Command::new("/usr/bin/afconvert")
+/// Watchdog bound for an `afconvert` invocation (encode or decode). Every
+/// prior encode path in this codebase was in-process (`flacenc`) and could
+/// never hang; `afconvert` is a real subprocess that could in principle wedge
+/// (a stuck child process, a hung filesystem, macOS itself misbehaving), and
+/// without a bound that would block the calling thread forever -- for
+/// `AudioSink::finish`, that means blocking `Session::stop()` and the whole
+/// recording-stop flow; for the decode paths (retranscribe, continuation
+/// prefill), it means blocking those pipelines the same way. 120s is a
+/// generous multiple of real usage: the manual e2e's actual encode call took
+/// well under 1s for a multi-second clip, and even an hour-long call's encode
+/// (see the stage-0.7 aac report) measured on the order of ~1s, not tens of
+/// seconds -- this bound exists to catch a genuinely wedged process, not to
+/// constrain normal operation.
+const AFCONVERT_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Watchdog bound for an `afinfo` probe (just reading a file's metadata,
+/// not transcoding audio -- inherently much faster than an `afconvert` call,
+/// hence the tighter bound).
+const AFINFO_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Runs `program` with `args`, killing it and returning `Err` if it hasn't
+/// exited within `timeout` rather than blocking the caller forever (see
+/// [`AFCONVERT_TIMEOUT`]'s docs for why this matters here specifically:
+/// every encode path before this one was in-process and could not hang).
+///
+/// `std::process::Command` has no built-in wait-with-timeout, so this polls
+/// `Child::try_wait` on the calling thread while stdout/stderr are drained
+/// concurrently on their own threads (started immediately after spawn, not
+/// after the wait loop) -- reading the pipes only after the process exits
+/// would risk a deadlock if `afconvert`/`afinfo` ever wrote enough to fill
+/// the OS pipe buffer before exiting. `program` is a parameter (not a
+/// hardcoded `/usr/bin/...` literal) specifically so the timeout behavior
+/// itself is unit-testable against a fake binary that sleeps, without
+/// depending on being able to make the real `afconvert`/`afinfo` hang.
+fn run_with_timeout(program: &Path, args: &[&OsStr], timeout: Duration) -> Result<Output> {
+    let mut child = Command::new(program)
         .args(args)
-        .output()
-        .context("running /usr/bin/afconvert")?;
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .with_context(|| format!("spawning {}", program.display()))?;
+
+    let mut stdout_pipe = child.stdout.take().expect("stdout was piped");
+    let mut stderr_pipe = child.stderr.take().expect("stderr was piped");
+    let stdout_reader = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = stdout_pipe.read_to_end(&mut buf);
+        buf
+    });
+    let stderr_reader = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = stderr_pipe.read_to_end(&mut buf);
+        buf
+    });
+
+    let started = Instant::now();
+    let status = loop {
+        match child.try_wait().context("polling child process status")? {
+            Some(status) => break status,
+            None => {
+                if started.elapsed() >= timeout {
+                    // Best-effort: if kill() itself fails (process already
+                    // gone in a race, or a permissions oddity), there is
+                    // nothing more constructive to do than report the
+                    // timeout anyway -- the caller must not block forever
+                    // either way.
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    // The reader threads will observe EOF once the process
+                    // is gone; join them so this function never returns
+                    // while they're still running (they hold no resources
+                    // this function owns after that, but joining keeps the
+                    // lifecycle strictly bounded rather than leaking a
+                    // detached thread per timeout).
+                    let _ = stdout_reader.join();
+                    let _ = stderr_reader.join();
+                    return Err(anyhow!(
+                        "{} timed out after {timeout:?} and was killed",
+                        program.display()
+                    ));
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        }
+    };
+
+    let stdout = stdout_reader.join().unwrap_or_default();
+    let stderr = stderr_reader.join().unwrap_or_default();
+    Ok(Output { status, stdout, stderr })
+}
+
+/// Runs `afconvert` with the given arguments (bounded by [`AFCONVERT_TIMEOUT`],
+/// see [`run_with_timeout`]), returning its stderr as the error context on a
+/// non-zero exit or a failure to even launch the process (e.g.
+/// `/usr/bin/afconvert` missing -- shouldn't happen on macOS, but a clear
+/// message here beats a confusing lower-level I/O error).
+fn run_afconvert(args: &[&OsStr]) -> Result<()> {
+    let output = run_with_timeout(Path::new("/usr/bin/afconvert"), args, AFCONVERT_TIMEOUT)?;
     if !output.status.success() {
         return Err(anyhow!(
             "afconvert exited with {}: {}",
@@ -93,18 +186,15 @@ fn run_afconvert(args: &[&std::ffi::OsStr]) -> Result<()> {
     Ok(())
 }
 
-/// Runs `/usr/bin/afinfo` on `path` and parses the sample rate off its
-/// human-readable output (e.g. `"... 2 ch,  16000 Hz, aac ..."`). There is no
-/// `--json`/machine-readable mode that's simpler to parse than this one
-/// line, and pulling in a full AudioToolbox binding just to read this back
-/// would be far more machinery than reading `afinfo`'s own stdout, which
-/// already has a stable `"<number> Hz"` token wherever a data format is
-/// printed.
+/// Runs `/usr/bin/afinfo` on `path` (bounded by [`AFINFO_TIMEOUT`]) and
+/// parses the sample rate off its human-readable output (e.g.
+/// `"... 2 ch,  16000 Hz, aac ..."`). There is no `--json`/machine-readable
+/// mode that's simpler to parse than this one line, and pulling in a full
+/// AudioToolbox binding just to read this back would be far more machinery
+/// than reading `afinfo`'s own stdout, which already has a stable
+/// `"<number> Hz"` token wherever a data format is printed.
 fn sample_rate_hz(path: &Path) -> Result<u32> {
-    let output = Command::new("/usr/bin/afinfo")
-        .arg(path)
-        .output()
-        .context("running /usr/bin/afinfo")?;
+    let output = run_with_timeout(Path::new("/usr/bin/afinfo"), &[path.as_os_str()], AFINFO_TIMEOUT)?;
     if !output.status.success() {
         return Err(anyhow!(
             "afinfo exited with {}: {}",
@@ -156,16 +246,16 @@ fn parse_sample_rate_hz(text: &str) -> Option<u32> {
 pub fn encode_wav_to_m4a(wav_path: &Path, out_path: &Path) -> Result<()> {
     let data_format = format!("aac@{TARGET_SAMPLE_RATE_HZ}");
     run_afconvert(&[
-        std::ffi::OsStr::new("-f"),
-        std::ffi::OsStr::new("m4af"),
-        std::ffi::OsStr::new("-d"),
-        std::ffi::OsStr::new(&data_format),
-        std::ffi::OsStr::new("-b"),
-        std::ffi::OsStr::new(AAC_BITRATE_BPS),
-        std::ffi::OsStr::new("-q"),
-        std::ffi::OsStr::new("127"),
-        std::ffi::OsStr::new("-s"),
-        std::ffi::OsStr::new("2"),
+        OsStr::new("-f"),
+        OsStr::new("m4af"),
+        OsStr::new("-d"),
+        OsStr::new(&data_format),
+        OsStr::new("-b"),
+        OsStr::new(AAC_BITRATE_BPS),
+        OsStr::new("-q"),
+        OsStr::new("127"),
+        OsStr::new("-s"),
+        OsStr::new("2"),
         wav_path.as_os_str(),
         out_path.as_os_str(),
     ])
@@ -193,10 +283,10 @@ pub fn encode_wav_to_m4a(wav_path: &Path, out_path: &Path) -> Result<()> {
 pub fn decode_m4a_to_wav(m4a_path: &Path, out_path: &Path) -> Result<()> {
     let data_format = format!("LEI16@{TARGET_SAMPLE_RATE_HZ}");
     run_afconvert(&[
-        std::ffi::OsStr::new("-f"),
-        std::ffi::OsStr::new("WAVE"),
-        std::ffi::OsStr::new("-d"),
-        std::ffi::OsStr::new(&data_format),
+        OsStr::new("-f"),
+        OsStr::new("WAVE"),
+        OsStr::new("-d"),
+        OsStr::new(&data_format),
         m4a_path.as_os_str(),
         out_path.as_os_str(),
     ])
@@ -383,5 +473,70 @@ mod tests {
         let err = encode_wav_to_m4a(&missing, &out).unwrap_err();
         assert!(!out.exists(), "no output should be left behind on failure");
         let _ = err; // message content is afconvert's own, not asserted here
+    }
+
+    mod timeout {
+        use super::*;
+
+        /// Writes an executable shell script at `path` that sleeps for
+        /// `sleep_secs` before exiting cleanly -- a stand-in for a wedged
+        /// `afconvert`/`afinfo`, run through the exact same
+        /// [`run_with_timeout`] this module uses for the real binaries.
+        /// `run_with_timeout` takes `program` as a parameter specifically so
+        /// this doesn't need to make the REAL system binaries hang (which
+        /// isn't practical to arrange) to prove the watchdog works.
+        fn write_sleep_script(path: &Path, sleep_secs: u64) {
+            std::fs::write(path, format!("#!/bin/sh\nsleep {sleep_secs}\n")).unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mut perms = std::fs::metadata(path).unwrap().permissions();
+                perms.set_mode(0o755);
+                std::fs::set_permissions(path, perms).unwrap();
+            }
+        }
+
+        /// Regression test for the review finding: `Command::output()`
+        /// blocks forever if the child process wedges, and that call sat
+        /// directly on `AudioSink::finish()` -> `Session::stop()`'s path
+        /// with no bound at all. Points `run_with_timeout` at a script that
+        /// sleeps far longer than the timeout given, and asserts it returns
+        /// `Err` (not hangs) within a small multiple of the timeout, proving
+        /// the process is actually killed rather than waited out.
+        #[test]
+        fn kills_a_wedged_process_and_returns_err_instead_of_blocking_forever() {
+            let dir = tempfile::tempdir().unwrap();
+            let script = dir.path().join("wedged.sh");
+            write_sleep_script(&script, 30); // far longer than the timeout below
+
+            let timeout = Duration::from_millis(200);
+            let started = Instant::now();
+            let err = run_with_timeout(&script, &[], timeout).unwrap_err();
+            let elapsed = started.elapsed();
+
+            assert!(
+                format!("{err}").contains("timed out"),
+                "expected a timeout error, got: {err}"
+            );
+            assert!(
+                elapsed < Duration::from_secs(5),
+                "expected the watchdog to return promptly after the {timeout:?} bound, \
+                 took {elapsed:?} instead -- looks like it waited out the 30s sleep"
+            );
+        }
+
+        /// A process that finishes well within the timeout must still
+        /// succeed normally -- the watchdog must not fire early or otherwise
+        /// interfere with the ordinary, fast-exit case every real
+        /// `afconvert`/`afinfo` call is.
+        #[test]
+        fn a_process_finishing_within_the_timeout_succeeds_normally() {
+            let dir = tempfile::tempdir().unwrap();
+            let script = dir.path().join("quick.sh");
+            write_sleep_script(&script, 0);
+
+            let output = run_with_timeout(&script, &[], Duration::from_secs(5)).unwrap();
+            assert!(output.status.success());
+        }
     }
 }

@@ -1941,6 +1941,40 @@ mod tests {
             );
         }
 
+        /// Mirrors `continuing::corrupt_existing_audio_fails_and_leaves_the_
+        /// original_untouched` (the flac case) for `.m4a`: a corrupt
+        /// (undecodable) existing m4a must make `new_continuing` fail
+        /// loudly -- `aac::decode_m4a_to_wav` (via `afconvert`) returns `Err`
+        /// on non-audio bytes, which `stream_prefill_m4a` propagates -- and
+        /// must leave that file completely untouched, since prefilling only
+        /// ever reads it (never writes through the same path).
+        #[test]
+        fn continuing_a_corrupt_existing_m4a_fails_and_leaves_the_original_untouched() {
+            let dir = tempfile::tempdir().unwrap();
+            let md_path = dir.path().join("call.md");
+            let m4a_path = m4a_path_for(&md_path);
+            let corrupt_bytes = b"not a real m4a file at all";
+            std::fs::write(&m4a_path, corrupt_bytes).unwrap();
+
+            let result = AudioSink::new_continuing(&md_path, Some(&m4a_path), 0.0, AudioFormat::Aac);
+            assert!(result.is_err(), "a corrupt existing m4a must fail the prefill");
+
+            let after = std::fs::read(&m4a_path).unwrap();
+            assert_eq!(
+                after, corrupt_bytes,
+                "the original (corrupt) m4a must survive byte-exact -- new_continuing only reads it"
+            );
+            assert!(
+                !recording_wav_path_for(&md_path).exists(),
+                "the partially-prefilled working wav must be cleaned up on failure"
+            );
+            assert!(
+                !wav_path_for(&md_path).exists(),
+                "the canonical wav sibling must never be touched by a continuation \
+                 prefilling from an m4a -- it didn't exist before and shouldn't now"
+            );
+        }
+
         /// When the encode target and the format continued FROM are the
         /// SAME path (ordinary same-format aac continuation, no switch),
         /// `finish`'s stale-cleanup must not attempt to remove the file it

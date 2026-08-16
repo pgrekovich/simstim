@@ -319,7 +319,7 @@ describe("SettingsDialog: model manager (stage 0.8 Task 2)", () => {
     });
   });
 
-  it("shows total disk used near each group heading", async () => {
+  it("shows total disk used near each group heading, labeled with its own scope", async () => {
     vi.mocked(ipc.listModels).mockResolvedValue([parakeet, whisperQ8, whisperTurboQ5NotDownloaded]);
 
     render(<SettingsDialog open onOpenChange={() => {}} />);
@@ -327,8 +327,39 @@ describe("SettingsDialog: model manager (stage 0.8 Task 2)", () => {
     await screen.findByText("Recording");
     // Recording: only parakeet, 487_000_000 bytes -> 487 MB.
     // Re-transcribe: only whisperQ8 is downloaded, 874_188_075 bytes -> 874 MB
-    // (the not-downloaded turbo q5 contributes nothing).
-    await screen.findByText(/487 mb used/i);
-    await screen.findByText(/874 mb used/i);
+    // (the not-downloaded turbo q5 contributes nothing). Each total names its
+    // own group so neither reads as a whole-app total.
+    await screen.findByText(/recording models: 487 mb on disk/i);
+    await screen.findByText(/re-transcribe models: 874 mb on disk/i);
+  });
+
+  it("disarms an armed delete confirmation when the dialog closes and reopens", async () => {
+    // Security-review finding: the dialog stays mounted for the app's whole
+    // lifetime (only `open` toggles visibility) and `deleteConfirmId` used to
+    // survive that, so arming delete on a model, closing without choosing
+    // (the natural way to back out), and reopening later left the row one
+    // click from `deleteModel` with no fresh gate.
+    vi.mocked(ipc.listModels).mockResolvedValue([parakeet, whisperQ8]);
+
+    const { rerender } = render(<SettingsDialog open onOpenChange={() => {}} />);
+
+    const row = (await screen.findByText(/whisper large-v3-turbo \(q8\)/i)).closest("li")!;
+    fireEvent.click(within(row).getByRole("button", { name: /delete whisper large-v3-turbo \(q8\)/i }));
+    await within(row).findByRole("button", { name: /delete 874 mb\?/i });
+
+    rerender(<SettingsDialog open={false} onOpenChange={() => {}} />);
+    rerender(<SettingsDialog open onOpenChange={() => {}} />);
+
+    const reopenedRow = (await screen.findByText(/whisper large-v3-turbo \(q8\)/i)).closest("li")!;
+    // Back to the trash icon, not the armed "Delete 874 MB?" button.
+    const trashButton = await within(reopenedRow).findByRole("button", {
+      name: /delete whisper large-v3-turbo \(q8\)/i,
+    });
+    expect(within(reopenedRow).queryByRole("button", { name: /delete 874 mb\?/i })).not.toBeInTheDocument();
+
+    // One click on the (now disarmed) trash icon must ask again, not delete.
+    fireEvent.click(trashButton);
+    expect(ipc.deleteModel).not.toHaveBeenCalled();
+    await within(reopenedRow).findByRole("button", { name: /delete 874 mb\?/i });
   });
 });

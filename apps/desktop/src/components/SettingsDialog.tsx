@@ -154,6 +154,13 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
     const [freshConfig, freshModels] = await Promise.all([getConfig(), listModels()]);
     setConfig(freshConfig);
     setModels(freshModels);
+    // Drop any armed delete confirmation (stage 0.8 security-review fix): a
+    // background refresh -- a download finishing while the dialog is
+    // closed, or the periodic re-sync below -- must not leave a row parked
+    // one click from `deleteModel` with no fresh gate. Rearming always
+    // requires a deliberate new click on the trash icon after this.
+    setDeleteConfirmId(null);
+    setDeleteErrors({});
     onModelsChangedRef.current?.(freshConfig, freshModels);
     return freshModels;
   }, []);
@@ -170,10 +177,24 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
 
   // Re-sync every time the dialog opens: a download can finish while it was
   // closed, and the row state (downloaded/active) needs to reflect that.
+  // `refresh()` also clears any armed delete confirmation, so re-opening
+  // never surfaces a stale "Delete N MB?" button from before it was closed.
   useEffect(() => {
     if (!isOpen) return;
     refresh().catch(() => {});
   }, [isOpen, refresh]);
+
+  // Belt-and-suspenders on top of `refresh()`'s own reset: the dialog is
+  // mounted for the app's whole lifetime and only ever hides via `isOpen`
+  // (see the comment above), so closing it without choosing -- the natural
+  // way to back out of an armed delete -- must disarm it immediately rather
+  // than leaving a live "Delete N MB?" button sitting there until the next
+  // refresh happens to run.
+  useEffect(() => {
+    if (isOpen) return;
+    setDeleteConfirmId(null);
+    setDeleteErrors({});
+  }, [isOpen]);
 
   // Global listener, mounted regardless of `isOpen`: downloads continue in
   // Rust even if the dialog is closed, so progress must keep being tracked
@@ -475,7 +496,7 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                 Recording
               </h4>
               <span className="text-xs text-muted-foreground">
-                {humanBytes(totalDiskUsed(liveModels))} used
+                Recording models: {humanBytes(totalDiskUsed(liveModels))} on disk
               </span>
             </div>
             <ul className="flex flex-col gap-3">
@@ -521,7 +542,7 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                 Re-transcribe
               </h4>
               <span className="text-xs text-muted-foreground">
-                {humanBytes(totalDiskUsed(retranscribeModels))} used
+                Re-transcribe models: {humanBytes(totalDiskUsed(retranscribeModels))} on disk
               </span>
             </div>
             <span className="text-xs text-muted-foreground">

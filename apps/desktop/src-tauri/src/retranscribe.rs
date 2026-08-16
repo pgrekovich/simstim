@@ -261,9 +261,11 @@ fn decode_wav_stereo(path: &Path) -> Result<(Vec<f32>, Vec<f32>)> {
 }
 
 /// Decodes whichever audio file `path` actually is, dispatching on its
-/// extension: `.wav` via [`decode_wav_stereo`], anything else (in practice
-/// always `.flac`, since [`resolve_audio_path`] only ever returns one of
-/// those two) via [`decode_flac_stereo`].
+/// extension: `.wav` via [`decode_wav_stereo`] (this also covers
+/// `resolve_audio_path`'s `.recording.wav` last resort -- `Path::extension`
+/// only looks at the part after the LAST dot, so it reads as `"wav"` too,
+/// and it's the exact same stereo PCM format `AudioSink` always writes),
+/// anything else (in practice always `.flac`) via [`decode_flac_stereo`].
 fn decode_audio_stereo(path: &Path) -> Result<(Vec<f32>, Vec<f32>)> {
     match path.extension().and_then(|e| e.to_str()) {
         Some("wav") => decode_wav_stereo(path),
@@ -276,8 +278,22 @@ fn decode_audio_stereo(path: &Path) -> Result<(Vec<f32>, Vec<f32>)> {
 /// flac encode step failed and `AudioSink::finish` kept the wav instead of
 /// deleting it (see that method's docs -- losing the recorded audio
 /// entirely would be worse than leaving the bigger file around, but it
-/// means a re-transcribe must still be able to find it). `None` if neither
-/// exists, e.g. `keep_audio` was off when the session was recorded.
+/// means a re-transcribe must still be able to find it), and as a LAST
+/// resort the dedicated `.recording.wav` working file a CONTINUED recording
+/// writes to while it's live (see `audio_sink::recording_wav_path_for`'s
+/// docs -- never the canonical `.wav` while a continuation is still in
+/// progress or mid-encode). `None` if none of the three exist, e.g.
+/// `keep_audio` was off when the session was recorded.
+///
+/// This third fallback (Important fix-review finding, wave 3) is what makes
+/// a crashed continuation's captured audio recoverable at all: without it,
+/// that file is invisible to both playback and re-transcribe, and a LATER
+/// continuation would silently prefill from the stale pre-crash audio
+/// instead (see `audio_sink`'s crash-safety docs). It's never actually
+/// reachable for a session that's currently recording or finalizing --
+/// `check_not_active` (retranscribe) and the `finalizing` gate
+/// (`sessions::read_session_at`) both reject those BEFORE this function is
+/// ever called, independent of whatever it would resolve to.
 ///
 /// `pub(crate)` (Task 4, stage-0.7): `sessions::read_session_at` reuses this
 /// exact resolution to fill `SessionDataOut::audio_path` for the frontend
@@ -292,6 +308,10 @@ pub(crate) fn resolve_audio_path(md_path: &Path) -> Option<PathBuf> {
     let wav_path = wav_path_for(md_path);
     if wav_path.is_file() {
         return Some(wav_path);
+    }
+    let recording_wav_path = crate::audio_sink::recording_wav_path_for(md_path);
+    if recording_wav_path.is_file() {
+        return Some(recording_wav_path);
     }
     None
 }
@@ -777,6 +797,40 @@ mod tests {
             let md_path = dir.path().join("call.md");
             std::fs::write(dir.path().join("call.flac"), b"x").unwrap();
             std::fs::write(dir.path().join("call.wav"), b"x").unwrap();
+            assert_eq!(resolve_audio_path(&md_path), Some(dir.path().join("call.flac")));
+        }
+
+        /// Important fix-review finding, wave 3: a crashed CONTINUED
+        /// recording only ever wrote to `<base>.recording.wav` (never
+        /// `wav_path_for`, see `audio_sink::recording_wav_path_for`'s
+        /// docs) -- without this last-resort fallback, that audio would be
+        /// completely invisible to playback and re-transcribe alike.
+        #[test]
+        fn recording_wav_only_falls_back_to_it_as_a_last_resort() {
+            let dir = tempfile::tempdir().unwrap();
+            let md_path = dir.path().join("call.md");
+            std::fs::write(dir.path().join("call.recording.wav"), b"x").unwrap();
+            assert_eq!(
+                resolve_audio_path(&md_path),
+                Some(dir.path().join("call.recording.wav"))
+            );
+        }
+
+        #[test]
+        fn wav_is_preferred_over_recording_wav_when_both_exist() {
+            let dir = tempfile::tempdir().unwrap();
+            let md_path = dir.path().join("call.md");
+            std::fs::write(dir.path().join("call.wav"), b"x").unwrap();
+            std::fs::write(dir.path().join("call.recording.wav"), b"x").unwrap();
+            assert_eq!(resolve_audio_path(&md_path), Some(dir.path().join("call.wav")));
+        }
+
+        #[test]
+        fn flac_is_preferred_over_recording_wav_when_both_exist() {
+            let dir = tempfile::tempdir().unwrap();
+            let md_path = dir.path().join("call.md");
+            std::fs::write(dir.path().join("call.flac"), b"x").unwrap();
+            std::fs::write(dir.path().join("call.recording.wav"), b"x").unwrap();
             assert_eq!(resolve_audio_path(&md_path), Some(dir.path().join("call.flac")));
         }
     }

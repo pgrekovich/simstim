@@ -47,9 +47,16 @@
 //! whatever the OS already has) every [`FLUSH_INTERVAL_FRAMES`] frames (2
 //! seconds of audio). That interval is the resulting data-loss window: a
 //! crash can only ever lose up to the last 2 seconds pushed, not the whole
-//! file. (This flushes to the OS, not an `fsync`; the same durability level
-//! `simstim_transcript::Transcript::save`'s write-then-rename already relies
-//! on elsewhere in this codebase.)
+//! file -- PROVIDED the in-progress file is still discoverable afterward,
+//! which is `retranscribe::resolve_audio_path`'s job, not this module's: it
+//! falls back to [`recording_wav_path_for`] as a last resort specifically so
+//! a crashed CONTINUED recording's in-progress audio (which never lives at
+//! `wav_path_for`, see "continuing a session's audio" below) isn't orphaned.
+//! Without that fallback, this guarantee only actually held for a fresh
+//! (non-continuing) recording's crash, whose in-progress file already sits
+//! at the canonical `.wav` sibling. (This flushes to the OS, not an
+//! `fsync`; the same durability level `simstim_transcript::Transcript::save`'s
+//! write-then-rename already relies on elsewhere in this codebase.)
 //!
 //! ## Continuing a session's audio
 //!
@@ -85,12 +92,16 @@
 //! means the old `.flac` isn't replaced until the new encode has fully
 //! succeeded (on success, any stale retained `.wav` is also cleaned up; on a
 //! failed encode, the working file is moved into the canonical `.wav` slot
-//! instead so it stays discoverable). If the prefill itself fails (the old
-//! file is corrupt or unreadable), `new_continuing` returns `Err` and removes
-//! the just-created (partial) working file; the caller (`session.rs`)
-//! reports this through the usual `on_error` path and disables audio for
-//! that recording entirely, exactly like any other `AudioSink::new` failure
-//! -- the old file is left completely alone since nothing ever wrote to it.
+//! instead so it stays discoverable, and any now-stale pre-continuation
+//! `.flac` is removed too -- otherwise it would keep shadowing that wav
+//! forever, since `resolve_audio_path` always prefers `.flac`, permanently
+//! reading old, incomplete audio instead of the just-consolidated old+new
+//! wav). If the prefill itself fails (the old file is corrupt or
+//! unreadable), `new_continuing` returns `Err` and removes the just-created
+//! (partial) working file; the caller (`session.rs`) reports this through
+//! the usual `on_error` path and disables audio for that recording entirely,
+//! exactly like any other `AudioSink::new` failure -- the old file is left
+//! completely alone since nothing ever wrote to it.
 
 use std::collections::VecDeque;
 use std::fs::File;
@@ -142,7 +153,15 @@ pub(crate) fn wav_path_for(md_path: &Path) -> PathBuf {
 /// encode). [`AudioSink::finish`] moves this into the canonical `.wav` slot
 /// if its own flac encode fails, so the file stays discoverable under the
 /// name `resolve_audio_path` actually looks for.
-fn recording_wav_path_for(md_path: &Path) -> PathBuf {
+///
+/// `pub(crate)` (Important fix-review finding, wave 3) so
+/// `retranscribe::resolve_audio_path` can fall back to it as a last resort:
+/// without that, a crash mid-continuation (which only ever writes here,
+/// never to `wav_path_for`) would leave the captured audio completely
+/// invisible -- undiscoverable for playback/re-transcribe, and a later
+/// continuation would prefill from the STALE pre-crash audio instead,
+/// losing whatever the crashed attempt captured.
+pub(crate) fn recording_wav_path_for(md_path: &Path) -> PathBuf {
     md_path.with_extension("recording.wav")
 }
 
@@ -572,7 +591,13 @@ impl AudioSink {
     /// working name, so it stays discoverable by `resolve_audio_path` the
     /// same way a fresh recording's kept wav already is -- old+new
     /// consolidated, since the old content was already read into it by the
-    /// prefill step.
+    /// prefill step. In that same failed-encode case, if this continued from
+    /// an existing `.flac` (rather than a `.wav` fallback), that now-stale
+    /// pre-continuation `.flac` is ALSO removed once the wav is safely in
+    /// place (never before -- the rename must succeed first): left in place,
+    /// it would permanently shadow the just-consolidated wav, since
+    /// `resolve_audio_path` always prefers `.flac` over `.wav` (Important
+    /// fix-review finding, wave 3).
     pub fn finish(mut self, on_error: &impl Fn(String)) -> anyhow::Result<PathBuf> {
         let frames = flush_remaining(&mut self.queue_me, &mut self.queue_them);
         write_frames(&mut self.writer, &frames)?;
@@ -603,7 +628,32 @@ impl AudioSink {
                     return Ok(self.wav_path);
                 }
                 match std::fs::rename(&self.wav_path, &canonical_wav_path) {
-                    Ok(()) => Ok(canonical_wav_path),
+                    Ok(()) => {
+                        // This recording continued from existing audio (the
+                        // working path differs from canonical -- see
+                        // `recording_wav_path_for`'s docs). The canonical
+                        // wav just put in place holds old+new consolidated;
+                        // any `.flac` left over from BEFORE this
+                        // continuation is now stale and, worse, would
+                        // permanently shadow that wav (`resolve_audio_path`
+                        // always checks `.flac` first). Only ever reached
+                        // after the rename above has already succeeded, so
+                        // the old file is never removed before its
+                        // replacement is safely in place.
+                        if self.flac_path.exists() {
+                            if let Err(remove_err) = std::fs::remove_file(&self.flac_path) {
+                                on_error(format!(
+                                    "audio sink: failed to remove the now-stale flac at {}: \
+                                     {remove_err} -- the canonical wav at {} is the \
+                                     authoritative, complete audio for this session; remove \
+                                     the flac manually",
+                                    self.flac_path.display(),
+                                    canonical_wav_path.display()
+                                ));
+                            }
+                        }
+                        Ok(canonical_wav_path)
+                    }
                     Err(rename_err) => {
                         on_error(format!(
                             "audio sink: failed to move the recording wav into place: {rename_err}"
@@ -1192,6 +1242,90 @@ mod tests {
             assert!(
                 !recording_wav_path_for(&md_path).exists(),
                 "the dedicated working wav must be gone after a clean encode"
+            );
+        }
+
+        /// Important fix-review finding, wave 3, the core regression guard:
+        /// when a CONTINUED recording's own flac encode fails, `finish` moves
+        /// the working wav into the canonical `.wav` slot -- but the
+        /// pre-continuation `.flac` (the one this session prefilled FROM)
+        /// would otherwise still be sitting there, and `resolve_audio_path`
+        /// always prefers `.flac`, so the app would permanently read that
+        /// OLD, incomplete audio while the correct, consolidated old+new
+        /// file sits unreachable in the `.wav`. Proves the fix removes the
+        /// stale flac (only after the wav is safely in place) and that
+        /// `resolve_audio_path` then correctly surfaces the wav.
+        #[test]
+        fn encode_failure_on_a_continued_recording_removes_the_stale_pre_continuation_flac() {
+            let dir = tempfile::tempdir().unwrap();
+            let md_path = dir.path().join("call.md");
+            let no_op = |_msg: String| {};
+
+            // Old flac: real content, encoded normally (not through a
+            // forced-failure path) -- at least MIN_BLOCK_SIZE frames so no
+            // trailing-block padding muddies the byte-exact checks below.
+            let old_me: Vec<f32> = (0..40).map(|i| (i as f32 / 100.0) - 0.2).collect();
+            let old_them: Vec<f32> = (0..40).map(|i| 0.2 - (i as f32 / 100.0)).collect();
+            {
+                let mut sink = AudioSink::new(&md_path).unwrap();
+                for i in 0..old_me.len() {
+                    sink.push(Channel::Me, &old_me[i..i + 1], &no_op);
+                    sink.push(Channel::Them, &old_them[i..i + 1], &no_op);
+                }
+                sink.finish(&no_op).unwrap();
+            }
+            let flac_path = audio_path_for(&md_path);
+            assert!(flac_path.exists(), "expected the pre-continuation flac to exist");
+
+            let (mut sink, _target_base_secs) =
+                AudioSink::new_continuing(&md_path, Some(&flac_path), 0.0).unwrap();
+            let new_me = [0.2f32, -0.4];
+            let new_them = [0.3f32, -0.6];
+            for i in 0..new_me.len() {
+                sink.push(Channel::Me, &new_me[i..i + 1], &no_op);
+                sink.push(Channel::Them, &new_them[i..i + 1], &no_op);
+            }
+
+            // Force THIS recording's own encode to fail without touching the
+            // real (pre-existing, real-content) flac_path at all: pre-create
+            // a directory at the exact temp path `encode_flac` writes its
+            // bytes to first (`<base>.flac.tmp`), so the write fails before
+            // the rename onto the real flac_path is ever attempted.
+            std::fs::create_dir(flac_path.with_extension("flac.tmp")).unwrap();
+
+            let errors = std::cell::RefCell::new(Vec::<String>::new());
+            let on_error_cb = |msg: String| errors.borrow_mut().push(msg);
+            let result_path = sink.finish(&on_error_cb).unwrap();
+
+            let canonical_wav = audio_path_for(&md_path).with_extension("wav");
+            assert_eq!(result_path, canonical_wav);
+            assert!(
+                !flac_path.exists(),
+                "the now-stale pre-continuation flac must be removed once the wav is in place"
+            );
+            assert!(canonical_wav.exists());
+
+            let resolved = crate::retranscribe::resolve_audio_path(&md_path);
+            assert_eq!(
+                resolved,
+                Some(canonical_wav.clone()),
+                "resolve_audio_path must surface the consolidated wav, not a (now-gone) stale flac"
+            );
+
+            let mut reader = hound::WavReader::open(&canonical_wav).unwrap();
+            let samples: Vec<i32> = reader.samples::<i16>().map(|s| s.unwrap() as i32).collect();
+            let decoded_me: Vec<i32> = samples.iter().step_by(2).copied().collect();
+            let decoded_them: Vec<i32> = samples.iter().skip(1).step_by(2).copied().collect();
+            let expected_old_me: Vec<i32> = old_me.iter().map(|&s| f32_to_i16(s) as i32).collect();
+            let expected_old_them: Vec<i32> =
+                old_them.iter().map(|&s| f32_to_i16(s) as i32).collect();
+            assert_eq!(&decoded_me[..old_me.len()], &expected_old_me[..]);
+            assert_eq!(&decoded_them[..old_them.len()], &expected_old_them[..]);
+            let new_start = old_me.len();
+            assert_eq!(
+                decoded_me[new_start..new_start + new_me.len()],
+                new_me.iter().map(|&s| f32_to_i16(s) as i32).collect::<Vec<_>>()[..],
+                "the surviving canonical audio must contain old+new, not just old"
             );
         }
     }

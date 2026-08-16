@@ -430,6 +430,36 @@ mod tests {
         );
     }
 
+    /// Important fix-review finding, wave 3: `resolve_audio_path` now falls
+    /// back to a session's `.recording.wav` (a continued recording's
+    /// in-progress working file) as a last resort. Guards against the
+    /// finalizing gate somehow only covering the `.flac`/`.wav` cases and
+    /// missing this third one -- the gate lives entirely in the `finalizing
+    /// == Some(path)` check BEFORE `resolve_audio_path` is ever called, so
+    /// it must hide the audio here exactly the same way regardless of which
+    /// file `resolve_audio_path` would have resolved to.
+    #[test]
+    fn read_session_at_hides_the_audio_path_while_finalizing_even_via_the_recording_wav_fallback() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("call.md");
+        Transcript::new(t(10, 0, 0)).save(&path).unwrap();
+        std::fs::write(dir.path().join("call.recording.wav"), b"x").unwrap();
+
+        let data = read_session_at(&path, Some(&path)).unwrap();
+        assert_eq!(
+            data.audio_path, None,
+            "audio path must be hidden while finalizing, even when the only \
+             resolvable file is the last-resort recording.wav fallback"
+        );
+
+        let data = read_session_at(&path, None).unwrap();
+        assert_eq!(
+            data.audio_path,
+            Some(dir.path().join("call.recording.wav").display().to_string()),
+            "once not finalizing, the recording.wav fallback must resolve normally"
+        );
+    }
+
     #[test]
     fn save_session_at_rejects_the_active_recording_path() {
         let dir = tempfile::tempdir().unwrap();

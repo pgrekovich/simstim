@@ -216,7 +216,13 @@ describe("SettingsDialog: auto re-transcribe and audio cleanup toggles (stage 0.
     await screen.findByText(/can never be re-transcribed again/i);
   });
 
-  it("disables both toggles and shows a muted note when keep_audio is off", async () => {
+  it("disables only the auto toggle (with a muted note) when keep_audio is off, and leaves delete enabled", async () => {
+    // Fix-review correction: only the AUTO trigger actually needs
+    // `keep_audio` on (it fires right after a stop, so it's useless without
+    // an audio file just having been kept). The delete toggle applies to ANY
+    // successful re-transcribe, including a manual one on an old session
+    // that still has audio from back when `keep_audio` was on -- so it must
+    // stay enabled regardless of the current setting.
     vi.mocked(ipc.getConfig).mockResolvedValue({ ...baseConfig, keep_audio: false });
 
     render(<SettingsDialog open onOpenChange={() => {}} />);
@@ -228,10 +234,11 @@ describe("SettingsDialog: auto re-transcribe and audio cleanup toggles (stage 0.
       name: /delete the audio after re-transcribing/i,
     });
     expect(autoCheckbox).toBeDisabled();
-    expect(deleteCheckbox).toBeDisabled();
+    expect(deleteCheckbox).not.toBeDisabled();
 
+    // Exactly one "Needs call audio" note -- on the auto row only.
     const notes = screen.getAllByText(/needs call audio/i);
-    expect(notes).toHaveLength(2);
+    expect(notes).toHaveLength(1);
   });
 
   it("enables both toggles when keep_audio is on", async () => {
@@ -246,6 +253,18 @@ describe("SettingsDialog: auto re-transcribe and audio cleanup toggles (stage 0.
     expect(autoCheckbox).not.toBeDisabled();
     expect(deleteCheckbox).not.toBeDisabled();
     expect(screen.queryByText(/needs call audio/i)).not.toBeInTheDocument();
+  });
+
+  it("keeps the delete toggle enabled even when keep_audio is off, so an old session's audio can still be deleted after a manual re-transcribe", async () => {
+    vi.mocked(ipc.getConfig).mockResolvedValue({ ...baseConfig, keep_audio: false });
+
+    render(<SettingsDialog open onOpenChange={() => {}} />);
+
+    const deleteCheckbox = await screen.findByRole("checkbox", {
+      name: /delete the audio after re-transcribing/i,
+    });
+    expect(deleteCheckbox).not.toBeDisabled();
+    expect(deleteCheckbox).not.toHaveAttribute("aria-checked", "true");
   });
 });
 

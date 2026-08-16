@@ -536,11 +536,14 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
             </div>
             {keepAudioError && <span className="text-xs text-destructive">{keepAudioError}</span>}
 
-            {/* Stage 0.9: both toggles below only ever do anything while
-                `keep_audio` is on (re-transcribing needs the audio file in
-                the first place), so both are disabled with a muted "Needs
-                call audio" note when it's off, matching the audio-format
-                controls' own gating just above. */}
+            {/* Stage 0.9 (fix-review correction): only the AUTO toggle below
+                needs `keep_audio` on -- it fires right after a recording
+                stops, so it's useless without an audio file having just been
+                kept. The delete toggle just below it is NOT gated the same
+                way: `retranscribe_session` applies delete-after to ANY
+                successful re-transcribe, including a MANUAL one on an old
+                session that still has audio from back when `keep_audio` was
+                on, even if it's off right now. */}
             <div className="flex items-start gap-2 pt-2">
               <Checkbox
                 id="auto-retranscribe"
@@ -566,7 +569,7 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
               <Checkbox
                 id="delete-audio-after-retranscribe"
                 checked={config?.delete_audio_after_retranscribe ?? false}
-                disabled={!config || !config.keep_audio}
+                disabled={!config}
                 onCheckedChange={(checked) => handleSetDeleteAudioAfterRetranscribe(checked === true)}
               />
               <div className="flex flex-col gap-0.5">
@@ -575,11 +578,10 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                 </Label>
                 <span className="text-xs text-muted-foreground">
                   Removes the recording once a re-transcribe succeeds - manual or automatic, it
-                  always applies - and that call can never be re-transcribed again.
+                  always applies, regardless of whether "Keep call audio" is currently on (an old
+                  session recorded with it on can still be re-transcribed manually) - and that
+                  call can never be re-transcribed again.
                 </span>
-                {config && !config.keep_audio && (
-                  <span className="text-xs text-muted-foreground">Needs call audio</span>
-                )}
               </div>
             </div>
             {deleteAudioAfterError && (

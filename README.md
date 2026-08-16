@@ -59,10 +59,10 @@ Parakeet's live transcript can be rough, especially in Russian. To get a better 
 
 The audio file lives right next to the `.md` (same basename, `.m4a` or `.flac` extension depending on Settings > Audio format). Both play natively in QuickTime, Quick Look and the app's own player.
 
-Two more settings live right under "Keep call audio" in Settings > Output (stage 0.9), both off by default and both needing "Keep call audio" on to do anything:
+Two more settings live right under "Keep call audio" in Settings > Output (stage 0.9), both off by default:
 
-- **Re-transcribe automatically after stopping** - runs the selected whisper model on the finished call in the background, no manual click needed.
-- **Delete the audio after re-transcribing** - removes the recording once a re-transcribe succeeds, whether it was triggered manually or automatically; this is the same setting either way, not two separate ones. This is irreversible: once the audio is gone, that call can never be re-transcribed again.
+- **Re-transcribe automatically after stopping** - runs the selected whisper model on the finished call in the background, no manual click needed. Needs "Keep call audio" on (it fires right after a stop, so it's useless without an audio file having just been kept).
+- **Delete the audio after re-transcribing** - removes the recording once ANY re-transcribe succeeds, manual or automatic; this is the same setting either way, not two separate ones. This applies regardless of whether "Keep call audio" is currently on: an old session recorded while it was on can still be re-transcribed manually, and its audio deleted afterward, even if the setting is off now. This is irreversible: once the audio is gone, that call can never be re-transcribed again.
 
 A second stop (or a manual click) while a re-transcribe is already running queues behind it instead of being rejected; jobs run one at a time, FIFO.
 

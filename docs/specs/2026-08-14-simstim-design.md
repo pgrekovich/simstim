@@ -214,6 +214,38 @@ Out of 0.7: meeting detection, tray, hotkeys, enhance, calendar.
 - Continuing a recording into a note whose audio is in the other format re-encodes the combined audio into the current format.
 - FLAC block padding accumulates at seams when continuing a session: each segment's trailing block pads to up to 256ms of silence, so N continuations add up to N-1 seams of padding (accepted as a size cost, exact sync is preserved).
 
+## Stage 1.0: call detection (approved 2026-08-16, owner: "the most important thing")
+
+Kills the last daily friction: remembering the app exists before a call.
+Research basis: `docs/research/detection.md` (APIs verified with live probes).
+
+- **Detection**: listen on the default input device's "is running somewhere"
+  flag (Core Audio, via cidre, zero new deps, zero permissions), and on the
+  flag flipping, scan process objects to find which app grabbed the mic.
+  Identity resolved via NSRunningApplication + outermost-bundle walk (maps
+  browser helpers to the browser). Re-subscribes when the default input
+  device changes.
+- **Whitelist** of calling apps (Zoom, Slack, Teams, Webex, FaceTime,
+  Discord, Telegram, WhatsApp, major browsers), with a debounce before
+  firing and a per-app cooldown after. Browsers are labelled generically
+  ("Call detected: Brave"): a site using the mic is indistinguishable from a
+  call without an extension, accepted.
+- **The affordance is an in-app banner** ("Call detected: Slack. [Start
+  recording]"), because Tauri desktop notifications cannot handle clicks at
+  all and dev builds cannot post real ones. A system notification via
+  cidre's UNUserNotificationCenter wrapper is layered on top, best-effort,
+  bundled builds only.
+- **Never auto-record** (principle 5). Detection suggests; the click starts
+  an ordinary recording into a new note titled after the detected app.
+- **Call end**: when the detected app releases the mic during a
+  detection-started recording, suggest stopping; `auto_stop_after_call`
+  setting (default off) stops automatically. Stopping is the safe direction
+  to automate; starting never is.
+- Settings: `detect_calls: bool` (default on: it only ever notifies).
+
+Out of 1.0: calendar signals, tray/menu-bar presence, global hotkey, tab
+identification in browsers, AX-based in-meeting confidence.
+
 ## Milestones after MVP-0
 
 1. Audio file kept next to the .md; re-transcribe command (whisper turbo).

@@ -37,6 +37,23 @@ export interface AppConfig {
    * dialog's model manager via `setRetranscribeModel`.
    */
   retranscribe_model: string;
+  /**
+   * Whether `stop_recording` automatically queues a re-transcribe job for
+   * the session that just stopped (stage 0.9). Only actually fires when
+   * `keep_audio` is also on and the session has audio. Defaults to `false`.
+   * Toggled from the Settings dialog's Output section (Task 2) via
+   * `setAutoRetranscribe`.
+   */
+  auto_retranscribe: boolean;
+  /**
+   * Whether a SUCCESSFUL re-transcribe -- manual or automatic, this doesn't
+   * depend on how it was triggered -- deletes the session's audio file
+   * afterward (stage 0.9). Irreversible: once the audio is gone, the call
+   * can never be re-transcribed again. Defaults to `false`. Toggled from
+   * the Settings dialog's Output section (Task 2) via
+   * `setDeleteAudioAfterRetranscribe`.
+   */
+  delete_audio_after_retranscribe: boolean;
 }
 
 /**
@@ -244,6 +261,29 @@ export function setAudioFormat(format: string): Promise<void> {
   return invoke("set_audio_format", { format });
 }
 
+/**
+ * Sets and persists whether `stop_recording` automatically queues a
+ * re-transcribe job for the session that just stopped (stage 0.9). Mirrors
+ * `config::set_auto_retranscribe` (apps/desktop/src-tauri/src/config.rs).
+ * Only takes effect when `keep_audio` is also on -- the Settings dialog
+ * (Task 2) disables this toggle when it's off.
+ */
+export function setAutoRetranscribe(autoRetranscribe: boolean): Promise<void> {
+  return invoke("set_auto_retranscribe", { autoRetranscribe });
+}
+
+/**
+ * Sets and persists whether a successful re-transcribe (manual or
+ * automatic) deletes the session's audio file afterward (stage 0.9). Mirrors
+ * `config::set_delete_audio_after_retranscribe`
+ * (apps/desktop/src-tauri/src/config.rs). Irreversible: once the audio is
+ * gone, the call can never be re-transcribed again -- the Settings dialog
+ * (Task 2) states this plainly in the toggle's helper text.
+ */
+export function setDeleteAudioAfterRetranscribe(deleteAudioAfterRetranscribe: boolean): Promise<void> {
+  return invoke("set_delete_audio_after_retranscribe", { deleteAudioAfterRetranscribe });
+}
+
 export function listSessions(): Promise<SessionMeta[]> {
   return invoke("list_sessions");
 }
@@ -281,12 +321,17 @@ export function updateActiveSession(title?: string, notes?: string): Promise<voi
  * model `AppConfig.retranscribe_model` currently names (stage 0.8: picked
  * from the Settings dialog's model manager), replacing its `## Transcript`
  * section outright once done (title/notes/date/duration preserved, `asr:`
- * updated). Mirrors `retranscribe::retranscribe_session`
- * (apps/desktop/src-tauri/src/retranscribe.rs). Resolves once the job
- * finishes (or rejects immediately if the session is recording, its audio
- * is missing, the selected model isn't downloaded, or another job is
- * already running); progress in between arrives via `retranscribe-progress`
- * events.
+ * updated); if `AppConfig.delete_audio_after_retranscribe` is on, a
+ * SUCCESSFUL pass also deletes the session's audio file afterward (stage
+ * 0.9). Mirrors `retranscribe::retranscribe_session`
+ * (apps/desktop/src-tauri/src/retranscribe.rs). Rejects immediately if the
+ * session is recording, currently being finalized, its audio is missing, or
+ * the selected model isn't downloaded. A re-transcribe already running for
+ * a DIFFERENT session no longer causes a rejection (stage 0.9): this one
+ * queues behind it (FIFO) and the returned promise still resolves once THIS
+ * session's own job finishes, not before; progress in between (for
+ * whichever session is actually running right now) arrives via
+ * `retranscribe-progress` events.
  */
 export function retranscribeSession(path: string): Promise<void> {
   return invoke("retranscribe_session", { path });

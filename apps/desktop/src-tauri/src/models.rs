@@ -530,12 +530,13 @@ fn remove_tmp_download_file(id: &str, models_dir: &Path) -> Result<(), String> {
 /// Parameterized over `models_dir` and the two "is something happening"
 /// booleans instead of reading real `State` guards directly, so it's
 /// directly unit-testable with tempdir fixtures -- mirrors `lib.rs`'s
-/// `set_output_dir_at` and `retranscribe::try_start_job`'s own splits for
-/// the same reason. `downloading` mirrors `DownloadState`'s in-flight check
-/// for this specific id; `retranscribing` mirrors
-/// `RetranscribeState::is_running` (global, not per-id, since only one
-/// re-transcribe job ever runs at a time). The command wrapper below is the
-/// only real (non-test) caller.
+/// `set_output_dir_at` and `retranscribe::RetranscribeQueue`'s own splits
+/// for the same reason. `downloading` mirrors `DownloadState`'s in-flight
+/// check for this specific id; `retranscribing` mirrors
+/// `RetranscribeState::is_running` (still global, not per-id: whichever
+/// session's job is actually RUNNING right now, not one merely queued --
+/// see `RetranscribeState::is_running`'s own doc comment). The command
+/// wrapper below is the only real (non-test) caller.
 fn delete_model_at(
     id: &str,
     models_dir: &Path,

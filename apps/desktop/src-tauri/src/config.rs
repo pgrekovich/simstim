@@ -51,6 +51,21 @@ fn default_retranscribe_model() -> String {
     DEFAULT_RETRANSCRIBE_MODEL.to_string()
 }
 
+/// Default for `auto_retranscribe` (stage 0.9 Global Constraints: off).
+/// `stop_recording` must behave exactly as it does today unless the owner
+/// explicitly opts in from Settings.
+fn default_auto_retranscribe() -> bool {
+    false
+}
+
+/// Default for `delete_audio_after_retranscribe` (stage 0.9 Global
+/// Constraints: off). Deleting the call's audio is destructive and
+/// irreversible, so an old config.json (or a fresh install) must never do
+/// it until the owner explicitly opts in from Settings.
+fn default_delete_audio_after_retranscribe() -> bool {
+    false
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Config {
     pub output_dir: PathBuf,
@@ -82,6 +97,25 @@ pub struct Config {
     /// instead of failing deserialization entirely.
     #[serde(default = "default_retranscribe_model")]
     pub retranscribe_model: String,
+    /// Whether `stop_recording` automatically queues a re-transcribe job for
+    /// the session that just stopped (stage 0.9). Only actually fires when
+    /// `keep_audio` is also on and the session has audio -- see
+    /// `retranscribe::maybe_auto_retranscribe`'s docs. `serde(default)` so
+    /// config.json files written before this field existed still load
+    /// (falling back to `false`, per the Global Constraints) instead of
+    /// failing deserialization entirely.
+    #[serde(default = "default_auto_retranscribe")]
+    pub auto_retranscribe: bool,
+    /// Whether a SUCCESSFUL re-transcribe -- manual or automatic, Global
+    /// Constraints: this doesn't depend on how the pass was triggered --
+    /// deletes the session's resolved audio file afterward (stage 0.9).
+    /// Irreversible by design: the owner asked for a way to reclaim the disk
+    /// space audio was using once its transcript no longer needs
+    /// re-processing. `serde(default)` so config.json files written before
+    /// this field existed still load (falling back to `false`) instead of
+    /// failing deserialization entirely.
+    #[serde(default = "default_delete_audio_after_retranscribe")]
+    pub delete_audio_after_retranscribe: bool,
 }
 
 impl Default for Config {
@@ -93,6 +127,8 @@ impl Default for Config {
             keep_audio: default_keep_audio(),
             audio_format: default_audio_format(),
             retranscribe_model: default_retranscribe_model(),
+            auto_retranscribe: default_auto_retranscribe(),
+            delete_audio_after_retranscribe: default_delete_audio_after_retranscribe(),
         }
     }
 }
@@ -154,6 +190,30 @@ pub fn set_audio_format(format: String) -> Result<(), String> {
     validate_audio_format(&format)?;
     let mut cfg = Config::load();
     cfg.audio_format = format;
+    cfg.save().map_err(|e| e.to_string())
+}
+
+/// Sets and persists whether `stop_recording` automatically queues a
+/// re-transcribe job for the session that just stopped (stage 0.9 Global
+/// Constraints). Unconditional: no validation beyond the bool itself, same
+/// as `set_keep_audio`. Whether it actually fires on any given stop still
+/// depends on `keep_audio` and the session having audio -- see
+/// `retranscribe::maybe_auto_retranscribe`.
+#[tauri::command]
+pub fn set_auto_retranscribe(auto_retranscribe: bool) -> Result<(), String> {
+    let mut cfg = Config::load();
+    cfg.auto_retranscribe = auto_retranscribe;
+    cfg.save().map_err(|e| e.to_string())
+}
+
+/// Sets and persists whether a successful re-transcribe (manual or
+/// automatic) deletes the session's audio file afterward (stage 0.9 Global
+/// Constraints). Irreversible once it fires: the Settings UI (Task 2) is
+/// responsible for stating that consequence plainly, not this command.
+#[tauri::command]
+pub fn set_delete_audio_after_retranscribe(delete_audio_after_retranscribe: bool) -> Result<(), String> {
+    let mut cfg = Config::load();
+    cfg.delete_audio_after_retranscribe = delete_audio_after_retranscribe;
     cfg.save().map_err(|e| e.to_string())
 }
 
@@ -226,6 +286,8 @@ mod tests {
             keep_audio: false,
             audio_format: "flac".to_string(),
             retranscribe_model: "whisper-large-v3".to_string(),
+            auto_retranscribe: true,
+            delete_audio_after_retranscribe: true,
         };
         cfg.save_to(&path).unwrap();
         let loaded = Config::load_from(&path);
@@ -251,6 +313,34 @@ mod tests {
     fn retranscribe_model_defaults_to_the_already_downloaded_whisper_id() {
         assert_eq!(Config::default().retranscribe_model, DEFAULT_RETRANSCRIBE_MODEL);
         assert_eq!(Config::default().retranscribe_model, "whisper-large-v3-turbo-q8");
+    }
+
+    #[test]
+    fn auto_retranscribe_defaults_to_false() {
+        assert!(!Config::default().auto_retranscribe);
+    }
+
+    #[test]
+    fn delete_audio_after_retranscribe_defaults_to_false() {
+        assert!(!Config::default().delete_audio_after_retranscribe);
+    }
+
+    /// Stage-0.9 Global Constraints: an old config.json written before these
+    /// two fields existed must still load, defaulting both to `false` --
+    /// never auto-firing a re-transcribe or deleting audio just because the
+    /// file predates the feature.
+    #[test]
+    fn old_config_json_without_stage_0_9_fields_loads_with_both_defaulting_to_false() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        std::fs::write(
+            &path,
+            r#"{"output_dir":"/tmp/some-output","active_model":"custom-model-id","theme":"dark","keep_audio":true,"audio_format":"aac","retranscribe_model":"whisper-large-v3"}"#,
+        )
+        .unwrap();
+        let cfg = Config::load_from(&path);
+        assert!(!cfg.auto_retranscribe);
+        assert!(!cfg.delete_audio_after_retranscribe);
     }
 
     #[test]

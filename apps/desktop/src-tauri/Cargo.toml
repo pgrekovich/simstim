@@ -30,7 +30,11 @@ simstim-capture = { path = "../../../crates/capture" }
 simstim-engine = { path = "../../../crates/engine" }
 simstim-transcript = { path = "../../../crates/transcript" }
 reqwest = { version = "0.13", default-features = false, features = ["stream", "rustls"] }
-tokio = { version = "1", default-features = false, features = ["fs", "io-util"] }
+# "sync" (stage 0.9): retranscribe's FIFO queue uses a `tokio::sync::oneshot`
+# per queued job so a `retranscribe_session` call that gets queued behind
+# another one can still await its OWN job's result once its turn comes,
+# instead of resolving before the job actually ran.
+tokio = { version = "1", default-features = false, features = ["fs", "io-util", "sync"] }
 futures-util = "0.3"
 tar = "0.4"
 bzip2 = "0.4"

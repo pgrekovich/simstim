@@ -32,6 +32,8 @@ const baseConfig: AppConfig = {
   keep_audio: true,
   audio_format: "aac",
   retranscribe_model: "whisper-large-v3-turbo-q8",
+  auto_retranscribe: false,
+  delete_audio_after_retranscribe: false,
 };
 
 beforeEach(() => {

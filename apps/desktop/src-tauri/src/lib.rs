@@ -206,7 +206,7 @@ fn update_active_session(
 }
 
 #[tauri::command]
-fn stop_recording(state: State<AppState>) -> Result<String, String> {
+fn stop_recording(app: AppHandle, state: State<AppState>) -> Result<String, String> {
     let Recording {
         session,
         mic,
@@ -238,7 +238,16 @@ fn stop_recording(state: State<AppState>) -> Result<String, String> {
     *state.finalizing.lock().unwrap() = None;
 
     let path = result.map_err(|e| e.to_string())?;
-    Ok(path.display().to_string())
+    let path = path.display().to_string();
+
+    // Stage 0.9 Global Constraints: fires (fully in the background -- see
+    // `maybe_auto_retranscribe`'s docs) after the session has fully stopped
+    // and been removed from `finalizing` above, never before -- this must
+    // not make `stop_recording` itself any slower.
+    let cfg = Config::load();
+    retranscribe::maybe_auto_retranscribe(app, path.clone(), &cfg);
+
+    Ok(path)
 }
 
 #[tauri::command]
@@ -429,6 +438,8 @@ pub fn run() {
             config::set_theme,
             config::set_keep_audio,
             config::set_audio_format,
+            config::set_auto_retranscribe,
+            config::set_delete_audio_after_retranscribe,
             models::list_models,
             models::download_model,
             models::delete_model,

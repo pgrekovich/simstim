@@ -327,6 +327,76 @@ describe("App: refreshes a re-transcribed session after a background done event 
   });
 });
 
+describe("App: surfaces terminal re-transcribe errors from background jobs (stage 0.9 Task 2 review finding)", () => {
+  it("shows the error message in the header for a session other than the one currently viewed", async () => {
+    // Reproduces the bug: an auto-triggered re-transcribe job is
+    // fire-and-forget (see retranscribe.rs's module docs) and has no other
+    // UI of its own, so its failure (a stale-job drop, a delete-after
+    // failure, a missing model) used to be completely invisible -- the
+    // listener returned early on "error" without ever reading
+    // `payload.message`.
+    const sessions: SessionMeta[] = [
+      { path: "/tmp/viewed.md", title: "Viewed call", date: new Date().toISOString(), duration_secs: null },
+      { path: "/tmp/other.md", title: "Other call", date: new Date().toISOString(), duration_secs: null },
+    ];
+    vi.mocked(ipc.listSessions).mockResolvedValue(sessions);
+    vi.mocked(ipc.readSession).mockResolvedValue({
+      title: "Viewed call",
+      date: "",
+      notes: "",
+      transcript: "[00:00:01] Me: hi",
+      audio_path: null,
+    });
+
+    render(<App />);
+
+    const viewedRow = await screen.findByRole("button", { name: /viewed call/i });
+    fireEvent.click(viewedRow);
+    await waitFor(() => expect(document.body.textContent).toContain("hi"));
+
+    // The failing job belongs to "/tmp/other.md", not the session currently
+    // selected ("/tmp/viewed.md").
+    emit("retranscribe-progress", {
+      path: "/tmp/other.md",
+      phase: "error",
+      channel: null,
+      message: "whisper model not downloaded",
+    });
+
+    await screen.findByText(/whisper model not downloaded/i);
+  });
+
+  it("does not surface the error for the session currently being viewed (avoids double-reporting a manual click's own inline error)", async () => {
+    const sessions: SessionMeta[] = [
+      { path: "/tmp/viewed.md", title: "Viewed call", date: new Date().toISOString(), duration_secs: null },
+    ];
+    vi.mocked(ipc.listSessions).mockResolvedValue(sessions);
+    vi.mocked(ipc.readSession).mockResolvedValue({
+      title: "Viewed call",
+      date: "",
+      notes: "",
+      transcript: "[00:00:01] Me: hi",
+      audio_path: null,
+    });
+
+    render(<App />);
+
+    const viewedRow = await screen.findByRole("button", { name: /viewed call/i });
+    fireEvent.click(viewedRow);
+    await waitFor(() => expect(document.body.textContent).toContain("hi"));
+
+    emit("retranscribe-progress", {
+      path: "/tmp/viewed.md",
+      phase: "error",
+      channel: null,
+      message: "whisper model not downloaded",
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(screen.queryByText(/whisper model not downloaded/i)).not.toBeInTheDocument();
+  });
+});
+
 describe("App: sidebar refresh on model-ready (final review Important finding)", () => {
   it("refreshes the session list exactly once when the model finishes loading, not on every later line", async () => {
     render(<App />);

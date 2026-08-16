@@ -15,6 +15,8 @@ vi.mock("@/lib/ipc", () => ({
   setTheme: vi.fn().mockResolvedValue(undefined),
   setKeepAudio: vi.fn().mockResolvedValue(undefined),
   setAudioFormat: vi.fn().mockResolvedValue(undefined),
+  setAutoRetranscribe: vi.fn().mockResolvedValue(undefined),
+  setDeleteAudioAfterRetranscribe: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("@tauri-apps/api/event", () => ({
@@ -41,6 +43,8 @@ beforeEach(() => {
   vi.mocked(ipc.listModels).mockClear().mockResolvedValue([]);
   vi.mocked(ipc.setKeepAudio).mockClear().mockResolvedValue(undefined);
   vi.mocked(ipc.setAudioFormat).mockClear().mockResolvedValue(undefined);
+  vi.mocked(ipc.setAutoRetranscribe).mockClear().mockResolvedValue(undefined);
+  vi.mocked(ipc.setDeleteAudioAfterRetranscribe).mockClear().mockResolvedValue(undefined);
   vi.mocked(ipc.setActiveModel).mockClear().mockResolvedValue(undefined);
   vi.mocked(ipc.setRetranscribeModel).mockClear().mockResolvedValue(undefined);
   vi.mocked(ipc.deleteModel).mockClear().mockResolvedValue(undefined);
@@ -130,6 +134,118 @@ describe("SettingsDialog: audio format toggle (stage 0.7 format change)", () => 
 
     const flacButton = await screen.findByRole("button", { name: "FLAC" });
     expect(flacButton).toBeDisabled();
+  });
+});
+
+describe("SettingsDialog: auto re-transcribe and audio cleanup toggles (stage 0.9 Task 2)", () => {
+  it("reflects auto_retranscribe and calls setAutoRetranscribe when toggled on", async () => {
+    let persisted = { ...baseConfig };
+    vi.mocked(ipc.getConfig).mockImplementation(async () => ({ ...persisted }));
+    vi.mocked(ipc.setAutoRetranscribe).mockImplementation(async (autoRetranscribe: boolean) => {
+      persisted = { ...persisted, auto_retranscribe: autoRetranscribe };
+    });
+
+    render(<SettingsDialog open onOpenChange={() => {}} />);
+
+    const checkbox = await screen.findByRole("checkbox", {
+      name: /re-transcribe automatically after stopping/i,
+    });
+    expect(checkbox).toHaveAttribute("aria-checked", "false");
+
+    fireEvent.click(checkbox);
+
+    await waitFor(() => expect(ipc.setAutoRetranscribe).toHaveBeenCalledWith(true));
+    await waitFor(() => expect(checkbox).toHaveAttribute("aria-checked", "true"));
+  });
+
+  it("reverts the auto re-transcribe checkbox and shows an inline error when setAutoRetranscribe rejects", async () => {
+    vi.mocked(ipc.setAutoRetranscribe).mockRejectedValueOnce(new Error("disk write failed"));
+
+    render(<SettingsDialog open onOpenChange={() => {}} />);
+
+    const checkbox = await screen.findByRole("checkbox", {
+      name: /re-transcribe automatically after stopping/i,
+    });
+    fireEvent.click(checkbox);
+
+    await waitFor(() => expect(ipc.setAutoRetranscribe).toHaveBeenCalledWith(true));
+    await waitFor(() => expect(checkbox).toHaveAttribute("aria-checked", "false"));
+    await screen.findByText(/disk write failed/i);
+  });
+
+  it("reflects delete_audio_after_retranscribe and calls setDeleteAudioAfterRetranscribe when toggled on", async () => {
+    let persisted = { ...baseConfig };
+    vi.mocked(ipc.getConfig).mockImplementation(async () => ({ ...persisted }));
+    vi.mocked(ipc.setDeleteAudioAfterRetranscribe).mockImplementation(async (deleteAudioAfter: boolean) => {
+      persisted = { ...persisted, delete_audio_after_retranscribe: deleteAudioAfter };
+    });
+
+    render(<SettingsDialog open onOpenChange={() => {}} />);
+
+    const checkbox = await screen.findByRole("checkbox", {
+      name: /delete the audio after re-transcribing/i,
+    });
+    expect(checkbox).toHaveAttribute("aria-checked", "false");
+
+    fireEvent.click(checkbox);
+
+    await waitFor(() => expect(ipc.setDeleteAudioAfterRetranscribe).toHaveBeenCalledWith(true));
+    await waitFor(() => expect(checkbox).toHaveAttribute("aria-checked", "true"));
+  });
+
+  it("reverts the delete-audio checkbox and shows an inline error when setDeleteAudioAfterRetranscribe rejects", async () => {
+    vi.mocked(ipc.setDeleteAudioAfterRetranscribe).mockRejectedValueOnce(new Error("disk write failed"));
+
+    render(<SettingsDialog open onOpenChange={() => {}} />);
+
+    const checkbox = await screen.findByRole("checkbox", {
+      name: /delete the audio after re-transcribing/i,
+    });
+    fireEvent.click(checkbox);
+
+    await waitFor(() => expect(ipc.setDeleteAudioAfterRetranscribe).toHaveBeenCalledWith(true));
+    await waitFor(() => expect(checkbox).toHaveAttribute("aria-checked", "false"));
+    await screen.findByText(/disk write failed/i);
+  });
+
+  it("renders the delete toggle's irreversibility copy plainly, for every re-transcribe not just automatic", async () => {
+    render(<SettingsDialog open onOpenChange={() => {}} />);
+
+    await screen.findByText(/removes the recording once a re-transcribe succeeds/i);
+    await screen.findByText(/manual or automatic/i);
+    await screen.findByText(/can never be re-transcribed again/i);
+  });
+
+  it("disables both toggles and shows a muted note when keep_audio is off", async () => {
+    vi.mocked(ipc.getConfig).mockResolvedValue({ ...baseConfig, keep_audio: false });
+
+    render(<SettingsDialog open onOpenChange={() => {}} />);
+
+    const autoCheckbox = await screen.findByRole("checkbox", {
+      name: /re-transcribe automatically after stopping/i,
+    });
+    const deleteCheckbox = await screen.findByRole("checkbox", {
+      name: /delete the audio after re-transcribing/i,
+    });
+    expect(autoCheckbox).toBeDisabled();
+    expect(deleteCheckbox).toBeDisabled();
+
+    const notes = screen.getAllByText(/needs call audio/i);
+    expect(notes).toHaveLength(2);
+  });
+
+  it("enables both toggles when keep_audio is on", async () => {
+    render(<SettingsDialog open onOpenChange={() => {}} />);
+
+    const autoCheckbox = await screen.findByRole("checkbox", {
+      name: /re-transcribe automatically after stopping/i,
+    });
+    const deleteCheckbox = await screen.findByRole("checkbox", {
+      name: /delete the audio after re-transcribing/i,
+    });
+    expect(autoCheckbox).not.toBeDisabled();
+    expect(deleteCheckbox).not.toBeDisabled();
+    expect(screen.queryByText(/needs call audio/i)).not.toBeInTheDocument();
   });
 });
 

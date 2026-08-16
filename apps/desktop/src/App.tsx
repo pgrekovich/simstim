@@ -226,9 +226,41 @@ function App() {
   // practice there's only ever one job, so a mismatch shouldn't happen).
   useEffect(() => {
     const unlisten = listen<RetranscribeProgress>("retranscribe-progress", (event) => {
-      const { path, phase } = event.payload;
+      const { path, phase, message } = event.payload;
       if (phase === "done" || phase === "error") {
         setRetranscribingJob((prev) => (prev?.path === path ? null : prev));
+        // Review finding (stage 0.9 Task 2): this listener used to return
+        // early on "error" without ever reading `message`, so an
+        // auto-triggered job's failure (a stale-job drop on revalidation, a
+        // delete-after-retranscribe failure, a model that went missing) had
+        // no UI at all -- auto jobs are fire-and-forget (see
+        // retranscribe.rs's module docs), so `retranscribe-progress` is the
+        // only signal they ever produce. Surface it through the header's
+        // existing error status rather than a separate toast.
+        //
+        // Only for a session the user ISN'T currently looking at
+        // (`path !== selectedPath`): a MANUAL click's failure already
+        // surfaces inline in the SessionView instance that made the call
+        // (its own `retranscribeError` state, set from the rejected
+        // `retranscribeSession` promise -- see SessionView's
+        // `handleRetranscribe`), so reporting it again here too would show
+        // the same failure twice on screen. Skipping the currently-selected
+        // path covers that case without needing to know whether this
+        // particular event was manually or automatically triggered.
+        //
+        // Also skip while the header is showing a live recording: an auto
+        // job only ever starts once ITS OWN recording has already stopped
+        // (Global Constraints), so in practice this can't race a recording
+        // of the same session -- but the header status is global, not
+        // per-session, so a background job for some OTHER session finishing
+        // while a DIFFERENT recording is genuinely in progress is at least
+        // theoretically possible, and clobbering "recording" with an
+        // unrelated background failure would be worse than staying quiet.
+        if (phase === "error" && path !== selectedPath) {
+          setStatus((prev) =>
+            prev.kind === "recording" ? prev : { kind: "error", message: message ?? "re-transcribe failed" }
+          );
+        }
         // Minor fix-review finding: a SessionView only re-seeds its local
         // `transcript` state from `initialData` on mount (see its class doc
         // comment) -- the instance that actually clicked "Re-transcribe"

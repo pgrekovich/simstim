@@ -20,6 +20,8 @@ import {
   listModels,
   setActiveModel,
   setAudioFormat,
+  setAutoRetranscribe,
+  setDeleteAudioAfterRetranscribe,
   setKeepAudio,
   setOutputDir,
   setRetranscribeModel,
@@ -142,6 +144,8 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
   const [folderError, setFolderError] = useState<string | null>(null);
   const [keepAudioError, setKeepAudioError] = useState<string | null>(null);
   const [audioFormatError, setAudioFormatError] = useState<string | null>(null);
+  const [autoRetranscribeError, setAutoRetranscribeError] = useState<string | null>(null);
+  const [deleteAudioAfterError, setDeleteAudioAfterError] = useState<string | null>(null);
   const [retranscribeError, setRetranscribeError] = useState<string | null>(null);
   const [progress, setProgress] = useState<Record<string, DownloadProgress>>({});
   const [busyIds, setBusyIds] = useState<Set<string>>(new Set());
@@ -289,6 +293,45 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
     } catch (err) {
       setConfig((prev) => (prev ? { ...prev, audio_format: previous } : prev));
       setAudioFormatError(String(err));
+    }
+  }
+
+  /**
+   * Toggles whether `stop_recording` auto-queues a re-transcribe job for the
+   * session that just stopped (stage 0.9). Same optimistic-update-with-
+   * rollback pattern as `handleSetKeepAudio`/`handleSetAudioFormat`: only
+   * ever offered while `keep_audio` is on (see the Checkbox's `disabled`
+   * prop below), but the backend re-checks that too.
+   */
+  async function handleSetAutoRetranscribe(autoRetranscribe: boolean) {
+    const previous = config?.auto_retranscribe;
+    if (previous === undefined || autoRetranscribe === previous) return;
+    setAutoRetranscribeError(null);
+    setConfig((prev) => (prev ? { ...prev, auto_retranscribe: autoRetranscribe } : prev));
+    try {
+      await setAutoRetranscribe(autoRetranscribe);
+    } catch (err) {
+      setConfig((prev) => (prev ? { ...prev, auto_retranscribe: previous } : prev));
+      setAutoRetranscribeError(String(err));
+    }
+  }
+
+  /**
+   * Toggles whether a successful re-transcribe (manual or automatic, per
+   * Global Constraints) deletes the session's audio afterward (stage 0.9).
+   * Same optimistic-update-with-rollback pattern as the other rows in this
+   * section.
+   */
+  async function handleSetDeleteAudioAfterRetranscribe(deleteAudioAfter: boolean) {
+    const previous = config?.delete_audio_after_retranscribe;
+    if (previous === undefined || deleteAudioAfter === previous) return;
+    setDeleteAudioAfterError(null);
+    setConfig((prev) => (prev ? { ...prev, delete_audio_after_retranscribe: deleteAudioAfter } : prev));
+    try {
+      await setDeleteAudioAfterRetranscribe(deleteAudioAfter);
+    } catch (err) {
+      setConfig((prev) => (prev ? { ...prev, delete_audio_after_retranscribe: previous } : prev));
+      setDeleteAudioAfterError(String(err));
     }
   }
 
@@ -492,6 +535,56 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
               </div>
             </div>
             {keepAudioError && <span className="text-xs text-destructive">{keepAudioError}</span>}
+
+            {/* Stage 0.9: both toggles below only ever do anything while
+                `keep_audio` is on (re-transcribing needs the audio file in
+                the first place), so both are disabled with a muted "Needs
+                call audio" note when it's off, matching the audio-format
+                controls' own gating just above. */}
+            <div className="flex items-start gap-2 pt-2">
+              <Checkbox
+                id="auto-retranscribe"
+                checked={config?.auto_retranscribe ?? false}
+                disabled={!config || !config.keep_audio}
+                onCheckedChange={(checked) => handleSetAutoRetranscribe(checked === true)}
+              />
+              <div className="flex flex-col gap-0.5">
+                <Label htmlFor="auto-retranscribe">Re-transcribe automatically after stopping</Label>
+                <span className="text-xs text-muted-foreground">
+                  Runs the selected whisper model on the finished call in the background.
+                </span>
+                {config && !config.keep_audio && (
+                  <span className="text-xs text-muted-foreground">Needs call audio</span>
+                )}
+              </div>
+            </div>
+            {autoRetranscribeError && (
+              <span className="text-xs text-destructive">{autoRetranscribeError}</span>
+            )}
+
+            <div className="flex items-start gap-2 pt-2">
+              <Checkbox
+                id="delete-audio-after-retranscribe"
+                checked={config?.delete_audio_after_retranscribe ?? false}
+                disabled={!config || !config.keep_audio}
+                onCheckedChange={(checked) => handleSetDeleteAudioAfterRetranscribe(checked === true)}
+              />
+              <div className="flex flex-col gap-0.5">
+                <Label htmlFor="delete-audio-after-retranscribe">
+                  Delete the audio after re-transcribing
+                </Label>
+                <span className="text-xs text-muted-foreground">
+                  Removes the recording once a re-transcribe succeeds - manual or automatic, it
+                  always applies - and that call can never be re-transcribed again.
+                </span>
+                {config && !config.keep_audio && (
+                  <span className="text-xs text-muted-foreground">Needs call audio</span>
+                )}
+              </div>
+            </div>
+            {deleteAudioAfterError && (
+              <span className="text-xs text-destructive">{deleteAudioAfterError}</span>
+            )}
 
             <div className="flex flex-col gap-1.5 pt-1">
               <Label>Audio format</Label>

@@ -143,6 +143,8 @@ Status (2026-08-16): stage 0.7 shipped: call audio kept as a stereo FLAC next to
 
 Status (2026-08-16): stage 0.8 shipped: model roles (live vs re-transcribe), a curated two-model re-transcribe lineup (Whisper turbo, Whisper large-v3) with in-app selection, model deletion with confirmation and real on-disk sizes. Two earlier whisper variants are retired (owner's ruling): kept resolvable only so an already-downloaded copy stays visible for deletion, never downloadable or selectable again.
 
+Status (2026-08-16): stage 0.9 shipped: two owner-requested settings, both off by default - re-transcribe automatically once a recording stops, and delete the call's audio once a re-transcribe succeeds (manual or automatic, irreversible). Re-transcribe jobs now queue FIFO instead of rejecting a second request while one is already running.
+
 ## Stage 0.6: the shell (approved 2026-08-15)
 
 Pivot from "process control panel" to "notes app where recording is a side

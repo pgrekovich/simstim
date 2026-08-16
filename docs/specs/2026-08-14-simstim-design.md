@@ -12,8 +12,9 @@ calls in real time and saves them as plain `.md` files in a folder the user
 owns. The file system is the database. Want to share? Push the file anywhere.
 Want insights? Point Claude Code / any agent at the folder.
 
-Explicit counter-positioning, based on prior-art research (see
-`docs/research/` summaries below):
+Explicit counter-positioning, based on prior-art research (full write-up in
+`docs/research/prior-art.md`; technology choices and their measurements in
+`docs/research/tech-choices.md`):
 
 - **Granola**: great UX, but audio streams to cloud ASR (Deepgram/AssemblyAI),
   notes live on their AWS, training-on-by-default, currently facing a wiretap

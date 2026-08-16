@@ -63,6 +63,17 @@ The audio file lives right next to the `.md` (same basename, `.m4a` or `.flac` e
 
 A measured codec benchmark on real call audio settled this: AAC at 32 kbps, forced to 16 kHz, is ~17 MB/hour at 3.8% word-error-rate versus lossless; FLAC is ~137 MB/hour at 0% WER. Raising the AAC bitrate doesn't recover accuracy (64 kbps measured 4.3% WER, worse, not better), so 32 kbps is the setting, not a corner cut. AAC is the default; FLAC stays available in Settings > Audio format for anyone who wants zero transcription-quality cost from the codec itself. Switching formats only affects future recordings; continuing an existing session re-encodes its whole audio (old + new) in whatever format is currently selected, so a session never ends up split across two audio files.
 
+## Models
+
+Parakeet runs the live recording and is not switchable. Whisper models are for the Re-transcribe action and can be picked in Settings > Models. Four whisper options exist:
+
+- Whisper turbo q5 (574 MB)
+- Whisper turbo q8 (874 MB, default)
+- Whisper large-v3 q5 (1.08 GB)
+- Whisper large-v3 (3.1 GB)
+
+Turbo is faster: about 12x realtime measured on an M1 Max for turbo q8; a 30-minute call takes about 2.5 minutes. Non-turbo large-v3 is slower but usually better on non-English. Models can be deleted from the same screen to reclaim disk (shows real on-disk sizes).
+
 ## Status
 
 stage 0.7 shipped: call audio kept next to the transcript as AAC by default or FLAC as an opt-in (mic = left/Me, system = right/Them, configurable via Settings > Audio format), whisper large-v3-turbo re-transcribe pass for better quality (especially Russian), click-to-seek playback on transcript lines. Known gaps: no meeting detection yet, no menu bar/hotkeys.

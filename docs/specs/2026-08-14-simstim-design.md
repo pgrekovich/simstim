@@ -141,6 +141,8 @@ Status (2026-08-15): stage 0.6 shipped: Anarlog-style shell (folder-backed sideb
 
 Status (2026-08-16): stage 0.7 shipped: call audio kept as a stereo FLAC next to the transcript (configurable, default on), whisper large-v3-turbo re-transcribe pass (12x realtime, replaces the transcript outright), click-to-seek audio playback on transcript lines.
 
+Status (2026-08-16): stage 0.8 shipped: model roles (live vs re-transcribe), four whisper options with in-app selection, model deletion with confirmation and real on-disk sizes.
+
 ## Stage 0.6: the shell (approved 2026-08-15)
 
 Pivot from "process control panel" to "notes app where recording is a side
@@ -201,6 +203,12 @@ has no "ё" at all (hard architectural exclusion, not a tuning issue).
   the model file is a download either way.
 
 Out of 0.7: meeting detection, tray, hotkeys, enhance, calendar.
+
+## Known issues
+
+- Whisper segment timestamps after a re-transcribe are sometimes off; the owner reviewed this and accepted it rather than chase it. Cause: whisper's segment boundaries are approximate and merging two independently transcribed channels compounds the drift.
+- Compression costs about 4 percent WER versus lossless (measured on English/German/French/Spanish; Russian unmeasured). AAC 32 kbps is the default because raising the bitrate does not recover that accuracy (AAC 64k measured at 4.3 percent vs 3.8 percent for 32k), so the real choice is lossless or not.
+- Continuing a recording into a note whose audio is in the other format re-encodes the combined audio into the current format.
 
 ## Milestones after MVP-0
 

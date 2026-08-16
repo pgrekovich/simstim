@@ -382,9 +382,29 @@ fn encode_flac(wav_path: &Path, flac_path: &Path) -> anyhow::Result<()> {
     // STREAMINFO's min_block_size == max_block_size unconditionally,
     // sidestepping the inconsistent encoding entirely rather than special-
     // casing which decoders tolerate it. At most `block_size - 1` samples
-    // (under 256ms at 16kHz) of inaudible digital silence, distinct from the
-    // sync rule's own silence padding above (a FLAC container/decoder
+    // (4095 at 16 kHz, roughly 256ms) of inaudible digital silence, distinct
+    // from the sync rule's own silence padding above (a FLAC container/decoder
     // compatibility concern, not a channel-sync one).
+    //
+    // ACCUMULATION WHEN CONTINUING: Each call to `finish()` pads one trailing
+    // block. In a session that is continued N times, the final file contains
+    // the audio from all N segments plus N-1 padding seams (one after each of
+    // the first N-1 segments, N-1 * up-to-256ms of silence). The sync offset
+    // is still exact (derived from the actual, finally decoded sample count,
+    // not an estimate), so this is a pure size/fidelity cost, not a timing
+    // bug. It is accepted rather than stripped because reliably detecting and
+    // removing the padding would require heuristics (reverse-engineering
+    // flacenc's block boundaries from decoded silence), risking data loss if
+    // real audio happens to be near-silent at the boundary.
+    //
+    // ALTERNATIVE NOT TAKEN: instead of padding, we could patch the STREAMINFO
+    // min/max block-size fields after encoding to declare a fixed block size
+    // (what libFLAC does for fixed-blocksize streams, where a short final frame
+    // is normal). The trade-off was simplicity and robustness: padding needs no
+    // bit-level file surgery and is verified end-to-end against the real macOS
+    // decoder. If the accumulated silence ever matters in practice, the patch
+    // approach is the escape hatch -- it requires only the STREAMINFO edits, no
+    // decoder changes.
     let total_frames = samples.len() / channels;
     if total_frames > 0 {
         let remainder = total_frames % block_size;
@@ -496,14 +516,15 @@ fn stream_prefill_m4a(
 ///
 /// Note: if the old file's own trailing block needed [`encode_flac`]'s
 /// full-block silence padding (see that function's docs), this reads that
-/// padding back too and carries it into the new recording verbatim -- at
-/// most `block_size - 1` frames (under 256ms at 16kHz), inaudible and
-/// already a documented property of these files, not something this
-/// prefill step introduces. Not worth stripping: doing so reliably would
-/// mean reverse-engineering flacenc's own block-boundary decisions from the
+/// padding back too and carries it into the new recording verbatim -- up to
+/// `block_size - 1` samples (4095 at 16 kHz, roughly 256ms), inaudible and
+/// already a documented property of these files, not something this prefill
+/// step introduces. Not worth stripping: doing so reliably would mean
+/// reverse-engineering flacenc's own block-boundary decisions from the
 /// decoded samples, real audio can legitimately end in near-silence too, and
 /// the cost of getting the heuristic wrong (clipping real trailing audio) is
-/// worse than a couple of milliseconds of harmless extra silence.
+/// worse than carrying the known padding forward. When continuing a session,
+/// this padding accumulates at the seams (see [`encode_flac`]'s docs).
 fn stream_prefill_flac(
     writer: &mut hound::WavWriter<BufWriter<File>>,
     path: &Path,

@@ -211,6 +211,7 @@ Out of 0.7: meeting detection, tray, hotkeys, enhance, calendar.
 - Whisper segment timestamps after a re-transcribe are sometimes off; the owner reviewed this and accepted it rather than chase it. Cause: whisper's segment boundaries are approximate and merging two independently transcribed channels compounds the drift.
 - Compression costs about 4 percent WER versus lossless (measured on English/German/French/Spanish; Russian unmeasured). AAC 32 kbps is the default because raising the bitrate does not recover that accuracy (AAC 64k measured at 4.3 percent vs 3.8 percent for 32k), so the real choice is lossless or not.
 - Continuing a recording into a note whose audio is in the other format re-encodes the combined audio into the current format.
+- FLAC block padding accumulates at seams when continuing a session: each segment's trailing block pads to up to 256ms of silence, so N continuations add up to N-1 seams of padding (accepted as a size cost, exact sync is preserved).
 
 ## Milestones after MVP-0
 

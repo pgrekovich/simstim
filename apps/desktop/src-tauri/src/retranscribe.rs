@@ -302,51 +302,62 @@ fn try_enqueue<R: tauri::Runtime>(app: &AppHandle<R>, path: &str, job: QueuedJob
     outcome
 }
 
+/// Promotes the next runnable path off the FIFO queue, if any, skipping
+/// (and immediately re-advancing past) any promoted path with no stored
+/// `QueuedJob` data -- belt-and-suspenders for the Important fix-review
+/// finding, stage 0.9: this should never happen now that `try_enqueue`
+/// stores a job atomically with the enqueue decision, but a promoted path
+/// with nothing to run it with must be treated as already finished and
+/// skipped, rather than left wedged in `running` forever with nothing ever
+/// draining the rest of the queue behind it.
+///
+/// The whole skip-loop runs under ONE lock acquisition (a single `inner`
+/// guard, not re-locked per iteration) so a path can never be promoted,
+/// found missing, and looked up again inconsistently. Deliberately free of
+/// any spawning or awaiting -- `advance_queue` (the only real caller) is
+/// what turns this into a detached continuation; kept as its own function so
+/// the promote-and-skip decision is unit-testable synchronously, without a
+/// spawned task racing the test's own assertions (fix-review finding: the
+/// original test here span its OWN `run_job` for a garbage-fixture path,
+/// whose fast-failing continuation raced this function's second call against
+/// the test's synchronous check of `queue.running`).
+fn dequeue_next_runnable<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<(String, QueuedJob)> {
+    let jobs_state = app.state::<RetranscribeState>();
+    let mut inner = jobs_state.0.lock().unwrap();
+    loop {
+        let next_path = inner.queue.finish_and_advance()?;
+        if let Some(job) = inner.jobs.remove(&next_path) {
+            return Some((next_path, job));
+        }
+        // No stored data for this promoted path -- keep looping rather than
+        // returning `None` (which `advance_queue` would otherwise treat as
+        // "queue empty", stopping the drain early even though `pending` may
+        // still hold more real work behind it).
+    }
+}
+
 /// Called at the tail of every job, success or failure (mirrors the
 /// pre-queue code's "always release the job slot, even if the blocking task
-/// panicked" comment -- this still does that, via `finish_and_advance`, and
-/// now also starts whatever comes next): advances the FIFO queue, and if
-/// there's a next path, spawns its job in the background, forwarding the
-/// result to its waiter (if it has one -- see [`QueuedJob::waiter`]'s doc
-/// comment) once it finishes.
+/// panicked" comment -- this still does that, via [`dequeue_next_runnable`],
+/// and now also starts whatever comes next): advances the FIFO queue via
+/// [`dequeue_next_runnable`], and if there's a next runnable path, spawns its
+/// job in the background, forwarding the result to its waiter (if it has one
+/// -- see [`QueuedJob::waiter`]'s doc comment) once it finishes.
 ///
 /// Runs detached (`tauri::async_runtime::spawn`, not awaited) regardless of
 /// whether THIS call came from an already-detached context or from a
 /// directly-awaited one: the caller (`run_job`) must not block its own
 /// return on however long the ENTIRE rest of the queue takes to drain.
 fn advance_queue<R: tauri::Runtime>(app: AppHandle<R>) {
-    loop {
-        let jobs_state = app.state::<RetranscribeState>();
-        let next_path = {
-            let mut inner = jobs_state.0.lock().unwrap();
-            inner.queue.finish_and_advance()
-        };
-        let Some(next_path) = next_path else {
-            return;
-        };
-        let job = {
-            let mut inner = jobs_state.0.lock().unwrap();
-            inner.jobs.remove(&next_path)
-        };
-        let Some(job) = job else {
-            // Belt-and-suspenders (Important fix-review finding, stage
-            // 0.9): should never happen now that `try_enqueue` stores the
-            // job atomically with the enqueue decision, but if a promoted
-            // path still somehow has no data for it, there is nothing
-            // sensible to run it with. Treat it as already finished (it
-            // never actually ran) and advance again, rather than returning
-            // and leaving it wedged as `running` forever -- the exact
-            // failure mode this whole fix exists to close.
-            continue;
-        };
-        tauri::async_runtime::spawn(async move {
-            let result = run_job(app, next_path, job.md_path, job.asr_id, job.delete_audio_after).await;
-            if let Some(waiter) = job.waiter {
-                let _ = waiter.send(result);
-            }
-        });
+    let Some((next_path, job)) = dequeue_next_runnable(&app) else {
         return;
-    }
+    };
+    tauri::async_runtime::spawn(async move {
+        let result = run_job(app, next_path, job.md_path, job.asr_id, job.delete_audio_after).await;
+        if let Some(waiter) = job.waiter {
+            let _ = waiter.send(result);
+        }
+    });
 }
 
 /// Re-validates a job immediately before it actually starts running --
@@ -1731,20 +1742,23 @@ mod tests {
         use super::*;
         use crate::config::DEFAULT_RETRANSCRIBE_MODEL;
 
+        /// Fix-review finding: the original version of this test drove the
+        /// production `advance_queue` (which spawns `run_job` for whatever it
+        /// promotes) against a garbage fixture path with no paired audio, so
+        /// the spawned continuation failed fast in `revalidate_before_run`
+        /// and called `advance_queue` a SECOND time on its own error path --
+        /// racing that recursive call's `queue.running = None` reset against
+        /// this test's own synchronous assertion, flaky roughly 1 in 20 runs.
+        /// Testing [`dequeue_next_runnable`] directly instead of
+        /// `advance_queue` exercises the exact same promote-and-skip decision
+        /// with zero spawning and zero async continuation to race: the
+        /// assertions below run against state this function alone already
+        /// finished mutating, synchronously, before it returns.
         #[test]
-        fn skips_a_promoted_path_with_no_job_data_and_advances_to_the_next_one() {
+        fn skips_a_path_with_no_job_data_and_returns_the_next_real_one() {
             let app = tauri::test::mock_app();
-            app.manage(AppState::default());
             app.manage(RetranscribeState::default());
             let handle = app.handle().clone();
-
-            let dir = tempfile::tempdir().unwrap();
-            let real_path = dir.path().join("real.md");
-            std::fs::write(
-                &real_path,
-                "---\ndate: 2026-06-01T09:00:00+02:00\nasr: parakeet-tdt-0.6b-v3\n---\n\n## Transcript\n\n[00:00:01] Me: hi\n",
-            )
-            .unwrap();
 
             {
                 let jobs = handle.state::<RetranscribeState>();
@@ -1756,11 +1770,11 @@ mod tests {
                 // this belt-and-suspenders check must still recover from it
                 // if it somehow happens.
                 inner.queue.pending.push_back("/tmp/missing-data.md".to_string());
-                inner.queue.pending.push_back(real_path.display().to_string());
+                inner.queue.pending.push_back("/tmp/real.md".to_string());
                 inner.jobs.insert(
-                    real_path.display().to_string(),
+                    "/tmp/real.md".to_string(),
                     QueuedJob {
-                        md_path: real_path.clone(),
+                        md_path: PathBuf::from("/tmp/real.md"),
                         asr_id: DEFAULT_RETRANSCRIBE_MODEL.to_string(),
                         delete_audio_after: false,
                         waiter: None,
@@ -1768,24 +1782,55 @@ mod tests {
                 );
             }
 
-            advance_queue(handle.clone());
+            let promoted = dequeue_next_runnable(&handle);
 
-            // The promotion/skip/re-promotion all happen synchronously
-            // inside `advance_queue`, before it ever returns -- the actual
-            // `run_job` it spawns for `real_path` hasn't necessarily run yet,
-            // but the queue state change is already visible here.
+            assert_eq!(
+                promoted.as_ref().map(|(path, _)| path.as_str()),
+                Some("/tmp/real.md"),
+                "must skip the path with no job data and return the next real one instead \
+                 of getting stuck on it"
+            );
+
             let state = handle.state::<RetranscribeState>();
             let inner = state.0.lock().unwrap();
             assert_eq!(
                 inner.queue.running.as_deref(),
-                Some(real_path.display().to_string().as_str()),
-                "the queue must skip the path with no job data and promote the \
-                 next real one instead of getting stuck on it"
+                Some("/tmp/real.md"),
+                "the queue's own running slot must reflect the same promotion"
             );
+            assert!(inner.queue.pending.is_empty());
             assert!(
                 !inner.jobs.contains_key("/tmp/missing-data.md"),
                 "the missing-data path was never actually stored to begin with"
             );
+            assert!(
+                !inner.jobs.contains_key("/tmp/real.md"),
+                "the returned job's data must be removed from `jobs`, not left behind"
+            );
+        }
+
+        #[test]
+        fn returns_none_when_every_promoted_path_is_missing_job_data() {
+            let app = tauri::test::mock_app();
+            app.manage(RetranscribeState::default());
+            let handle = app.handle().clone();
+
+            {
+                let jobs = handle.state::<RetranscribeState>();
+                let mut inner = jobs.0.lock().unwrap();
+                inner.queue.running = Some("/tmp/just-finished.md".to_string());
+                inner.queue.pending.push_back("/tmp/missing-a.md".to_string());
+                inner.queue.pending.push_back("/tmp/missing-b.md".to_string());
+                // No `jobs` entries for either -- the queue is left with
+                // nothing runnable, which must resolve to `None`, not a
+                // panic or an infinite loop.
+            }
+
+            assert!(dequeue_next_runnable(&handle).is_none());
+
+            let state = handle.state::<RetranscribeState>();
+            let inner = state.0.lock().unwrap();
+            assert_eq!(inner.queue.running, None, "nothing left to run, so `running` must clear");
         }
     }
 
@@ -1889,6 +1934,24 @@ mod tests {
         /// Constraints from Task 1: "a failed job still drains the queue",
         /// now also true for a job dropped by revalidation rather than one
         /// that ran and failed).
+        /// Fix-review finding: this test used to assert on `queue.running`
+        /// immediately after `run_job(bad_path)` returned, expecting to see
+        /// `"/tmp/next.md"` promoted into it. But `/tmp/next.md` doesn't
+        /// exist either, so the SAME `advance_queue` mechanism promotes and
+        /// spawns a continuation for it too -- one that runs concurrently
+        /// (`tauri::async_runtime::spawn`, a real background task, not
+        /// merely a not-yet-polled future on the same thread) and, once
+        /// ITS OWN revalidation fails, resets `queue.running` back to `None`
+        /// via its own `advance_queue` call. Whether that reset had already
+        /// landed by the time this test's assertion ran was a genuine
+        /// multi-threaded race (reproduced ~1 in 20 runs), not a
+        /// single-threaded scheduling question a `--test-threads=1` rerun
+        /// would have caught. Giving `"/tmp/next.md"`'s `QueuedJob` a
+        /// `waiter` and awaiting it makes the whole cascade deterministic:
+        /// by the time this test inspects anything, next.md's own
+        /// (also-doomed) continuation has definitely already finished and
+        /// reported through the channel, so every assertion below is against
+        /// fully-settled state instead of racing a concurrent mutation.
         #[test]
         fn drains_to_the_next_queued_path_after_dropping_a_stale_one() {
             let app = tauri::test::mock_app();
@@ -1901,6 +1964,7 @@ mod tests {
             std::fs::write(&bad_path, FIXTURE).unwrap();
             // No audio for `bad_path` -- it will be dropped by revalidation.
 
+            let (next_tx, next_rx) = oneshot::channel();
             {
                 let jobs = handle.state::<RetranscribeState>();
                 let mut inner = jobs.0.lock().unwrap();
@@ -1912,25 +1976,43 @@ mod tests {
                         md_path: PathBuf::from("/tmp/next.md"),
                         asr_id: DEFAULT_RETRANSCRIBE_MODEL.to_string(),
                         delete_audio_after: false,
-                        waiter: None,
+                        waiter: Some(next_tx),
                     },
                 );
             }
 
-            let result = tauri::async_runtime::block_on(run_job(
-                handle.clone(),
-                bad_path.display().to_string(),
-                bad_path.clone(),
-                DEFAULT_RETRANSCRIBE_MODEL.to_string(),
-                false,
-            ));
-            assert!(result.is_err());
+            let (bad_result, next_result) = tauri::async_runtime::block_on(async {
+                let bad_result = run_job(
+                    handle.clone(),
+                    bad_path.display().to_string(),
+                    bad_path.clone(),
+                    DEFAULT_RETRANSCRIBE_MODEL.to_string(),
+                    false,
+                )
+                .await;
+                // Waits for next.md's own promoted continuation to fully
+                // finish -- see the doc comment above for why this is what
+                // makes the rest of this test deterministic.
+                let next_result = next_rx.await;
+                (bad_result, next_result)
+            });
 
-            assert_eq!(
-                handle.state::<RetranscribeState>().0.lock().unwrap().queue.running.as_deref(),
-                Some("/tmp/next.md"),
-                "the next queued path must be promoted, not just cleared"
+            assert!(bad_result.is_err());
+            let next_result = next_result.expect(
+                "next.md's job must actually have been promoted and run -- \
+                 the waiter channel must not have been dropped without sending",
             );
+            assert!(
+                next_result.is_err(),
+                "next.md doesn't exist either, so its own promoted run must also fail cleanly"
+            );
+
+            // Both doomed jobs have now fully drained: nothing left running
+            // or queued.
+            let state = handle.state::<RetranscribeState>();
+            let inner = state.0.lock().unwrap();
+            assert_eq!(inner.queue.running, None);
+            assert!(inner.queue.pending.is_empty());
         }
     }
 

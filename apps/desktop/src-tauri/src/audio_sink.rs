@@ -83,8 +83,12 @@ pub fn audio_path_for(md_path: &Path) -> PathBuf {
 }
 
 /// The `.wav` sibling: the in-progress file while a sink is recording,
-/// deleted once [`AudioSink::finish`] successfully encodes the FLAC.
-fn wav_path_for(md_path: &Path) -> PathBuf {
+/// deleted once [`AudioSink::finish`] successfully encodes the FLAC -- unless
+/// the encode itself fails, in which case `finish` deliberately keeps the wav
+/// instead of losing the audio (see `finish`'s docs). `pub(crate)` (rather
+/// than private) so `retranscribe.rs` can fall back to decoding this file
+/// when a session has no `.flac` for exactly that reason.
+pub(crate) fn wav_path_for(md_path: &Path) -> PathBuf {
     md_path.with_extension("wav")
 }
 

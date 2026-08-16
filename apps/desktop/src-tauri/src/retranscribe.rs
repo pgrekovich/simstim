@@ -4,16 +4,26 @@
 //!
 //! ## What a re-transcribe does
 //!
-//! Per the stage-0.7 Global Constraints: decode the session's `.flac`
-//! sibling (left channel = Me, right = Them), transcribe each channel with
-//! whisper, merge the two channels' segments into one list sorted by start
-//! time, format them exactly like the live pipeline's own
-//! `[hh:mm:ss] Who: text` lines, and REWRITE the `## Transcript` section
-//! with that text -- replacing it outright, never merging with what was
-//! there before (the owner's ruling: the app never edits transcripts, so a
-//! re-transcribe is a wholesale replacement or nothing). Title, notes, date
-//! and duration are preserved exactly (`sessions::rewrite_transcript_at`),
-//! and `asr:` is updated to the whisper model's id.
+//! Per the stage-0.7 Global Constraints: decode the session's audio (the
+//! `.flac` sibling normally, falling back to a `.wav` sibling if the flac
+//! encode step failed and `AudioSink::finish` kept the wav instead -- see
+//! `resolve_audio_path`), left channel = Me, right channel = Them,
+//! transcribe each channel with whisper, merge the two channels' segments
+//! into one list sorted by start time, format them exactly like the live
+//! pipeline's own `[hh:mm:ss] Who: text` lines, and REWRITE the
+//! `## Transcript` section with that text -- replacing it outright, never
+//! merging with what was there before (the owner's ruling: the app never
+//! edits transcripts, so a re-transcribe is a wholesale replacement or
+//! nothing). Title, notes, date and duration are preserved exactly
+//! (`sessions::rewrite_transcript_at`), and `asr:` is updated to the whisper
+//! model's id.
+//!
+//! An empty result (whisper found no speech on either channel -- a quiet
+//! recording, a bad split, a decode glitch) is treated as a failure, not a
+//! successful "replace with nothing": see `finalize_transcript`'s guard.
+//! Given the section above (no previous text kept once a new pass runs),
+//! writing an empty transcript would otherwise silently destroy the user's
+//! only copy of it.
 //!
 //! ## Rejections
 //!
@@ -64,7 +74,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use simstim_engine::{WhisperEngine, WhisperSegment};
 use simstim_transcript::Speaker;
 
-use crate::audio_sink::audio_path_for;
+use crate::audio_sink::{audio_path_for, wav_path_for};
 use crate::models::{self, ModelLayout};
 use crate::sessions;
 use crate::AppState;
@@ -219,6 +229,65 @@ fn decode_flac_stereo(path: &Path) -> Result<(Vec<f32>, Vec<f32>)> {
     Ok((me, them))
 }
 
+/// Decodes a stereo `.wav` (the same layout `AudioSink` writes while
+/// recording, and the fallback `finish` keeps if the FLAC encode step
+/// fails) into independent f32 mono streams (left = Me, right = Them),
+/// scaled the same way [`decode_flac_stereo`] is (1/32768) so both feed
+/// whisper identically regardless of which file was actually available.
+fn decode_wav_stereo(path: &Path) -> Result<(Vec<f32>, Vec<f32>)> {
+    let mut reader = hound::WavReader::open(path)
+        .with_context(|| format!("opening audio at {}", path.display()))?;
+    let channels = reader.spec().channels;
+    if channels != 2 {
+        return Err(anyhow!(
+            "expected stereo audio in {}, found {channels} channel(s)",
+            path.display()
+        ));
+    }
+    let mut me = Vec::new();
+    let mut them = Vec::new();
+    for (i, sample) in reader.samples::<i16>().enumerate() {
+        let sample = sample.with_context(|| format!("decoding audio at {}", path.display()))?;
+        let f = sample as f32 / 32768.0;
+        if i % 2 == 0 {
+            me.push(f);
+        } else {
+            them.push(f);
+        }
+    }
+    Ok((me, them))
+}
+
+/// Decodes whichever audio file `path` actually is, dispatching on its
+/// extension: `.wav` via [`decode_wav_stereo`], anything else (in practice
+/// always `.flac`, since [`resolve_audio_path`] only ever returns one of
+/// those two) via [`decode_flac_stereo`].
+fn decode_audio_stereo(path: &Path) -> Result<(Vec<f32>, Vec<f32>)> {
+    match path.extension().and_then(|e| e.to_str()) {
+        Some("wav") => decode_wav_stereo(path),
+        _ => decode_flac_stereo(path),
+    }
+}
+
+/// Resolves which audio file to use for `md_path`: prefer the `.flac`
+/// sibling (the normal case), falling back to the `.wav` sibling if the
+/// flac encode step failed and `AudioSink::finish` kept the wav instead of
+/// deleting it (see that method's docs -- losing the recorded audio
+/// entirely would be worse than leaving the bigger file around, but it
+/// means a re-transcribe must still be able to find it). `None` if neither
+/// exists, e.g. `keep_audio` was off when the session was recorded.
+fn resolve_audio_path(md_path: &Path) -> Option<PathBuf> {
+    let flac_path = audio_path_for(md_path);
+    if flac_path.is_file() {
+        return Some(flac_path);
+    }
+    let wav_path = wav_path_for(md_path);
+    if wav_path.is_file() {
+        return Some(wav_path);
+    }
+    None
+}
+
 /// The whisper model's path on disk if the registry knows about it and it's
 /// a `File` layout (it always is, currently -- see `models::REGISTRY`).
 /// Doesn't check existence; callers pair this with `Path::is_file` (see
@@ -243,13 +312,16 @@ fn check_not_active(md_path: &Path, active: Option<&Path>) -> Result<(), String>
     }
 }
 
-/// Whether `flac_path` exists. Covers both "no audio was ever recorded"
-/// (`keep_audio` was off) and "audio retention failed" (see
-/// `audio_sink`'s module docs on sink errors) with one user-facing message,
-/// since from the re-transcribe action's point of view they're the same
-/// situation: there's nothing to transcribe.
-fn check_audio_present(flac_path: &Path) -> Result<(), String> {
-    if flac_path.is_file() {
+/// Whether an audio file was resolved for this session (`audio_path`, from
+/// [`resolve_audio_path`] -- either the `.flac` or its `.wav` fallback).
+/// Covers both "no audio was ever recorded" (`keep_audio` was off) and
+/// "audio retention failed entirely" (see `audio_sink`'s module docs on
+/// sink errors -- note a *flac-encode* failure specifically is NOT this
+/// case, since `resolve_audio_path` falls back to the kept wav) with one
+/// user-facing message, since from the re-transcribe action's point of view
+/// they're the same situation: there's nothing to transcribe.
+fn check_audio_present(audio_path: Option<&Path>) -> Result<(), String> {
+    if audio_path.is_some() {
         Ok(())
     } else {
         Err(
@@ -285,13 +357,44 @@ fn try_start_job(current: &mut Option<String>, path: &str) -> Result<(), String>
     }
 }
 
-/// The re-transcribe pipeline itself: decode `flac_path`, transcribe each
-/// channel with a freshly-loaded whisper model at `model_path`, merge, and
-/// rewrite `md_path`'s transcript section (via
-/// `sessions::rewrite_transcript_at`), setting `asr` to `asr_id`.
-/// Deliberately free of any Tauri type (`AppHandle`/`State`) so it can run
-/// against a plain fixture directly -- including the brief's manual,
-/// non-automated end-to-end check with a real model and a synthetic flac.
+/// The tail of the pipeline once both channels are transcribed and merged:
+/// aborts *without touching the file* if `merged` is empty -- see the
+/// module docs' note on why an all-silent/failed transcription must never
+/// be treated as "successfully replace with nothing" -- otherwise renders
+/// the body, re-checks the single-writer rule via `before_write`, and does
+/// the one atomic write (`sessions::rewrite_transcript_at`).
+///
+/// Split out from [`run_retranscribe_pipeline`] specifically so this
+/// decision (and the write itself) is unit-testable with a plain fixture,
+/// without needing a real whisper model to produce an empty result --
+/// `WhisperEngine` isn't touched here at all.
+fn finalize_transcript(
+    md_path: &Path,
+    merged: &[TaggedSegment],
+    asr_id: &str,
+    before_write: impl FnOnce() -> Result<()>,
+    on_progress: &impl Fn(&'static str, Option<&'static str>, Option<String>),
+) -> Result<()> {
+    if merged.is_empty() {
+        return Err(anyhow!(
+            "whisper found no speech in this recording; the transcript was left unchanged"
+        ));
+    }
+    let body = render_transcript_body(merged);
+
+    on_progress("writing", None, None);
+    before_write()?;
+    sessions::rewrite_transcript_at(md_path, &body, asr_id)
+}
+
+/// The re-transcribe pipeline itself: decode `audio_path` (the session's
+/// `.flac`, or its `.wav` fallback -- see [`resolve_audio_path`]),
+/// transcribe each channel with a freshly-loaded whisper model at
+/// `model_path`, merge, and hand off to [`finalize_transcript`] for the
+/// empty-result guard and the actual write. Deliberately free of any Tauri
+/// type (`AppHandle`/`State`) so it can run against a plain fixture
+/// directly -- including the brief's manual, non-automated end-to-end
+/// check with a real model and a synthetic flac.
 ///
 /// `before_write` runs immediately before the final write (single-writer
 /// discipline, see the module docs): return `Err` from it to abort without
@@ -302,7 +405,7 @@ fn try_start_job(current: &mut Option<String>, path: &str) -> Result<(), String>
 /// cloned once per channel to feed each transcription's own callback.
 fn run_retranscribe_pipeline(
     md_path: &Path,
-    flac_path: &Path,
+    audio_path: &Path,
     model_path: &Path,
     asr_id: &str,
     before_write: impl FnOnce() -> Result<()>,
@@ -312,7 +415,7 @@ fn run_retranscribe_pipeline(
     let mut engine = WhisperEngine::new(model_path)
         .with_context(|| format!("loading whisper model at {}", model_path.display()))?;
 
-    let (me_samples, them_samples) = decode_flac_stereo(flac_path)?;
+    let (me_samples, them_samples) = decode_audio_stereo(audio_path)?;
 
     on_progress("transcribing", Some("me"), None);
     let cb = on_progress.clone();
@@ -331,11 +434,7 @@ fn run_retranscribe_pipeline(
         .context("transcribing the Them channel")?;
 
     let merged = merge_segments(me_segments, them_segments);
-    let body = render_transcript_body(&merged);
-
-    on_progress("writing", None, None);
-    before_write()?;
-    sessions::rewrite_transcript_at(md_path, &body, asr_id)?;
+    finalize_transcript(md_path, &merged, asr_id, before_write, &on_progress)?;
 
     on_progress("done", None, None);
     Ok(())
@@ -351,8 +450,9 @@ pub async fn retranscribe_session(
     let md_path = PathBuf::from(&path);
     check_not_active(&md_path, state.active_output_path().as_deref())?;
 
-    let flac_path = audio_path_for(&md_path);
-    check_audio_present(&flac_path)?;
+    let audio_path = resolve_audio_path(&md_path);
+    check_audio_present(audio_path.as_deref())?;
+    let audio_path = audio_path.expect("checked present by check_audio_present");
 
     let model_path = whisper_model_path();
     check_model_ready(model_path.as_deref())?;
@@ -374,6 +474,17 @@ pub async fn retranscribe_session(
         // Re-check the single-writer rule right before the final write
         // (module docs): a recording could have started into this same path
         // while the (possibly slow) transcription above was running.
+        //
+        // Residual TOCTOU: this check and `sessions::rewrite_transcript_at`'s
+        // own write are not atomic under one lock -- `AppState`'s mutex is
+        // only held for the instant of this read, not held across the
+        // filesystem write that follows. A recording could in theory start
+        // in the gap between this check passing and the write completing.
+        // Closing that fully would need a lock held across a filesystem
+        // write (or a different single-writer mechanism), which is more
+        // machinery than the practical risk here (a human clicking
+        // "record" inside a multi-millisecond window right as a
+        // re-transcribe finishes) justifies.
         let check_app = app_for_job;
         let before_write = move || -> Result<()> {
             let active = check_app.state::<AppState>().active_output_path();
@@ -387,7 +498,7 @@ pub async fn retranscribe_session(
 
         run_retranscribe_pipeline(
             &md_path,
-            &flac_path,
+            &audio_path,
             &model_path,
             WHISPER_MODEL_ID,
             before_write,
@@ -401,7 +512,18 @@ pub async fn retranscribe_session(
     // locking out every future re-transcribe until the app restarts.
     *jobs.0.lock().unwrap() = None;
 
-    let result = join_result.map_err(|e| e.to_string())?;
+    // A panicked blocking task (JoinError) is also reported via the
+    // "error" phase, not just returned as the command's Err: a UI driven
+    // purely off `retranscribe-progress` events (rather than awaiting the
+    // command's own promise) must still learn the job ended in failure.
+    let result = match join_result {
+        Ok(result) => result,
+        Err(join_err) => {
+            let message = join_err.to_string();
+            emit_progress(&app, &path, "error", None, Some(message.clone()));
+            return Err(message);
+        }
+    };
     if let Err(e) = &result {
         emit_progress(&app, &path, "error", None, Some(e.to_string()));
     }
@@ -525,18 +647,17 @@ mod tests {
         }
 
         #[test]
-        fn check_audio_present_rejects_a_missing_file() {
-            let dir = tempfile::tempdir().unwrap();
-            let err = check_audio_present(&dir.path().join("call.flac")).unwrap_err();
+        fn check_audio_present_rejects_none() {
+            let err = check_audio_present(None).unwrap_err();
             assert!(err.contains("no audio"), "{err}");
         }
 
         #[test]
-        fn check_audio_present_allows_an_existing_file() {
+        fn check_audio_present_allows_a_resolved_path() {
             let dir = tempfile::tempdir().unwrap();
             let flac = dir.path().join("call.flac");
             std::fs::write(&flac, b"x").unwrap();
-            assert!(check_audio_present(&flac).is_ok());
+            assert!(check_audio_present(Some(&flac)).is_ok());
         }
 
         #[test]
@@ -578,6 +699,46 @@ mod tests {
         }
     }
 
+    mod resolve_audio {
+        use super::*;
+
+        #[test]
+        fn neither_file_present_resolves_to_none() {
+            let dir = tempfile::tempdir().unwrap();
+            let md_path = dir.path().join("call.md");
+            assert!(resolve_audio_path(&md_path).is_none());
+        }
+
+        #[test]
+        fn flac_present_resolves_to_the_flac() {
+            let dir = tempfile::tempdir().unwrap();
+            let md_path = dir.path().join("call.md");
+            std::fs::write(dir.path().join("call.flac"), b"x").unwrap();
+            assert_eq!(resolve_audio_path(&md_path), Some(dir.path().join("call.flac")));
+        }
+
+        #[test]
+        fn wav_only_falls_back_to_the_wav() {
+            // The scenario `finish` documents: the flac encode failed, so
+            // only the wav survived. check_audio_present/decode must still
+            // find it rather than reporting "no audio" for a session that
+            // actually has some.
+            let dir = tempfile::tempdir().unwrap();
+            let md_path = dir.path().join("call.md");
+            std::fs::write(dir.path().join("call.wav"), b"x").unwrap();
+            assert_eq!(resolve_audio_path(&md_path), Some(dir.path().join("call.wav")));
+        }
+
+        #[test]
+        fn both_present_prefers_the_flac() {
+            let dir = tempfile::tempdir().unwrap();
+            let md_path = dir.path().join("call.md");
+            std::fs::write(dir.path().join("call.flac"), b"x").unwrap();
+            std::fs::write(dir.path().join("call.wav"), b"x").unwrap();
+            assert_eq!(resolve_audio_path(&md_path), Some(dir.path().join("call.flac")));
+        }
+    }
+
     #[test]
     fn whisper_model_path_resolves_to_the_registry_file_name() {
         let path = whisper_model_path().unwrap();
@@ -613,6 +774,62 @@ mod tests {
         for (expected, actual) in them_samples.iter().zip(decoded_them.iter()) {
             assert!((expected - actual).abs() < 0.001, "{expected} vs {actual}");
         }
+    }
+
+    /// Round-trips known samples through a plain stereo wav (the format
+    /// `AudioSink::finish` keeps when the flac encode step fails) and
+    /// `decode_wav_stereo`, mirroring `decode_flac_stereo`'s own round-trip
+    /// test above -- proving the wav fallback path decodes correctly too,
+    /// not just the flac path.
+    #[test]
+    fn decode_wav_stereo_round_trips_known_samples() {
+        let dir = tempfile::tempdir().unwrap();
+        let wav_path = dir.path().join("call.wav");
+        let spec = hound::WavSpec {
+            channels: 2,
+            sample_rate: 16_000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let me_samples = [16384i16, -8192, 3277];
+        let them_samples = [-16384i16, 8192, -3277];
+        {
+            let mut writer = hound::WavWriter::create(&wav_path, spec).unwrap();
+            for i in 0..me_samples.len() {
+                writer.write_sample(me_samples[i]).unwrap();
+                writer.write_sample(them_samples[i]).unwrap();
+            }
+            writer.finalize().unwrap();
+        }
+
+        let (decoded_me, decoded_them) = decode_wav_stereo(&wav_path).unwrap();
+        for (expected, actual) in me_samples.iter().zip(decoded_me.iter()) {
+            assert!((*expected as f32 / 32768.0 - actual).abs() < 1e-6);
+        }
+        for (expected, actual) in them_samples.iter().zip(decoded_them.iter()) {
+            assert!((*expected as f32 / 32768.0 - actual).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn decode_audio_stereo_dispatches_on_extension() {
+        let dir = tempfile::tempdir().unwrap();
+        let wav_path = dir.path().join("call.wav");
+        let spec = hound::WavSpec {
+            channels: 2,
+            sample_rate: 16_000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        {
+            let mut writer = hound::WavWriter::create(&wav_path, spec).unwrap();
+            writer.write_sample(100i16).unwrap();
+            writer.write_sample(200i16).unwrap();
+            writer.finalize().unwrap();
+        }
+        let (me, them) = decode_audio_stereo(&wav_path).unwrap();
+        assert_eq!(me.len(), 1);
+        assert_eq!(them.len(), 1);
     }
 
     #[test]
@@ -655,6 +872,103 @@ mod tests {
 
         let err = decode_flac_stereo(&path).unwrap_err();
         assert!(format!("{err:#}").contains("stereo"), "{err:#}");
+    }
+
+    mod finalize {
+        use super::*;
+
+        const FIXTURE: &str = "---\ndate: 2026-06-01T09:00:00+02:00\ntitle: Keep me\nasr: parakeet-tdt-0.6b-v3\n---\n\n## Transcript\n\n[00:00:01] Me: original text\n";
+
+        /// Pipeline-level regression test for the Critical review finding:
+        /// an all-empty whisper result (both channels silent, a bad split,
+        /// a decode glitch) must NOT be treated as "successfully replace
+        /// the transcript with nothing" -- that would silently destroy the
+        /// user's only copy of it, since a re-transcribe never keeps the
+        /// previous text. This exercises the actual write seam
+        /// (`finalize_transcript`, the same function `run_retranscribe_
+        /// pipeline` calls), not just `render_transcript_body`'s pure
+        /// string formatting, so it proves the FILE ON DISK is untouched,
+        /// not merely that the empty-input string happens to be empty.
+        #[test]
+        fn aborts_without_writing_when_merged_is_empty() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("call.md");
+            std::fs::write(&path, FIXTURE).unwrap();
+
+            let err = finalize_transcript(
+                &path,
+                &[],
+                "whisper-large-v3-turbo-q8",
+                || Ok(()),
+                &|_, _, _| {},
+            )
+            .unwrap_err();
+            assert!(
+                format!("{err:#}").contains("no speech"),
+                "expected a user-facing 'no speech' message: {err:#}"
+            );
+
+            let after = std::fs::read_to_string(&path).unwrap();
+            assert_eq!(
+                after, FIXTURE,
+                "the file must be left byte-exact unchanged when whisper found nothing"
+            );
+        }
+
+        #[test]
+        fn writes_when_merged_has_at_least_one_segment() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("call.md");
+            std::fs::write(&path, FIXTURE).unwrap();
+            let merged = vec![TaggedSegment {
+                speaker: Speaker::Me,
+                start_secs: 3.0,
+                text: "new text".to_string(),
+            }];
+
+            finalize_transcript(
+                &path,
+                &merged,
+                "whisper-large-v3-turbo-q8",
+                || Ok(()),
+                &|_, _, _| {},
+            )
+            .unwrap();
+
+            let after = std::fs::read_to_string(&path).unwrap();
+            assert!(after.contains("[00:00:03] Me: new text"));
+            assert!(after.contains("asr: whisper-large-v3-turbo-q8"));
+            assert!(after.contains("title: Keep me"), "title must be preserved");
+            assert!(!after.contains("original text"), "the old transcript must be replaced");
+        }
+
+        #[test]
+        fn aborts_without_writing_when_before_write_rejects() {
+            // The single-writer re-check (module docs): a rejection from
+            // `before_write` must also leave the file untouched, same as
+            // the empty-result case above.
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("call.md");
+            std::fs::write(&path, FIXTURE).unwrap();
+            let merged = vec![TaggedSegment {
+                speaker: Speaker::Me,
+                start_secs: 3.0,
+                text: "new text".to_string(),
+            }];
+
+            let err = finalize_transcript(
+                &path,
+                &merged,
+                "whisper-large-v3-turbo-q8",
+                || Err(anyhow!("recording started on this session")),
+                &|_, _, _| {},
+            )
+            .unwrap_err();
+            assert!(format!("{err:#}").contains("recording started"));
+
+            let after = std::fs::read_to_string(&path).unwrap();
+            assert_eq!(after, FIXTURE, "the file must be left unchanged when before_write rejects");
+        }
     }
 
     /// Loads a wav and resamples it to 16kHz mono if it isn't already

@@ -518,8 +518,12 @@ mod tests {
                 format!("{err}").contains("timed out"),
                 "expected a timeout error, got: {err}"
             );
+            // Generous bound on purpose: the assertion's point is "far less
+            // than the script's 30s sleep", not a latency guarantee. The
+            // original 5s bound flaked once under a heavily loaded test
+            // machine (parallel cargo test + a background build).
             assert!(
-                elapsed < Duration::from_secs(5),
+                elapsed < Duration::from_secs(15),
                 "expected the watchdog to return promptly after the {timeout:?} bound, \
                  took {elapsed:?} instead -- looks like it waited out the 30s sleep"
             );
@@ -535,7 +539,10 @@ mod tests {
             let script = dir.path().join("quick.sh");
             write_sleep_script(&script, 0);
 
-            let output = run_with_timeout(&script, &[], Duration::from_secs(5)).unwrap();
+            // 30s, not 5s: this timeout exists only so a genuine hang cannot
+            // stall the suite; a loaded machine must not trip it (see the
+            // flake note in the sibling test).
+            let output = run_with_timeout(&script, &[], Duration::from_secs(30)).unwrap();
             assert!(output.status.success());
         }
     }

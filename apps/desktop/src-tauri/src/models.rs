@@ -429,12 +429,31 @@ fn validate_delete(
     Ok(spec)
 }
 
+/// Removes `id`'s own interrupted-download tmp file (`.download-{id}.tmp`,
+/// up to ~3 GB for the largest whisper entry) from `models_dir`, if any. A
+/// no-op if it's already gone. Only ever called once `validate_delete` has
+/// confirmed no download of this id is currently in flight, so there's no
+/// race with `run_download` writing to the same path -- a live download's
+/// tmp file is never touched, only one left behind by a download that was
+/// interrupted (app quit, crash, network error) before `run_download`
+/// renamed/removed it.
+fn remove_tmp_download_file(id: &str, models_dir: &Path) -> Result<(), String> {
+    let tmp_path = models_dir.join(format!(".download-{id}.tmp"));
+    if tmp_path.is_file() {
+        std::fs::remove_file(&tmp_path).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 /// `delete_model`'s actual logic (stage 0.8, for reclaiming disk):
-/// `validate_delete`'s three rejections, then `remove_model_files`.
-/// Deleting the currently *selected* re-transcribe model is deliberately
-/// allowed -- `retranscribe_session`'s existing "not downloaded" rejection
-/// already covers the consequence, and the UI is expected to show that row
-/// as not-downloaded afterwards.
+/// `validate_delete`'s three rejections, then `remove_model_files`, then
+/// `remove_tmp_download_file` for this id's own stale tmp file (left behind
+/// by a download interrupted before this delete, and otherwise invisible
+/// and unreclaimable since it's excluded from `size_on_disk`/`list_models`
+/// entirely). Deleting the currently *selected* re-transcribe model is
+/// deliberately allowed -- `retranscribe_session`'s existing "not
+/// downloaded" rejection already covers the consequence, and the UI is
+/// expected to show that row as not-downloaded afterwards.
 ///
 /// Parameterized over `models_dir` and the two "is something happening"
 /// booleans instead of reading real `State` guards directly, so it's
@@ -452,7 +471,8 @@ fn delete_model_at(
     retranscribing: bool,
 ) -> Result<(), String> {
     let spec = validate_delete(id, downloading, retranscribing)?;
-    remove_model_files(spec, models_dir)
+    remove_model_files(spec, models_dir)?;
+    remove_tmp_download_file(id, models_dir)
 }
 
 #[tauri::command]
@@ -1013,6 +1033,38 @@ mod tests {
 
             assert!(err.contains("re-transcribe"), "{err}");
             assert!(file_path.exists(), "the file must be left untouched");
+        }
+
+        #[test]
+        fn delete_model_at_removes_its_own_stale_download_tmp_file() {
+            // Simulates an interrupted download of this id (app quit/crash/
+            // network error before `run_download` renamed the tmp file into
+            // place): the model itself isn't downloaded, but its tmp file is
+            // sitting in `models_dir`, invisible to `size_on_disk`/
+            // `list_models` and otherwise unreclaimable.
+            let dir = tempfile::tempdir().unwrap();
+            let tmp_path = dir.path().join(".download-whisper-large-v3-turbo-q8.tmp");
+            std::fs::write(&tmp_path, vec![0u8; 1024]).unwrap();
+
+            delete_model_at("whisper-large-v3-turbo-q8", dir.path(), false, false).unwrap();
+
+            assert!(!tmp_path.exists(), "the stale tmp file must be removed");
+        }
+
+        #[test]
+        fn delete_model_at_leaves_a_different_ids_tmp_file_untouched() {
+            let dir = tempfile::tempdir().unwrap();
+            let file_path = dir.path().join("ggml-large-v3-turbo-q8_0.bin");
+            std::fs::write(&file_path, b"x").unwrap();
+            let other_tmp_path = dir.path().join(".download-whisper-large-v3.tmp");
+            std::fs::write(&other_tmp_path, vec![0u8; 1024]).unwrap();
+
+            delete_model_at("whisper-large-v3-turbo-q8", dir.path(), false, false).unwrap();
+
+            assert!(
+                other_tmp_path.exists(),
+                "a different model's in-progress tmp file must be left untouched"
+            );
         }
     }
 

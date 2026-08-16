@@ -48,16 +48,27 @@ const AUDIO_FORMAT_OPTIONS: { value: string; label: string }[] = [
   { value: "flac", label: "FLAC" },
 ];
 
-/** Formats a byte count as "487 MB" or "1.2 GB" (one decimal above 1024 MB). */
+/**
+ * Formats a GB value with 3 significant figures, trailing zeros trimmed
+ * (1.081 -> "1.08 GB", 3.095 -> "3.1 GB") -- matches the decimal-MB numbers
+ * quoted in the README's Models section exactly, since both derive from the
+ * same "divide by 1000, not 1024" convention.
+ */
+function formatGb(gb: number): string {
+  const decimals = gb >= 10 ? 1 : 2;
+  return `${parseFloat(gb.toFixed(decimals))} GB`;
+}
+
+/** Formats a byte count as "487 MB" or "1.08 GB" (decimal MB and GB throughout, never 1024). */
 function humanBytes(bytes: number): string {
   const mb = bytes / 1_000_000;
-  if (mb >= 1024) return `${(mb / 1024).toFixed(1)} GB`;
+  if (mb >= 1000) return formatGb(mb / 1000);
   return `${Math.round(mb)} MB`;
 }
 
 /** Formats a registry `size_mb` (already in MB) the same way as `humanBytes`. */
 function humanSizeMb(sizeMb: number): string {
-  if (sizeMb >= 1024) return `${(sizeMb / 1024).toFixed(1)} GB`;
+  if (sizeMb >= 1000) return formatGb(sizeMb / 1000);
   return `${sizeMb} MB`;
 }
 
@@ -401,6 +412,14 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
 
   const liveModels = models.filter((m) => m.role === "live");
   const retranscribeModels = models.filter((m) => m.role === "retranscribe");
+  // True once a retranscribe model is configured but no longer downloaded
+  // (e.g. it was just deleted from this same screen): every radio in the
+  // group reflects `model.downloaded`, so this is the one case where none of
+  // them ends up checked and the group would otherwise look broken with no
+  // explanation.
+  const retranscribeModelMissing =
+    Boolean(config?.retranscribe_model) &&
+    !models.some((m) => m.id === config?.retranscribe_model && m.downloaded);
 
   return (
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
@@ -551,6 +570,11 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
               non-English audio better.
             </span>
             {retranscribeError && <span className="text-xs text-destructive">{retranscribeError}</span>}
+            {retranscribeModelMissing && (
+              <span className="text-xs text-muted-foreground">
+                Selected model is not downloaded. Pick another or download it again.
+              </span>
+            )}
             <ul className="flex flex-col gap-3">
               {retranscribeModels.map((model) => {
                 const p = progress[model.id];

@@ -76,4 +76,4 @@ Turbo is faster: about 12x realtime measured on an M1 Max for turbo q8; a 30-min
 
 ## Status
 
-stage 0.7 shipped: call audio kept next to the transcript as AAC by default or FLAC as an opt-in (mic = left/Me, system = right/Them, configurable via Settings > Audio format), whisper large-v3-turbo re-transcribe pass for better quality (especially Russian), click-to-seek playback on transcript lines. Known gaps: no meeting detection yet, no menu bar/hotkeys.
+stage 0.8 shipped: a Settings > Models manager with model roles (Recording vs Re-transcribe), four whisper options for re-transcribe picked in-app instead of a fixed default, and per-model deletion (with confirmation) to reclaim disk. Known gaps: no meeting detection yet, no menu bar/hotkeys.

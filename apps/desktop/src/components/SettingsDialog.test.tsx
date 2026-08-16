@@ -319,6 +319,47 @@ describe("SettingsDialog: model manager (stage 0.8 Task 2)", () => {
     });
   });
 
+  it("formats GB sizes decimally, matching the README (1081 MB -> 1.08 GB, 3095 MB -> 3.1 GB)", async () => {
+    const whisperLargeFull: ModelInfo = {
+      id: "whisper-large-v3",
+      name: "Whisper large-v3 (full) - slowest, usually best on non-English",
+      size_mb: 3095,
+      downloaded: true,
+      active: false,
+      role: "retranscribe",
+      size_on_disk_bytes: 3_095_033_483,
+    };
+    vi.mocked(ipc.listModels).mockResolvedValue([parakeet, whisperLargeQ5, whisperLargeFull]);
+
+    render(<SettingsDialog open onOpenChange={() => {}} />);
+
+    // `humanSizeMb` (the advertised size_mb, decimal MB throughout).
+    await screen.findByText("1.08 GB");
+    await screen.findByText("3.1 GB");
+  });
+
+  it("shows a muted note in the Re-transcribe group when the configured model is not downloaded", async () => {
+    vi.mocked(ipc.getConfig).mockResolvedValue({ ...baseConfig, retranscribe_model: whisperQ8.id });
+    vi.mocked(ipc.listModels).mockResolvedValue([
+      parakeet,
+      { ...whisperQ8, downloaded: false, size_on_disk_bytes: null },
+    ]);
+
+    render(<SettingsDialog open onOpenChange={() => {}} />);
+
+    await screen.findByText(/selected model is not downloaded/i);
+  });
+
+  it("shows no missing-model note when the configured re-transcribe model is downloaded", async () => {
+    vi.mocked(ipc.getConfig).mockResolvedValue({ ...baseConfig, retranscribe_model: whisperQ8.id });
+    vi.mocked(ipc.listModels).mockResolvedValue([parakeet, whisperQ8]);
+
+    render(<SettingsDialog open onOpenChange={() => {}} />);
+
+    await screen.findByText(/whisper large-v3-turbo \(q8\)/i);
+    expect(screen.queryByText(/selected model is not downloaded/i)).not.toBeInTheDocument();
+  });
+
   it("shows total disk used near each group heading, labeled with its own scope", async () => {
     vi.mocked(ipc.listModels).mockResolvedValue([parakeet, whisperQ8, whisperTurboQ5NotDownloaded]);
 

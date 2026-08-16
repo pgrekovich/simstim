@@ -11,12 +11,14 @@ use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, State};
 
 use crate::config::Config;
+use crate::retranscribe::RetranscribeState;
 
 /// Where a model's primary payload comes from and how it lives on disk once
 /// downloaded. Stage 0.5 only ever needed `Archive` (a tar.bz2 that extracts
 /// to a directory of files); stage 0.7 adds `File` for a GGUF model that is
 /// just one file dropped straight into `models_dir`, no archive or
 /// subdirectory involved.
+#[derive(Debug)]
 pub enum ModelLayout {
     /// A `.tar.bz2` archive that extracts to `archive_dir_name`, then gets
     /// renamed to `dir_name`. `REQUIRED_MODEL_FILES` lists the files expected
@@ -34,7 +36,37 @@ pub enum ModelLayout {
     },
 }
 
+/// Whether a model can drive the live recording pipeline, or is only usable
+/// for the offline whisper re-transcribe pass. Stage 0.8: generalizes stage
+/// 0.7's `selectable: bool` (`true` meant `Live`, `false` meant
+/// `Retranscribe`) now that there's more than one non-live entry -- the
+/// Settings UI groups models by this field rather than testing a bare bool,
+/// and the underlying data has exactly one source of truth instead of a
+/// second parallel flag that could drift out of sync with it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelRole {
+    /// Can become `Config::active_model` and drive live recording. Parakeet
+    /// is the only entry with this role, and stays the only one a future
+    /// entry could add to without any other code changing (`set_active_model`
+    /// validates against the registry, not a hardcoded id).
+    Live,
+    /// Offline-only: usable as `Config::retranscribe_model`, never as
+    /// `Config::active_model`. All four whisper entries.
+    Retranscribe,
+}
+
+impl ModelRole {
+    /// The wire value `ModelInfo::role` sends to the frontend.
+    fn as_str(self) -> &'static str {
+        match self {
+            ModelRole::Live => "live",
+            ModelRole::Retranscribe => "retranscribe",
+        }
+    }
+}
+
 /// Describes one downloadable model.
+#[derive(Debug)]
 pub struct ModelSpec {
     pub id: &'static str,
     pub name: &'static str,
@@ -44,12 +76,7 @@ pub struct ModelSpec {
     /// inside any model-specific directory), e.g. the VAD model shared across
     /// ASR backends. Independent of `layout`; either variant can have extras.
     pub extra_files: &'static [(&'static str, &'static str)],
-    /// Whether this model can become `Config::active_model`, i.e. drive the
-    /// live recording pipeline. `true` for Parakeet; `false` for whisper
-    /// (stage 0.7): whisper is an offline re-transcribe-only engine, so
-    /// `set_active_model` rejects it and the Settings UI never offers a
-    /// "Use" button for it, driven by this field rather than a hardcoded id.
-    pub selectable: bool,
+    pub role: ModelRole,
 }
 
 /// The model registry. Adding a model means adding an entry here; no IPC or
@@ -69,14 +96,32 @@ pub static REGISTRY: &[ModelSpec] = &[
             "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx",
             "silero_vad.onnx",
         )],
-        selectable: true,
+        role: ModelRole::Live,
+    },
+    ModelSpec {
+        // GGUF from the whisper.cpp Hugging Face repo. URL and size
+        // (574041195 bytes, confirmed via HEAD request 2026-08-16) verified
+        // directly before hardcoding, per the stage-0.8 Global Constraints.
+        // Smallest/fastest of the four whisper entries.
+        id: "whisper-large-v3-turbo-q5",
+        name: "Whisper large-v3-turbo (q5) - fastest, smallest",
+        size_mb: 574,
+        layout: ModelLayout::File {
+            url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin",
+            file_name: "ggml-large-v3-turbo-q5_0.bin",
+        },
+        extra_files: &[],
+        role: ModelRole::Retranscribe,
     },
     ModelSpec {
         // GGUF from the whisper.cpp Hugging Face repo. URL and size (874188075
         // bytes, confirmed via HEAD request 2026-08-16) verified directly
-        // before hardcoding, per the stage-0.7 brief.
+        // before hardcoding, per the stage-0.7 brief. Kept as the id/url/
+        // file_name the owner already has 874 MB downloaded under (stage-0.8
+        // Global Constraints): must not change, or the owner would be asked
+        // to re-download it.
         id: "whisper-large-v3-turbo-q8",
-        name: "Whisper large-v3-turbo (q8)",
+        name: "Whisper large-v3-turbo (q8) - faster",
         size_mb: 874,
         layout: ModelLayout::File {
             url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q8_0.bin",
@@ -84,7 +129,39 @@ pub static REGISTRY: &[ModelSpec] = &[
         },
         extra_files: &[],
         // Re-transcribe-only (Global Constraints): never the live pipeline.
-        selectable: false,
+        role: ModelRole::Retranscribe,
+    },
+    ModelSpec {
+        // GGUF from the whisper.cpp Hugging Face repo. URL and size
+        // (1081140203 bytes, confirmed via HEAD request 2026-08-16) verified
+        // directly before hardcoding, per the stage-0.8 Global Constraints.
+        // Non-turbo: usually reads non-English (e.g. Russian) better than
+        // the turbo family, at the cost of speed.
+        id: "whisper-large-v3-q5",
+        name: "Whisper large-v3 (q5) - slower, usually better on non-English",
+        size_mb: 1081,
+        layout: ModelLayout::File {
+            url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-q5_0.bin",
+            file_name: "ggml-large-v3-q5_0.bin",
+        },
+        extra_files: &[],
+        role: ModelRole::Retranscribe,
+    },
+    ModelSpec {
+        // GGUF from the whisper.cpp Hugging Face repo. URL and size
+        // (3095033483 bytes, confirmed via HEAD request 2026-08-16) verified
+        // directly before hardcoding, per the stage-0.8 Global Constraints.
+        // Full (unquantized) non-turbo: largest and slowest, usually the
+        // best quality of the four, especially on non-English audio.
+        id: "whisper-large-v3",
+        name: "Whisper large-v3 (full) - slowest, usually best on non-English",
+        size_mb: 3095,
+        layout: ModelLayout::File {
+            url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin",
+            file_name: "ggml-large-v3.bin",
+        },
+        extra_files: &[],
+        role: ModelRole::Retranscribe,
     },
 ];
 
@@ -133,6 +210,57 @@ pub fn model_ready(id: &str) -> bool {
     }
 }
 
+/// Sum of every regular file's size under `dir`, recursively. Missing/
+/// unreadable directories count as 0 rather than erroring -- this only ever
+/// backs a "how much disk does this free up" estimate, not a correctness
+/// check (`is_downloaded` already gates whether a model counts as present
+/// at all).
+fn dir_size(dir: &Path) -> u64 {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .map(|entry| {
+            let path = entry.path();
+            if path.is_dir() {
+                dir_size(&path)
+            } else {
+                entry.metadata().map(|m| m.len()).unwrap_or(0)
+            }
+        })
+        .sum()
+}
+
+/// Real on-disk size of `spec`'s files under `models_dir`, in bytes, or
+/// `None` if it isn't fully downloaded (stage 0.8: `list_models`'
+/// `size_on_disk_bytes`, so the UI can show actual usage rather than the
+/// advertised `size_mb`). For `Archive` layouts this sums every file in the
+/// extracted directory recursively (real usage can differ slightly from the
+/// advertised total), plus any `extra_files`; for `File` layouts, just the
+/// one file's size plus `extra_files`.
+pub fn size_on_disk(spec: &ModelSpec, models_dir: &Path) -> Option<u64> {
+    if !is_downloaded(spec, models_dir) {
+        return None;
+    }
+    let primary = match &spec.layout {
+        ModelLayout::Archive { dir_name, .. } => dir_size(&models_dir.join(dir_name)),
+        ModelLayout::File { file_name, .. } => std::fs::metadata(models_dir.join(file_name))
+            .map(|m| m.len())
+            .unwrap_or(0),
+    };
+    let extras: u64 = spec
+        .extra_files
+        .iter()
+        .map(|(_, filename)| {
+            std::fs::metadata(models_dir.join(filename))
+                .map(|m| m.len())
+                .unwrap_or(0)
+        })
+        .sum();
+    Some(primary + extras)
+}
+
 /// IPC-facing view of a model's status, matching the frontend's `ModelInfo`.
 #[derive(Debug, Clone, Serialize)]
 pub struct ModelInfo {
@@ -141,9 +269,22 @@ pub struct ModelInfo {
     pub size_mb: u64,
     pub downloaded: bool,
     pub active: bool,
-    /// Mirrors `ModelSpec::selectable`: whether the Settings UI should offer
-    /// a "Use"/"Active" affordance for this model at all.
+    /// Derived from `role` (`role == Live`): whether the Settings UI should
+    /// offer a "Use"/"Active" affordance for this model at all. Kept
+    /// alongside `role` rather than removed outright so the existing
+    /// (stage-0.7) Settings UI, which still reads this field directly,
+    /// keeps working unchanged until the stage-0.8 model manager UI (a
+    /// later task) migrates it to `role`.
     pub selectable: bool,
+    /// `"live" | "retranscribe"` (stage 0.8): generalizes `selectable` into
+    /// the full role, so the Settings UI can group re-transcribe models
+    /// together instead of only knowing "not the live one".
+    pub role: String,
+    /// Real bytes on disk for this model's downloaded files (`None`/`null`
+    /// when not downloaded), stage 0.8: lets the UI show actual disk usage
+    /// rather than the advertised `size_mb`, which can differ from what a
+    /// real extracted archive occupies.
+    pub size_on_disk_bytes: Option<u64>,
 }
 
 /// Guards against downloading the same model id twice concurrently.
@@ -197,7 +338,9 @@ pub fn list_models() -> Vec<ModelInfo> {
             size_mb: spec.size_mb,
             downloaded: is_downloaded(spec, &models_dir),
             active: spec.id == cfg.active_model,
-            selectable: spec.selectable,
+            selectable: spec.role == ModelRole::Live,
+            role: spec.role.as_str().to_string(),
+            size_on_disk_bytes: size_on_disk(spec, &models_dir),
         })
         .collect()
 }
@@ -225,6 +368,108 @@ pub async fn download_model(
         emit_progress(&app, &id, "error", 0, 0, Some(e.clone()));
     }
     result
+}
+
+/// Removes `spec`'s downloaded files from `models_dir` (stage 0.8, for
+/// reclaiming disk): the one file for a `File` layout, or the extracted
+/// directory for an `Archive` layout. A no-op (not an error) if the files
+/// are already gone, so a stale UI row or a double-click can't turn into a
+/// spurious failure. Split from `validate_delete`'s rejection checks so the
+/// filesystem removal itself is testable against tempdir fixtures directly
+/// (`test_spec`/`test_file_spec` below), independent of which real registry
+/// id/role it's reached through.
+fn remove_model_files(spec: &ModelSpec, models_dir: &Path) -> Result<(), String> {
+    match &spec.layout {
+        ModelLayout::File { file_name, .. } => {
+            let path = models_dir.join(file_name);
+            if path.is_file() {
+                std::fs::remove_file(&path).map_err(|e| e.to_string())?;
+            }
+        }
+        ModelLayout::Archive { dir_name, .. } => {
+            let dir = models_dir.join(dir_name);
+            if dir.is_dir() {
+                std::fs::remove_dir_all(&dir).map_err(|e| e.to_string())?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// `Err` with a user-facing message (no internal ids/command names, per the
+/// Global Constraints) unless `id` is deletable right now: it must be a
+/// registered `Retranscribe`-role model (`Live` models -- Parakeet -- are
+/// needed to record and can never be deleted), with no download of it in
+/// flight and no re-transcribe job currently running (global, not per-id --
+/// see `RetranscribeState`'s docs). Returns the resolved spec on success so
+/// `delete_model_at` doesn't have to look it up twice. Parameterized over
+/// `downloading`/`retranscribing` instead of reading real `State` guards
+/// directly, so it's testable without a live Tauri app -- mirrors `lib.rs`'s
+/// `validate_active_model`/`validate_retranscribe_model` splits for the same
+/// reason.
+fn validate_delete(
+    id: &str,
+    downloading: bool,
+    retranscribing: bool,
+) -> Result<&'static ModelSpec, String> {
+    let spec = find(id).ok_or_else(|| format!("unknown model id: {id}"))?;
+
+    if spec.role == ModelRole::Live {
+        return Err(format!(
+            "{} is needed to record calls and can't be deleted",
+            spec.name
+        ));
+    }
+    if downloading {
+        return Err(format!(
+            "{} is currently downloading; wait for it to finish before deleting it",
+            spec.name
+        ));
+    }
+    if retranscribing {
+        return Err(
+            "a re-transcribe is currently running; wait for it to finish before deleting a model"
+                .to_string(),
+        );
+    }
+    Ok(spec)
+}
+
+/// `delete_model`'s actual logic (stage 0.8, for reclaiming disk):
+/// `validate_delete`'s three rejections, then `remove_model_files`.
+/// Deleting the currently *selected* re-transcribe model is deliberately
+/// allowed -- `retranscribe_session`'s existing "not downloaded" rejection
+/// already covers the consequence, and the UI is expected to show that row
+/// as not-downloaded afterwards.
+///
+/// Parameterized over `models_dir` and the two "is something happening"
+/// booleans instead of reading real `State` guards directly, so it's
+/// directly unit-testable with tempdir fixtures -- mirrors `lib.rs`'s
+/// `set_output_dir_at` and `retranscribe::try_start_job`'s own splits for
+/// the same reason. `downloading` mirrors `DownloadState`'s in-flight check
+/// for this specific id; `retranscribing` mirrors
+/// `RetranscribeState::is_running` (global, not per-id, since only one
+/// re-transcribe job ever runs at a time). The command wrapper below is the
+/// only real (non-test) caller.
+fn delete_model_at(
+    id: &str,
+    models_dir: &Path,
+    downloading: bool,
+    retranscribing: bool,
+) -> Result<(), String> {
+    let spec = validate_delete(id, downloading, retranscribing)?;
+    remove_model_files(spec, models_dir)
+}
+
+#[tauri::command]
+pub fn delete_model(
+    id: String,
+    downloads: State<'_, DownloadState>,
+    jobs: State<'_, RetranscribeState>,
+) -> Result<(), String> {
+    let downloading = downloads.0.lock().unwrap().contains(&id);
+    let retranscribing = jobs.is_running();
+    delete_model_at(&id, &simstim_engine::models_dir(), downloading, retranscribing)
 }
 
 /// Streams `url` to `dest` with periodic `"download"` progress events,
@@ -372,7 +617,7 @@ mod tests {
                 dir_name: "test-model",
             },
             extra_files: &[("https://example.invalid/extra.onnx", "extra.onnx")],
-            selectable: true,
+            role: ModelRole::Live,
         }
     }
 
@@ -386,7 +631,7 @@ mod tests {
                 file_name: "model.bin",
             },
             extra_files: &[],
-            selectable: false,
+            role: ModelRole::Retranscribe,
         }
     }
 
@@ -406,10 +651,75 @@ mod tests {
     }
 
     #[test]
-    fn registry_has_exactly_two_entries() {
-        // Stage 0.5 shipped Parakeet alone; stage 0.7 adds the whisper
-        // re-transcribe model as the registry's first archive-less entry.
-        assert_eq!(REGISTRY.len(), 2);
+    fn registry_has_exactly_five_entries() {
+        // Stage 0.5 shipped Parakeet alone; stage 0.7 added one whisper
+        // re-transcribe model; stage 0.8 adds three more whisper entries
+        // (four total) so the owner can pick among them.
+        assert_eq!(REGISTRY.len(), 5);
+    }
+
+    #[test]
+    fn registry_contains_the_four_expected_whisper_ids() {
+        for id in [
+            "whisper-large-v3-turbo-q5",
+            "whisper-large-v3-turbo-q8",
+            "whisper-large-v3-q5",
+            "whisper-large-v3",
+        ] {
+            assert!(find(id).is_some(), "expected registry entry {id}");
+        }
+    }
+
+    #[test]
+    fn all_four_whisper_entries_have_the_retranscribe_role() {
+        for id in [
+            "whisper-large-v3-turbo-q5",
+            "whisper-large-v3-turbo-q8",
+            "whisper-large-v3-q5",
+            "whisper-large-v3",
+        ] {
+            assert_eq!(find(id).unwrap().role, ModelRole::Retranscribe, "{id}");
+        }
+    }
+
+    #[test]
+    fn parakeet_is_the_only_live_entry() {
+        let live_ids: Vec<&str> = REGISTRY
+            .iter()
+            .filter(|spec| spec.role == ModelRole::Live)
+            .map(|spec| spec.id)
+            .collect();
+        assert_eq!(live_ids, vec!["parakeet-tdt-0.6b-v3-int8"]);
+    }
+
+    #[test]
+    fn each_whisper_entry_is_a_file_layout_with_no_archive() {
+        for id in [
+            "whisper-large-v3-turbo-q5",
+            "whisper-large-v3-turbo-q8",
+            "whisper-large-v3-q5",
+            "whisper-large-v3",
+        ] {
+            match &find(id).unwrap().layout {
+                ModelLayout::File { .. } => {}
+                ModelLayout::Archive { .. } => panic!("{id} should be a File layout"),
+            }
+        }
+    }
+
+    #[test]
+    fn whisper_turbo_q8_keeps_its_stage_0_7_id_and_file_name() {
+        // Load-bearing (Global Constraints): the owner already downloaded
+        // this 874 MB file under this exact id/file_name; changing either
+        // would ask them to re-download it.
+        let spec = find("whisper-large-v3-turbo-q8").unwrap();
+        assert_eq!(spec.size_mb, 874);
+        match &spec.layout {
+            ModelLayout::File { file_name, .. } => {
+                assert_eq!(*file_name, "ggml-large-v3-turbo-q8_0.bin")
+            }
+            ModelLayout::Archive { .. } => panic!("whisper entry should be a File layout"),
+        }
     }
 
     #[test]
@@ -444,17 +754,35 @@ mod tests {
     }
 
     #[test]
-    fn parakeet_registry_entry_is_selectable() {
+    fn parakeet_registry_entry_has_the_live_role() {
         let parakeet = find("parakeet-tdt-0.6b-v3-int8").unwrap();
-        assert!(parakeet.selectable);
+        assert_eq!(parakeet.role, ModelRole::Live);
     }
 
     #[test]
-    fn whisper_registry_entry_is_not_selectable() {
+    fn whisper_registry_entry_has_the_retranscribe_role() {
         // Global Constraints: whisper is a re-transcribe-only engine, never
         // offered as the live ASR pipeline.
         let whisper = find("whisper-large-v3-turbo-q8").unwrap();
+        assert_eq!(whisper.role, ModelRole::Retranscribe);
+    }
+
+    #[test]
+    fn list_models_selectable_mirrors_the_live_role() {
+        let models = list_models();
+        let parakeet = models
+            .iter()
+            .find(|m| m.id == "parakeet-tdt-0.6b-v3-int8")
+            .unwrap();
+        assert!(parakeet.selectable);
+        assert_eq!(parakeet.role, "live");
+
+        let whisper = models
+            .iter()
+            .find(|m| m.id == "whisper-large-v3-turbo-q8")
+            .unwrap();
         assert!(!whisper.selectable);
+        assert_eq!(whisper.role, "retranscribe");
     }
 
     #[test]
@@ -550,6 +878,150 @@ mod tests {
     #[test]
     fn model_ready_false_for_unknown_id() {
         assert!(!model_ready("no-such-model"));
+    }
+
+    mod size_on_disk_tests {
+        use super::*;
+
+        #[test]
+        fn none_when_not_downloaded() {
+            let dir = tempfile::tempdir().unwrap();
+            assert_eq!(size_on_disk(&test_file_spec(), dir.path()), None);
+            assert_eq!(size_on_disk(&test_spec(), dir.path()), None);
+        }
+
+        #[test]
+        fn real_bytes_for_a_downloaded_file_layout_model() {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(dir.path().join("model.bin"), vec![0u8; 1234]).unwrap();
+            assert_eq!(size_on_disk(&test_file_spec(), dir.path()), Some(1234));
+        }
+
+        #[test]
+        fn real_bytes_for_a_downloaded_archive_layout_model_sums_every_file() {
+            let dir = tempfile::tempdir().unwrap();
+            let model_dir = dir.path().join("test-model");
+            std::fs::create_dir_all(&model_dir).unwrap();
+            std::fs::write(model_dir.join("tokens.txt"), vec![0u8; 10]).unwrap();
+            std::fs::write(model_dir.join("encoder.int8.onnx"), vec![0u8; 20]).unwrap();
+            std::fs::write(model_dir.join("decoder.int8.onnx"), vec![0u8; 30]).unwrap();
+            std::fs::write(model_dir.join("joiner.int8.onnx"), vec![0u8; 40]).unwrap();
+            std::fs::write(dir.path().join("extra.onnx"), vec![0u8; 5]).unwrap();
+            // 10 + 20 + 30 + 40 (extracted dir) + 5 (extra_files) = 105
+            assert_eq!(size_on_disk(&test_spec(), dir.path()), Some(105));
+        }
+    }
+
+    mod delete_model_tests {
+        use super::*;
+
+        #[test]
+        fn remove_model_files_deletes_a_file_layout_models_single_file() {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(dir.path().join("model.bin"), b"x").unwrap();
+            remove_model_files(&test_file_spec(), dir.path()).unwrap();
+            assert!(!dir.path().join("model.bin").exists());
+        }
+
+        #[test]
+        fn remove_model_files_deletes_an_archive_layout_models_extracted_dir() {
+            let dir = tempfile::tempdir().unwrap();
+            let model_dir = dir.path().join("test-model");
+            std::fs::create_dir_all(&model_dir).unwrap();
+            std::fs::write(model_dir.join("tokens.txt"), b"x").unwrap();
+            remove_model_files(&test_spec(), dir.path()).unwrap();
+            assert!(!model_dir.exists());
+        }
+
+        #[test]
+        fn remove_model_files_is_a_no_op_when_already_absent() {
+            let dir = tempfile::tempdir().unwrap();
+            assert!(remove_model_files(&test_file_spec(), dir.path()).is_ok());
+            assert!(remove_model_files(&test_spec(), dir.path()).is_ok());
+        }
+
+        #[test]
+        fn validate_delete_rejects_an_unknown_id() {
+            let err = validate_delete("no-such-model", false, false).unwrap_err();
+            assert!(err.contains("no-such-model"));
+        }
+
+        #[test]
+        fn validate_delete_refuses_the_live_model() {
+            // Global Constraints: deleting Parakeet would break recording.
+            let err = validate_delete("parakeet-tdt-0.6b-v3-int8", false, false).unwrap_err();
+            assert!(err.contains("can't be deleted"), "{err}");
+        }
+
+        #[test]
+        fn validate_delete_refuses_while_a_download_of_that_id_is_in_flight() {
+            let err =
+                validate_delete("whisper-large-v3-turbo-q8", true, false).unwrap_err();
+            assert!(err.contains("downloading"), "{err}");
+        }
+
+        #[test]
+        fn validate_delete_refuses_while_a_retranscribe_job_is_running() {
+            let err =
+                validate_delete("whisper-large-v3-turbo-q8", false, true).unwrap_err();
+            assert!(err.contains("re-transcribe"), "{err}");
+        }
+
+        #[test]
+        fn validate_delete_allows_an_idle_retranscribe_model() {
+            assert!(validate_delete("whisper-large-v3-turbo-q8", false, false).is_ok());
+        }
+
+        #[test]
+        fn delete_model_at_removes_a_downloaded_file_layout_model() {
+            let dir = tempfile::tempdir().unwrap();
+            let file_path = dir.path().join("ggml-large-v3-turbo-q8_0.bin");
+            std::fs::write(&file_path, b"x").unwrap();
+
+            delete_model_at("whisper-large-v3-turbo-q8", dir.path(), false, false).unwrap();
+
+            assert!(!file_path.exists());
+        }
+
+        #[test]
+        fn delete_model_at_refuses_the_live_model_without_touching_disk() {
+            let dir = tempfile::tempdir().unwrap();
+            let model_dir = dir.path().join("parakeet-tdt-0.6b-v3-int8");
+            std::fs::create_dir_all(&model_dir).unwrap();
+            std::fs::write(model_dir.join("tokens.txt"), b"x").unwrap();
+
+            let err = delete_model_at("parakeet-tdt-0.6b-v3-int8", dir.path(), false, false)
+                .unwrap_err();
+
+            assert!(err.contains("can't be deleted"), "{err}");
+            assert!(model_dir.join("tokens.txt").exists(), "files must be left untouched");
+        }
+
+        #[test]
+        fn delete_model_at_refuses_while_downloading_without_touching_disk() {
+            let dir = tempfile::tempdir().unwrap();
+            let file_path = dir.path().join("ggml-large-v3-turbo-q8_0.bin");
+            std::fs::write(&file_path, b"x").unwrap();
+
+            let err = delete_model_at("whisper-large-v3-turbo-q8", dir.path(), true, false)
+                .unwrap_err();
+
+            assert!(err.contains("downloading"), "{err}");
+            assert!(file_path.exists(), "the file must be left untouched");
+        }
+
+        #[test]
+        fn delete_model_at_refuses_while_retranscribing_without_touching_disk() {
+            let dir = tempfile::tempdir().unwrap();
+            let file_path = dir.path().join("ggml-large-v3-turbo-q8_0.bin");
+            std::fs::write(&file_path, b"x").unwrap();
+
+            let err = delete_model_at("whisper-large-v3-turbo-q8", dir.path(), false, true)
+                .unwrap_err();
+
+            assert!(err.contains("re-transcribe"), "{err}");
+            assert!(file_path.exists(), "the file must be left untouched");
+        }
     }
 
     #[test]

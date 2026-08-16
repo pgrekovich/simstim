@@ -29,6 +29,14 @@ export interface AppConfig {
    * format control, next to "Keep call audio".
    */
   audio_format: string;
+  /**
+   * Registry id (stage 0.8) of whichever whisper model
+   * `retranscribe_session` uses for its offline re-transcribe pass. Defaults
+   * to `"whisper-large-v3-turbo-q8"` (the model the owner already
+   * downloaded before model selection existed). Set from the Settings
+   * dialog's model manager via `setRetranscribeModel`.
+   */
+  retranscribe_model: string;
 }
 
 /**
@@ -76,12 +84,25 @@ export interface ModelInfo {
   downloaded: boolean;
   active: boolean;
   /**
-   * Whether this model can become the live ASR engine. `false` for whisper
-   * (stage 0.7): it is a re-transcribe-only engine, so the Settings UI must
-   * not offer a "Use" button for it, driven by this field rather than a
-   * hardcoded model id.
+   * Whether this model can become the live ASR engine. `false` for every
+   * whisper entry: they're re-transcribe-only. Derived from `role` on the
+   * Rust side (`role === "live"`); kept alongside `role` so the stage-0.7
+   * Settings UI (still reading this field) keeps working unchanged until
+   * the stage-0.8 model manager UI migrates to `role`.
    */
   selectable: boolean;
+  /**
+   * `"live" | "retranscribe"` (stage 0.8): generalizes `selectable` into the
+   * full role, so the Settings UI can group re-transcribe models together
+   * instead of only knowing "not the live one".
+   */
+  role: string;
+  /**
+   * Real bytes on disk for this model's downloaded files, `null` when not
+   * downloaded (stage 0.8): actual usage rather than the advertised
+   * `size_mb`, which can differ from what a real extracted archive occupies.
+   */
+  size_on_disk_bytes: number | null;
 }
 
 /** Mirrors `SessionErrorPayload` (apps/desktop/src-tauri/src/lib.rs), the `session-error` event payload. */
@@ -142,12 +163,34 @@ export function setActiveModel(id: string): Promise<void> {
   return invoke("set_active_model", { id });
 }
 
+/**
+ * Sets and persists which registered whisper model `retranscribe_session`
+ * uses (stage 0.8). Mirrors `set_retranscribe_model`
+ * (apps/desktop/src-tauri/src/lib.rs). Rejects an unknown id or one that
+ * isn't a re-transcribe-role model (e.g. the live Parakeet id).
+ */
+export function setRetranscribeModel(id: string): Promise<void> {
+  return invoke("set_retranscribe_model", { id });
+}
+
 export function listModels(): Promise<ModelInfo[]> {
   return invoke("list_models");
 }
 
 export function downloadModel(id: string): Promise<void> {
   return invoke("download_model", { id });
+}
+
+/**
+ * Deletes a downloaded model's files to reclaim disk (stage 0.8). Mirrors
+ * `models::delete_model` (apps/desktop/src-tauri/src/models.rs). Rejects
+ * (with a plain, user-facing message) if a download of `id` is in flight, a
+ * re-transcribe job is currently running, or `id` is the live model
+ * (deleting it would break recording). Deleting the currently selected
+ * re-transcribe model is allowed.
+ */
+export function deleteModel(id: string): Promise<void> {
+  return invoke("delete_model", { id });
 }
 
 /**

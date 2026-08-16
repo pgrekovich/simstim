@@ -7,6 +7,14 @@ use std::path::{Path, PathBuf};
 /// constant; this only seeds `Config::default()`.
 pub const KNOWN_MODEL_ID: &str = "parakeet-tdt-0.6b-v3-int8";
 
+/// Default `retranscribe_model` id (stage 0.8): the whisper entry the owner
+/// already downloaded (874 MB) before model selection existed. Kept as the
+/// default so existing configs and downloaded files keep working unchanged
+/// -- see the stage-0.8 Global Constraints. `set_retranscribe_model`
+/// validates ids against the registry itself, not this constant; this only
+/// seeds `Config::default()` and old configs' `serde(default)`.
+pub const DEFAULT_RETRANSCRIBE_MODEL: &str = "whisper-large-v3-turbo-q8";
+
 /// Valid `theme` values: `set_theme` rejects anything else.
 pub const VALID_THEMES: &[&str] = &["system", "light", "dark"];
 
@@ -37,6 +45,12 @@ fn default_audio_format() -> String {
     "aac".to_string()
 }
 
+/// Default for `retranscribe_model` (stage 0.8): see
+/// [`DEFAULT_RETRANSCRIBE_MODEL`]'s doc comment.
+fn default_retranscribe_model() -> String {
+    DEFAULT_RETRANSCRIBE_MODEL.to_string()
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Config {
     pub output_dir: PathBuf,
@@ -60,6 +74,14 @@ pub struct Config {
     /// failing deserialization entirely.
     #[serde(default = "default_audio_format")]
     pub audio_format: String,
+    /// Which registry entry `retranscribe_session` uses for its offline
+    /// re-transcribe pass (stage 0.8: the owner can pick a bigger/smaller
+    /// whisper model). `serde(default)` so config.json files written before
+    /// this field existed still load (falling back to
+    /// [`DEFAULT_RETRANSCRIBE_MODEL`], the model they already downloaded)
+    /// instead of failing deserialization entirely.
+    #[serde(default = "default_retranscribe_model")]
+    pub retranscribe_model: String,
 }
 
 impl Default for Config {
@@ -70,6 +92,7 @@ impl Default for Config {
             theme: default_theme(),
             keep_audio: default_keep_audio(),
             audio_format: default_audio_format(),
+            retranscribe_model: default_retranscribe_model(),
         }
     }
 }
@@ -202,6 +225,7 @@ mod tests {
             theme: "dark".to_string(),
             keep_audio: false,
             audio_format: "flac".to_string(),
+            retranscribe_model: "whisper-large-v3".to_string(),
         };
         cfg.save_to(&path).unwrap();
         let loaded = Config::load_from(&path);
@@ -221,6 +245,26 @@ mod tests {
     #[test]
     fn audio_format_defaults_to_aac() {
         assert_eq!(Config::default().audio_format, "aac");
+    }
+
+    #[test]
+    fn retranscribe_model_defaults_to_the_already_downloaded_whisper_id() {
+        assert_eq!(Config::default().retranscribe_model, DEFAULT_RETRANSCRIBE_MODEL);
+        assert_eq!(Config::default().retranscribe_model, "whisper-large-v3-turbo-q8");
+    }
+
+    #[test]
+    fn old_config_json_without_retranscribe_model_field_loads_with_the_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        // What stage-0.7 wrote: no "retranscribe_model" key at all.
+        std::fs::write(
+            &path,
+            r#"{"output_dir":"/tmp/some-output","active_model":"custom-model-id","theme":"dark","keep_audio":true,"audio_format":"aac"}"#,
+        )
+        .unwrap();
+        let cfg = Config::load_from(&path);
+        assert_eq!(cfg.retranscribe_model, DEFAULT_RETRANSCRIBE_MODEL);
     }
 
     #[test]

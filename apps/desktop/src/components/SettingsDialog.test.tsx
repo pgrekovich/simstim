@@ -29,6 +29,7 @@ const baseConfig: AppConfig = {
   theme: "system",
   keep_audio: true,
   audio_format: "aac",
+  retranscribe_model: "whisper-large-v3-turbo-q8",
 };
 
 beforeEach(() => {
@@ -135,6 +136,8 @@ describe("SettingsDialog: whisper model row (stage 0.7 Task 5)", () => {
       downloaded: true,
       active: true,
       selectable: true,
+      role: "live",
+      size_on_disk_bytes: 487_000_000,
     },
     {
       id: "whisper-large-v3-turbo-q8",
@@ -143,6 +146,8 @@ describe("SettingsDialog: whisper model row (stage 0.7 Task 5)", () => {
       downloaded: true,
       active: false,
       selectable: false,
+      role: "retranscribe",
+      size_on_disk_bytes: 874_188_075,
     },
   ];
 

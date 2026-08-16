@@ -342,16 +342,17 @@ fn set_output_dir(path: String, app: AppHandle) -> Result<(), String> {
     set_output_dir_at(&app, &config::config_path(), path)
 }
 
-/// `Err` unless `id` names a registered, `selectable` model. Split out from
-/// `set_active_model` so the rejection logic is testable without touching
-/// the real config file (mirrors `config::validate_theme`'s split for the
-/// same reason). Whisper (stage 0.7) is registered but not `selectable`: it
-/// is a re-transcribe-only engine, never the live pipeline, so this rejects
-/// it even if a UI bug ever tried to offer it.
+/// `Err` unless `id` names a registered model with the `Live` role. Split out
+/// from `set_active_model` so the rejection logic is testable without
+/// touching the real config file (mirrors `config::validate_theme`'s split
+/// for the same reason). Whisper (stage 0.7, generalized into `ModelRole` in
+/// stage 0.8) is registered but not `Live`: it is a re-transcribe-only
+/// engine, never the live pipeline, so this rejects it even if a UI bug ever
+/// tried to offer it.
 fn validate_active_model(id: &str) -> Result<(), String> {
     match models::find(id) {
         None => Err(format!("unknown model id: {id}")),
-        Some(spec) if !spec.selectable => {
+        Some(spec) if spec.role != models::ModelRole::Live => {
             Err(format!("model is not selectable as the live engine: {id}"))
         }
         Some(_) => Ok(()),
@@ -363,6 +364,33 @@ fn set_active_model(id: String) -> Result<(), String> {
     validate_active_model(&id)?;
     let mut cfg = Config::load();
     cfg.active_model = id;
+    cfg.save().map_err(|e| e.to_string())
+}
+
+/// `Err` unless `id` names a registered model with the `Retranscribe` role.
+/// Split out from `set_retranscribe_model` the same way `validate_active_model`
+/// is split from `set_active_model` -- symmetric validation for the other
+/// half of `ModelRole` (stage 0.8: the owner picks which whisper model
+/// re-transcribes calls).
+fn validate_retranscribe_model(id: &str) -> Result<(), String> {
+    match models::find(id) {
+        None => Err(format!("unknown model id: {id}")),
+        Some(spec) if spec.role != models::ModelRole::Retranscribe => {
+            Err(format!("model is not selectable for re-transcribe: {id}"))
+        }
+        Some(_) => Ok(()),
+    }
+}
+
+/// Sets and persists which registered whisper model `retranscribe_session`
+/// uses (stage 0.8 Global Constraints). Rejects an unknown id or a `Live`
+/// one (Parakeet can't be used to re-transcribe) via
+/// `validate_retranscribe_model`.
+#[tauri::command]
+fn set_retranscribe_model(id: String) -> Result<(), String> {
+    validate_retranscribe_model(&id)?;
+    let mut cfg = Config::load();
+    cfg.retranscribe_model = id;
     cfg.save().map_err(|e| e.to_string())
 }
 
@@ -394,11 +422,13 @@ pub fn run() {
             get_config,
             set_output_dir,
             set_active_model,
+            set_retranscribe_model,
             config::set_theme,
             config::set_keep_audio,
             config::set_audio_format,
             models::list_models,
             models::download_model,
+            models::delete_model,
             sessions::list_sessions,
             sessions::read_session,
             sessions::save_session,
@@ -483,6 +513,28 @@ mod tests {
         // bypassing the Settings UI's own gating.
         let err = validate_active_model("whisper-large-v3-turbo-q8").unwrap_err();
         assert!(err.contains("whisper-large-v3-turbo-q8"));
+    }
+
+    #[test]
+    fn validate_retranscribe_model_accepts_a_registered_whisper_id() {
+        assert!(validate_retranscribe_model("whisper-large-v3-turbo-q8").is_ok());
+        assert!(validate_retranscribe_model("whisper-large-v3").is_ok());
+    }
+
+    #[test]
+    fn validate_retranscribe_model_rejects_an_unknown_id() {
+        let err = validate_retranscribe_model("no-such-model").unwrap_err();
+        assert!(err.contains("no-such-model"));
+    }
+
+    #[test]
+    fn validate_retranscribe_model_rejects_the_live_parakeet_id() {
+        // Stage-0.8 Global Constraints: a non-live model can't be set as the
+        // live engine, and symmetrically the live model can't be set as the
+        // re-transcribe engine -- Parakeet has no offline whisper-shaped
+        // weights to run a re-transcribe pass with.
+        let err = validate_retranscribe_model("parakeet-tdt-0.6b-v3-int8").unwrap_err();
+        assert!(err.contains("parakeet-tdt-0.6b-v3-int8"));
     }
 
     mod asset_scope {

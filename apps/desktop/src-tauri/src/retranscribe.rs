@@ -1,6 +1,9 @@
 //! On-demand higher-quality re-transcription of a session's saved audio,
-//! using the offline whisper large-v3-turbo pass (`simstim_engine::WhisperEngine`,
-//! a sibling to the live Parakeet pipeline, see that module's docs).
+//! using an offline whisper pass (`simstim_engine::WhisperEngine`, a sibling
+//! to the live Parakeet pipeline, see that module's docs) with whichever
+//! registered whisper model `Config::retranscribe_model` currently names
+//! (stage 0.8: the owner can pick a bigger/smaller model from Settings; see
+//! `models::REGISTRY`'s four whisper entries).
 //!
 //! ## What a re-transcribe does
 //!
@@ -77,16 +80,10 @@ use simstim_engine::{WhisperEngine, WhisperSegment};
 use simstim_transcript::Speaker;
 
 use crate::audio_sink::{audio_path_for, m4a_path_for, wav_path_for};
+use crate::config::Config;
 use crate::models::{self, ModelLayout};
 use crate::sessions;
 use crate::AppState;
-
-/// The registry id of the model this pipeline always uses (see
-/// `models::REGISTRY`). Re-derived from the registry rather than assumed
-/// identical to it everywhere: `whisper_model_path` looks the spec up by
-/// this id, so a mismatch would fail loudly (`check_model_ready` rejecting
-/// with "not downloaded") rather than silently using the wrong file.
-const WHISPER_MODEL_ID: &str = "whisper-large-v3-turbo-q8";
 
 /// `retranscribe-progress` event payload (Global Constraints). `channel` and
 /// `message` serialize as explicit JSON `null` when absent (not omitted, per
@@ -121,12 +118,24 @@ fn emit_progress(
 
 /// Guards against two re-transcribe jobs running concurrently (see module
 /// docs for why this is global rather than per-path). `Some(path)` names the
-/// session currently being re-transcribed.
-pub struct RetranscribeState(Mutex<Option<String>>);
+/// session currently being re-transcribed. `pub(crate)` field (rather than
+/// only exposing methods) so `models::delete_model`'s tests can construct a
+/// "job running" fixture directly, the same way `DownloadState`'s `pub`
+/// field lets `models`' own tests do.
+pub struct RetranscribeState(pub(crate) Mutex<Option<String>>);
 
 impl Default for RetranscribeState {
     fn default() -> Self {
         Self(Mutex::new(None))
+    }
+}
+
+impl RetranscribeState {
+    /// Whether a re-transcribe job is currently running (stage 0.8:
+    /// `models::delete_model`'s rejection -- deleting a model's file out
+    /// from under an in-flight job could corrupt or crash it).
+    pub fn is_running(&self) -> bool {
+        self.0.lock().unwrap().is_some()
     }
 }
 
@@ -344,12 +353,13 @@ pub(crate) fn resolve_audio_path(md_path: &Path) -> Option<PathBuf> {
     None
 }
 
-/// The whisper model's path on disk if the registry knows about it and it's
-/// a `File` layout (it always is, currently -- see `models::REGISTRY`).
+/// `id`'s path on disk if the registry knows about it and it's a `File`
+/// layout (every whisper entry always is -- see `models::REGISTRY`).
 /// Doesn't check existence; callers pair this with `Path::is_file` (see
-/// `check_model_ready`).
-fn whisper_model_path() -> Option<PathBuf> {
-    let spec = models::find(WHISPER_MODEL_ID)?;
+/// `check_model_ready`). Stage 0.8: `id` is whichever model
+/// `Config::retranscribe_model` currently names, not a fixed constant.
+fn whisper_model_path(id: &str) -> Option<PathBuf> {
+    let spec = models::find(id)?;
     match &spec.layout {
         ModelLayout::File { file_name, .. } => Some(simstim_engine::models_dir().join(file_name)),
         ModelLayout::Archive { .. } => None,
@@ -398,15 +408,19 @@ fn check_audio_present(audio_path: Option<&Path>) -> Result<(), String> {
     }
 }
 
-/// Whether the whisper model is downloaded, given the path `whisper_model_path`
-/// resolved (`None` if the registry entry is somehow missing/misshapen).
-fn check_model_ready(model_path: Option<&Path>) -> Result<(), String> {
+/// Whether the selected re-transcribe model is downloaded, given the path
+/// `whisper_model_path` resolved (`None` if the registry entry is somehow
+/// missing/misshapen). Stage 0.8: the rejection names `model_name` (the
+/// selected model's display name, not its internal id) so the message stays
+/// useful now that more than one whisper model can be selected -- per the
+/// Global Constraints, `retranscribe_session`'s missing-model message must
+/// name the selected model.
+fn check_model_ready(model_path: Option<&Path>, model_name: &str) -> Result<(), String> {
     match model_path {
         Some(p) if p.is_file() => Ok(()),
-        _ => Err(
-            "the improved transcription model isn't downloaded yet -- download it from Settings first"
-                .to_string(),
-        ),
+        _ => Err(format!(
+            "{model_name} isn't downloaded yet -- download it from Settings first"
+        )),
     }
 }
 
@@ -525,8 +539,16 @@ pub async fn retranscribe_session(
     check_audio_present(audio_path.as_deref())?;
     let audio_path = audio_path.expect("checked present by check_audio_present");
 
-    let model_path = whisper_model_path();
-    check_model_ready(model_path.as_deref())?;
+    // Stage 0.8: the model to use is whichever the owner has selected, not a
+    // fixed constant. Falls back to the raw id for the rejection message if
+    // the registry entry is somehow missing (mirrors `start_recording`'s own
+    // fallback for `active_model` in lib.rs).
+    let cfg = Config::load();
+    let model_name = models::find(&cfg.retranscribe_model)
+        .map(|spec| spec.name)
+        .unwrap_or(cfg.retranscribe_model.as_str());
+    let model_path = whisper_model_path(&cfg.retranscribe_model);
+    check_model_ready(model_path.as_deref(), model_name)?;
     let model_path = model_path.expect("checked present by check_model_ready");
 
     try_start_job(&mut jobs.0.lock().unwrap(), &path)?;
@@ -534,6 +556,7 @@ pub async fn retranscribe_session(
     let app_for_job = app.clone();
     let path_for_job = path.clone();
     let md_path_for_check = md_path.clone();
+    let asr_id = cfg.retranscribe_model.clone();
 
     let join_result = tauri::async_runtime::spawn_blocking(move || {
         let progress_app = app_for_job.clone();
@@ -571,7 +594,7 @@ pub async fn retranscribe_session(
             &md_path,
             &audio_path,
             &model_path,
-            WHISPER_MODEL_ID,
+            &asr_id,
             before_write,
             on_progress,
         )
@@ -605,6 +628,7 @@ pub async fn retranscribe_session(
 mod tests {
     use super::*;
     use crate::audio_sink::AudioSink;
+    use crate::config::DEFAULT_RETRANSCRIBE_MODEL;
     use chrono::TimeZone;
     use simstim_capture::Channel;
 
@@ -753,13 +777,23 @@ mod tests {
 
         #[test]
         fn check_model_ready_rejects_none() {
-            assert!(check_model_ready(None).is_err());
+            assert!(check_model_ready(None, "Some Model").is_err());
         }
 
         #[test]
         fn check_model_ready_rejects_a_path_that_does_not_exist() {
-            let err = check_model_ready(Some(Path::new("/no/such/model.bin"))).unwrap_err();
+            let err = check_model_ready(Some(Path::new("/no/such/model.bin")), "Some Model")
+                .unwrap_err();
             assert!(err.contains("downloaded"), "{err}");
+        }
+
+        /// Stage-0.8 Global Constraints: the missing-model rejection must
+        /// name the selected model, not a generic phrase, now that more than
+        /// one whisper model can be selected.
+        #[test]
+        fn check_model_ready_names_the_selected_model_when_missing() {
+            let err = check_model_ready(None, "Whisper large-v3 (full)").unwrap_err();
+            assert!(err.contains("Whisper large-v3 (full)"), "{err}");
         }
 
         #[test]
@@ -767,7 +801,7 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             let model = dir.path().join("model.bin");
             std::fs::write(&model, b"x").unwrap();
-            assert!(check_model_ready(Some(&model)).is_ok());
+            assert!(check_model_ready(Some(&model), "Some Model").is_ok());
         }
 
         #[test]
@@ -907,8 +941,19 @@ mod tests {
 
     #[test]
     fn whisper_model_path_resolves_to_the_registry_file_name() {
-        let path = whisper_model_path().unwrap();
+        let path = whisper_model_path(DEFAULT_RETRANSCRIBE_MODEL).unwrap();
         assert!(path.ends_with("ggml-large-v3-turbo-q8_0.bin"), "{}", path.display());
+    }
+
+    #[test]
+    fn whisper_model_path_resolves_a_different_selected_model_too() {
+        let path = whisper_model_path("whisper-large-v3-turbo-q5").unwrap();
+        assert!(path.ends_with("ggml-large-v3-turbo-q5_0.bin"), "{}", path.display());
+    }
+
+    #[test]
+    fn whisper_model_path_returns_none_for_an_unknown_id() {
+        assert!(whisper_model_path("no-such-model").is_none());
     }
 
     /// Round-trips a small stereo FLAC through `AudioSink` (the encoder) and
@@ -1270,7 +1315,7 @@ mod tests {
             &md_path,
             &flac_path,
             &model_path,
-            WHISPER_MODEL_ID,
+            DEFAULT_RETRANSCRIBE_MODEL,
             || Ok(()),
             |phase, channel, message| {
                 println!("[retranscribe] phase={phase} channel={channel:?} message={message:?}");
@@ -1367,7 +1412,7 @@ mod tests {
             &md_path,
             &m4a_path,
             &model_path,
-            WHISPER_MODEL_ID,
+            DEFAULT_RETRANSCRIBE_MODEL,
             || Ok(()),
             |phase, channel, message| {
                 println!("[retranscribe] phase={phase} channel={channel:?} message={message:?}");

@@ -269,16 +269,11 @@ pub struct ModelInfo {
     pub size_mb: u64,
     pub downloaded: bool,
     pub active: bool,
-    /// Derived from `role` (`role == Live`): whether the Settings UI should
-    /// offer a "Use"/"Active" affordance for this model at all. Kept
-    /// alongside `role` rather than removed outright so the existing
-    /// (stage-0.7) Settings UI, which still reads this field directly,
-    /// keeps working unchanged until the stage-0.8 model manager UI (a
-    /// later task) migrates it to `role`.
-    pub selectable: bool,
-    /// `"live" | "retranscribe"` (stage 0.8): generalizes `selectable` into
-    /// the full role, so the Settings UI can group re-transcribe models
-    /// together instead of only knowing "not the live one".
+    /// `"live" | "retranscribe"` (stage 0.8): the Settings UI's model
+    /// manager groups rows by this field (Recording vs Re-transcribe)
+    /// instead of testing a bare bool. Replaces the stage-0.7 `selectable`
+    /// field outright now that the stage-0.8 model manager UI (this field's
+    /// only remaining consumer) reads `role` directly.
     pub role: String,
     /// Real bytes on disk for this model's downloaded files (`None`/`null`
     /// when not downloaded), stage 0.8: lets the UI show actual disk usage
@@ -338,7 +333,6 @@ pub fn list_models() -> Vec<ModelInfo> {
             size_mb: spec.size_mb,
             downloaded: is_downloaded(spec, &models_dir),
             active: spec.id == cfg.active_model,
-            selectable: spec.role == ModelRole::Live,
             role: spec.role.as_str().to_string(),
             size_on_disk_bytes: size_on_disk(spec, &models_dir),
         })
@@ -768,20 +762,18 @@ mod tests {
     }
 
     #[test]
-    fn list_models_selectable_mirrors_the_live_role() {
+    fn list_models_role_reflects_the_registry() {
         let models = list_models();
         let parakeet = models
             .iter()
             .find(|m| m.id == "parakeet-tdt-0.6b-v3-int8")
             .unwrap();
-        assert!(parakeet.selectable);
         assert_eq!(parakeet.role, "live");
 
         let whisper = models
             .iter()
             .find(|m| m.id == "whisper-large-v3-turbo-q8")
             .unwrap();
-        assert!(!whisper.selectable);
         assert_eq!(whisper.role, "retranscribe");
     }
 

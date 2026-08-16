@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
+import { Trash2 } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -13,6 +14,7 @@ import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { cn } from "@/lib/utils";
 import {
+  deleteModel,
   downloadModel,
   getConfig,
   listModels,
@@ -20,6 +22,7 @@ import {
   setAudioFormat,
   setKeepAudio,
   setOutputDir,
+  setRetranscribeModel,
   setTheme,
   type AppConfig,
   type DownloadProgress,
@@ -58,6 +61,22 @@ function humanSizeMb(sizeMb: number): string {
   return `${sizeMb} MB`;
 }
 
+/**
+ * Real bytes a deleting `model` would free: its actual on-disk size when
+ * known, falling back to the advertised `size_mb` (stage 0.8) -- a model
+ * should only ever reach the delete control while downloaded (so
+ * `size_on_disk_bytes` should be set), but the fallback keeps the confirm
+ * copy honest even if that invariant is ever violated by a stale row.
+ */
+function freedBytes(model: ModelInfo): number {
+  return model.size_on_disk_bytes ?? model.size_mb * 1_000_000;
+}
+
+/** Sum of real on-disk bytes across every currently-downloaded model in `list`. */
+function totalDiskUsed(list: ModelInfo[]): number {
+  return list.reduce((sum, model) => (model.downloaded ? sum + freedBytes(model) : sum), 0);
+}
+
 interface SettingsDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -70,6 +89,40 @@ interface SettingsDialogProps {
   onModelsChanged?: (config: AppConfig, models: ModelInfo[]) => void;
 }
 
+/**
+ * Download/extract/error progress for one model row, shared between the
+ * Recording and Re-transcribe groups (stage 0.8 model manager). Only
+ * rendered while the model isn't downloaded yet -- once `download_model`
+ * finishes, `list_models` reports `downloaded: true` and this returns null,
+ * which is what lets the row settle into its normal (radio/Use/delete)
+ * controls instead of a stale progress bar.
+ */
+function ModelProgress({ progress }: { progress: DownloadProgress | undefined }) {
+  if (!progress) return null;
+  if (progress.phase === "download") {
+    return (
+      <div className="flex flex-col gap-1">
+        <Progress value={progress.total > 0 ? (progress.received / progress.total) * 100 : 0} />
+        <span className="text-xs text-muted-foreground">
+          {humanBytes(progress.received)} / {progress.total > 0 ? humanBytes(progress.total) : "?"}
+        </span>
+      </div>
+    );
+  }
+  if (progress.phase === "extract") {
+    return (
+      <div className="flex flex-col gap-1">
+        <Progress value={100} className={cn("[&>*]:animate-pulse")} />
+        <span className="text-xs text-muted-foreground">extracting...</span>
+      </div>
+    );
+  }
+  if (progress.phase === "error") {
+    return <span className="text-xs text-destructive">{progress.message}</span>;
+  }
+  return null;
+}
+
 export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: SettingsDialogProps) {
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [models, setModels] = useState<ModelInfo[]>([]);
@@ -78,8 +131,17 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
   const [folderError, setFolderError] = useState<string | null>(null);
   const [keepAudioError, setKeepAudioError] = useState<string | null>(null);
   const [audioFormatError, setAudioFormatError] = useState<string | null>(null);
+  const [retranscribeError, setRetranscribeError] = useState<string | null>(null);
   const [progress, setProgress] = useState<Record<string, DownloadProgress>>({});
   const [busyIds, setBusyIds] = useState<Set<string>>(new Set());
+  // Id of the row currently showing the inline "Delete N MB?" confirm step
+  // (stage 0.8), at most one at a time. A small ref-free piece of state is
+  // enough here: unlike `inFlightDownloadsRef` below, a double-click on the
+  // same confirm button just calls `deleteModel` twice, which the backend
+  // already treats as a no-op the second time (`remove_model_files` is
+  // idempotent) rather than an error.
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [deleteErrors, setDeleteErrors] = useState<Record<string, string>>({});
   const onModelsChangedRef = useRef(onModelsChanged);
   onModelsChangedRef.current = onModelsChanged;
   // Synchronous (ref, not state) guard against a double-click firing
@@ -228,6 +290,31 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
     }
   }
 
+  /**
+   * Selects `id` as the re-transcribe model (stage 0.8): only ever called
+   * for an already-downloaded model (the radio control isn't offered
+   * otherwise). No optimistic update -- `config.retranscribe_model` only
+   * drives which radio is checked, so waiting for `refresh()` avoids a
+   * flicker back to the old selection if the call rejects.
+   */
+  async function handleSetRetranscribeModel(id: string) {
+    if (config?.retranscribe_model === id) return;
+    setBusyIds((prev) => new Set(prev).add(id));
+    setRetranscribeError(null);
+    try {
+      await setRetranscribeModel(id);
+      await refresh();
+    } catch (err) {
+      setRetranscribeError(String(err));
+    } finally {
+      setBusyIds((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    }
+  }
+
   async function handleDownload(id: string) {
     if (inFlightDownloadsRef.current.has(id)) return;
     inFlightDownloadsRef.current.add(id);
@@ -258,6 +345,41 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
       inFlightDownloadsRef.current.delete(id);
     }
   }
+
+  /** First click on a row's trash icon: shows the "Delete N MB?" confirm step. */
+  function handleDeleteClick(id: string) {
+    setDeleteErrors((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+    setDeleteConfirmId(id);
+  }
+
+  function handleCancelDelete() {
+    setDeleteConfirmId(null);
+  }
+
+  /** Second click, on the confirm button itself: actually deletes the model. */
+  async function handleConfirmDelete(id: string) {
+    setBusyIds((prev) => new Set(prev).add(id));
+    try {
+      await deleteModel(id);
+      await refresh();
+      setDeleteConfirmId(null);
+    } catch (err) {
+      setDeleteErrors((prev) => ({ ...prev, [id]: String(err) }));
+    } finally {
+      setBusyIds((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    }
+  }
+
+  const liveModels = models.filter((m) => m.role === "live");
+  const retranscribeModels = models.filter((m) => m.role === "retranscribe");
 
   return (
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
@@ -338,63 +460,146 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
           </div>
         </section>
 
-        <section className="flex flex-col gap-2">
+        <section className="flex flex-col gap-3">
           <h3 className="text-sm font-semibold">Models</h3>
-          <ul className="flex flex-col gap-3">
-            {models.map((model) => {
-              const p = progress[model.id];
-              const busy = busyIds.has(model.id);
-              return (
-                <li key={model.id} className="flex flex-col gap-1.5 rounded-md border p-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="flex flex-col">
-                      <span className="text-sm font-medium">{model.name}</span>
-                      <span className="text-xs text-muted-foreground">{humanSizeMb(model.size_mb)}</span>
-                    </div>
-                    {/* Whisper (selectable: false) is a re-transcribe-only engine: it
-                        never offers Use/Active, just a plain downloaded marker. Driven
-                        by the registry's `selectable` field, not a hardcoded model id. */}
-                    {model.downloaded && model.selectable && model.active && (
-                      <span className="text-sm text-muted-foreground">Active</span>
-                    )}
-                    {model.downloaded && model.selectable && !model.active && (
-                      <Button variant="outline" size="sm" disabled={busy} onClick={() => handleUse(model.id)}>
-                        Use
-                      </Button>
-                    )}
-                    {model.downloaded && !model.selectable && (
-                      <span className="text-sm text-muted-foreground">Downloaded</span>
-                    )}
-                    {!model.downloaded && (!p || p.phase === "error") && (
-                      <Button variant="outline" size="sm" onClick={() => handleDownload(model.id)}>
-                        Download
-                      </Button>
-                    )}
-                  </div>
 
-                  {!model.downloaded && p && p.phase === "download" && (
-                    <div className="flex flex-col gap-1">
-                      <Progress value={p.total > 0 ? (p.received / p.total) * 100 : 0} />
-                      <span className="text-xs text-muted-foreground">
-                        {humanBytes(p.received)} / {p.total > 0 ? humanBytes(p.total) : "?"}
-                      </span>
+          {/* Recording group (stage 0.8): every `role === "live"` entry.
+              Parakeet is the only one today and stays the only one a future
+              entry could add to without this section changing -- it's
+              driven by `role`, not a hardcoded id. Live models never get a
+              delete control here (Global Constraints: deleting the model
+              that drives recording would break it). */}
+          <div className="flex flex-col gap-1.5">
+            <div className="flex items-baseline justify-between gap-2">
+              <h4 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+                Recording
+              </h4>
+              <span className="text-xs text-muted-foreground">
+                {humanBytes(totalDiskUsed(liveModels))} used
+              </span>
+            </div>
+            <ul className="flex flex-col gap-3">
+              {liveModels.map((model) => {
+                const p = progress[model.id];
+                const busy = busyIds.has(model.id);
+                return (
+                  <li key={model.id} className="flex flex-col gap-1.5 rounded-md border p-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="flex flex-col">
+                        <span className="text-sm font-medium">{model.name}</span>
+                        <span className="text-xs text-muted-foreground">{humanSizeMb(model.size_mb)}</span>
+                      </div>
+                      {model.downloaded && model.active && (
+                        <span className="text-sm text-muted-foreground">Active</span>
+                      )}
+                      {model.downloaded && !model.active && (
+                        <Button variant="outline" size="sm" disabled={busy} onClick={() => handleUse(model.id)}>
+                          Use
+                        </Button>
+                      )}
+                      {!model.downloaded && (!p || p.phase === "error") && (
+                        <Button variant="outline" size="sm" onClick={() => handleDownload(model.id)}>
+                          Download
+                        </Button>
+                      )}
                     </div>
-                  )}
+                    {!model.downloaded && <ModelProgress progress={p} />}
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
 
-                  {!model.downloaded && p && p.phase === "extract" && (
-                    <div className="flex flex-col gap-1">
-                      <Progress value={100} className={cn("[&>*]:animate-pulse")} />
-                      <span className="text-xs text-muted-foreground">extracting...</span>
+          {/* Re-transcribe group (stage 0.8): every `role === "retranscribe"`
+              entry (the whisper family). Radio-style selection among
+              downloaded models only reflects `config.retranscribe_model`;
+              every downloaded row also gets a delete control to reclaim
+              disk. */}
+          <div className="flex flex-col gap-1.5">
+            <div className="flex items-baseline justify-between gap-2">
+              <h4 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+                Re-transcribe
+              </h4>
+              <span className="text-xs text-muted-foreground">
+                {humanBytes(totalDiskUsed(retranscribeModels))} used
+              </span>
+            </div>
+            <span className="text-xs text-muted-foreground">
+              Turbo models are faster (measured about 12x realtime for turbo q8 on this
+              machine). The non-turbo large-v3 models are slower but usually read
+              non-English audio better.
+            </span>
+            {retranscribeError && <span className="text-xs text-destructive">{retranscribeError}</span>}
+            <ul className="flex flex-col gap-3">
+              {retranscribeModels.map((model) => {
+                const p = progress[model.id];
+                const busy = busyIds.has(model.id);
+                const confirming = deleteConfirmId === model.id;
+                return (
+                  <li key={model.id} className="flex flex-col gap-1.5 rounded-md border p-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="flex min-w-0 items-center gap-2.5">
+                        {model.downloaded && (
+                          <input
+                            type="radio"
+                            name="retranscribe-model"
+                            aria-label={model.name}
+                            checked={config?.retranscribe_model === model.id}
+                            disabled={busy}
+                            onChange={() => handleSetRetranscribeModel(model.id)}
+                            className="size-4 shrink-0 accent-primary"
+                          />
+                        )}
+                        <div className="flex min-w-0 flex-col">
+                          <span className="truncate text-sm font-medium">{model.name}</span>
+                          <span className="text-xs text-muted-foreground">{humanSizeMb(model.size_mb)}</span>
+                        </div>
+                      </div>
+
+                      <div className="flex shrink-0 items-center gap-1.5">
+                        {!model.downloaded && (!p || p.phase === "error") && (
+                          <Button variant="outline" size="sm" onClick={() => handleDownload(model.id)}>
+                            Download
+                          </Button>
+                        )}
+                        {model.downloaded && !confirming && (
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            aria-label={`Delete ${model.name}`}
+                            disabled={busy}
+                            className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                            onClick={() => handleDeleteClick(model.id)}
+                          >
+                            <Trash2 />
+                          </Button>
+                        )}
+                        {model.downloaded && confirming && (
+                          <>
+                            <Button
+                              variant="destructive"
+                              size="sm"
+                              disabled={busy}
+                              onClick={() => handleConfirmDelete(model.id)}
+                            >
+                              Delete {humanBytes(freedBytes(model))}?
+                            </Button>
+                            <Button variant="ghost" size="sm" disabled={busy} onClick={handleCancelDelete}>
+                              Cancel
+                            </Button>
+                          </>
+                        )}
+                      </div>
                     </div>
-                  )}
-
-                  {!model.downloaded && p && p.phase === "error" && (
-                    <span className="text-xs text-destructive">{p.message}</span>
-                  )}
-                </li>
-              );
-            })}
-          </ul>
+                    {!model.downloaded && <ModelProgress progress={p} />}
+                    {deleteErrors[model.id] && (
+                      <span className="text-xs text-destructive">{deleteErrors[model.id]}</span>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
         </section>
       </DialogContent>
     </Dialog>

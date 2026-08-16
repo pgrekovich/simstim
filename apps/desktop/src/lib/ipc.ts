@@ -84,17 +84,11 @@ export interface ModelInfo {
   downloaded: boolean;
   active: boolean;
   /**
-   * Whether this model can become the live ASR engine. `false` for every
-   * whisper entry: they're re-transcribe-only. Derived from `role` on the
-   * Rust side (`role === "live"`); kept alongside `role` so the stage-0.7
-   * Settings UI (still reading this field) keeps working unchanged until
-   * the stage-0.8 model manager UI migrates to `role`.
-   */
-  selectable: boolean;
-  /**
-   * `"live" | "retranscribe"` (stage 0.8): generalizes `selectable` into the
-   * full role, so the Settings UI can group re-transcribe models together
-   * instead of only knowing "not the live one".
+   * `"live" | "retranscribe"` (stage 0.8): the Settings dialog's model
+   * manager groups rows by this field (Recording vs Re-transcribe) rather
+   * than testing a bare bool. Replaces the stage-0.7 `selectable` field
+   * outright now that the model manager UI (this field's only remaining
+   * consumer) reads `role` directly.
    */
   role: string;
   /**
@@ -268,14 +262,16 @@ export function updateActiveSession(title?: string, notes?: string): Promise<voi
 }
 
 /**
- * Starts an offline re-transcription of `path` using the whisper
- * large-v3-turbo model, replacing its `## Transcript` section outright once
- * done (title/notes/date/duration preserved, `asr:` updated). Mirrors
- * `retranscribe::retranscribe_session`
+ * Starts an offline re-transcription of `path` using whichever whisper
+ * model `AppConfig.retranscribe_model` currently names (stage 0.8: picked
+ * from the Settings dialog's model manager), replacing its `## Transcript`
+ * section outright once done (title/notes/date/duration preserved, `asr:`
+ * updated). Mirrors `retranscribe::retranscribe_session`
  * (apps/desktop/src-tauri/src/retranscribe.rs). Resolves once the job
  * finishes (or rejects immediately if the session is recording, its audio
- * is missing, the model isn't downloaded, or another job is already
- * running); progress in between arrives via `retranscribe-progress` events.
+ * is missing, the selected model isn't downloaded, or another job is
+ * already running); progress in between arrives via `retranscribe-progress`
+ * events.
  */
 export function retranscribeSession(path: string): Promise<void> {
   return invoke("retranscribe_session", { path });

@@ -40,6 +40,9 @@ pub struct Transcript {
     /// carrying an existing file's asr value through unchanged.
     asr: String,
     duration_secs: Option<u64>,
+    /// Overrides the rendered `audio_from:` frontmatter line. See
+    /// [`Transcript::set_audio_from_secs`].
+    audio_from_secs: Option<u64>,
     lines: Vec<Line>,
     /// When set, overrides the rendered `## Transcript` section body with
     /// this exact string instead of re-serializing `lines`. See
@@ -60,6 +63,7 @@ impl Transcript {
             notes: String::new(),
             asr: ASR_MODEL_ID.to_string(),
             duration_secs: None,
+            audio_from_secs: None,
             lines: Vec::new(),
             transcript_override: None,
             transcript_prefix: None,
@@ -144,6 +148,29 @@ impl Transcript {
         self.duration_secs = Some(secs);
     }
 
+    /// Overrides the rendered `audio_from:` frontmatter value: how many
+    /// whole seconds into the timeline the underlying audio FILE actually
+    /// starts covering real (non-silence-prefilled) audio. Set only when a
+    /// recording is continued with a silence prefill and NO real prior audio
+    /// was available (see `session.rs`'s continuing-a-session docs and
+    /// `audio_sink::AudioSink::new_continuing`): that file's first
+    /// `audio_from` seconds are synthetic silence written to keep new
+    /// timestamps aligned, not a recording of that portion of the call.
+    /// Absent (`None`, the default) means the audio file covers the whole
+    /// timeline -- every existing (pre-stage-0.9.x) file, and every ordinary
+    /// recording or continuation with real prior audio.
+    ///
+    /// Critical fix-review finding, stage 0.9: `retranscribe.rs`'s `run_job`
+    /// reads this (via `sessions::rewrite_transcript_at`) to decide how much
+    /// of the EXISTING transcript to keep rather than replace outright --
+    /// whisper's pass over the whole (silence + real) audio file only ever
+    /// produces segments for the real portion, so a naive full-replace would
+    /// silently destroy whatever text covered the earlier, now-silent-in-
+    /// this-file portion of the timeline. See [`split_transcript_at`].
+    pub fn set_audio_from_secs(&mut self, secs: u64) {
+        self.audio_from_secs = Some(secs);
+    }
+
     pub fn add(&mut self, speaker: Speaker, offset_secs: f64, text: String) {
         let text = text.trim().to_string();
         if text.is_empty() {
@@ -189,6 +216,9 @@ impl Transcript {
         );
         if let Some(secs) = self.duration_secs {
             out.push_str(&format!("duration: {}m\n", secs / 60));
+        }
+        if let Some(secs) = self.audio_from_secs {
+            out.push_str(&format!("audio_from: {secs}\n"));
         }
         out.push_str("---\n\n## Notes\n\n");
         let notes = self.notes.trim();
@@ -262,6 +292,51 @@ pub fn last_offset_secs(raw: &str) -> f64 {
     raw.lines().rev().find_map(parse_line_offset_secs).unwrap_or(0.0)
 }
 
+/// Splits an existing `## Transcript` section body at `cutoff_secs`: returns
+/// the text to KEEP -- every line whose parsed `[hh:mm:ss]` offset is
+/// strictly less than `cutoff_secs`, plus any interleaved non-timestamped
+/// (hand-written) line encountered before the first line at or past the
+/// cutoff. Document order decides which side of the cut a hand-written line
+/// falls on: it's kept if it appears before the first line that gets
+/// dropped, so a hand-added annotation preceding the cutoff survives in the
+/// kept text rather than being silently discarded.
+///
+/// For `retranscribe.rs`'s `audio_from`-aware re-transcribe (Critical
+/// fix-review finding, stage 0.9): continuing a session whose audio was
+/// deleted silence-prefills the new recording up to `audio_from` seconds
+/// (see [`Transcript::set_audio_from_secs`]'s docs), so a later
+/// re-transcribe's whisper pass over that file never produces segments for
+/// the earlier, now-silent-in-this-file portion of the timeline. Keeping the
+/// pre-cutoff text (via this function) and appending only whisper's fresh
+/// output after it is what lets that earlier text survive a re-transcribe
+/// instead of being replaced outright.
+///
+/// Returns `None` when the split cannot be safely determined: `raw` has no
+/// parseable `[hh:mm:ss]` line at all while `cutoff_secs` is positive, so
+/// there is no reference point at all to decide which (if any) lines
+/// predate the cutoff -- callers must refuse the re-transcribe rather than
+/// guess (never lose text on an unknown shape). `cutoff_secs <= 0.0` always
+/// returns `Some(String::new())` (nothing to keep, matching a full
+/// replace); a document whose every parseable timestamp already sits at or
+/// past `cutoff_secs` is also a well-defined empty keep, `Some(String::
+/// new())`, not this failure case.
+pub fn split_transcript_at(raw: &str, cutoff_secs: f64) -> Option<String> {
+    if cutoff_secs <= 0.0 || raw.is_empty() {
+        return Some(String::new());
+    }
+    if !raw.lines().any(|line| parse_line_offset_secs(line).is_some()) {
+        return None;
+    }
+    let mut kept: Vec<&str> = Vec::new();
+    for line in raw.lines() {
+        match parse_line_offset_secs(line) {
+            Some(offset) if offset >= cutoff_secs => break,
+            _ => kept.push(line),
+        }
+    }
+    Some(kept.join("\n"))
+}
+
 /// Parses a `[hh:mm:ss] ...` line's leading timestamp into total seconds.
 /// `None` for anything that doesn't start with a `[hh:mm:ss]`-shaped prefix
 /// (a hand-written annotation, a blank line, or any other non-matching
@@ -293,6 +368,11 @@ pub struct SessionData {
     /// [`Transcript::set_asr`] instead of silently resetting it to the
     /// default.
     pub asr: String,
+    /// See [`Transcript::set_audio_from_secs`]'s docs: `None` for the
+    /// overwhelming majority of files (audio, if any, covers the whole
+    /// timeline), `Some(secs)` only for a session continued after its audio
+    /// was deleted.
+    pub audio_from_secs: Option<u64>,
 }
 
 /// Frontmatter-only view of a session file, for the sidebar's session list.
@@ -303,6 +383,8 @@ pub struct SessionMetaRaw {
     pub duration_secs: Option<u64>,
     /// See [`SessionData::asr`]'s docs; same fallback and purpose.
     pub asr: String,
+    /// See [`SessionData::audio_from_secs`]'s docs.
+    pub audio_from_secs: Option<u64>,
 }
 
 /// Full parse: frontmatter + `## Notes` + `## Transcript` sections. Accepts
@@ -336,6 +418,7 @@ pub fn parse_session(path: &Path) -> Result<SessionData> {
         .get("asr")
         .cloned()
         .unwrap_or_else(|| ASR_MODEL_ID.to_string());
+    let audio_from_secs = fields.get("audio_from").and_then(|s| s.parse::<u64>().ok());
 
     let (transcript_line_start, transcript_content_start) =
         find_last_exact_line(body, "## Transcript")
@@ -356,6 +439,7 @@ pub fn parse_session(path: &Path) -> Result<SessionData> {
         notes,
         transcript,
         asr,
+        audio_from_secs,
     })
 }
 
@@ -395,12 +479,14 @@ pub fn parse_meta(path: &Path) -> Result<SessionMetaRaw> {
     let title = fields.remove("title").unwrap_or_else(|| "Untitled".to_string());
     let asr = fields.remove("asr").unwrap_or_else(|| ASR_MODEL_ID.to_string());
     let duration_secs = fields.remove("duration").and_then(|d| parse_duration_field(&d));
+    let audio_from_secs = fields.remove("audio_from").and_then(|s| s.parse::<u64>().ok());
 
     Ok(SessionMetaRaw {
         title,
         date,
         duration_secs,
         asr,
+        audio_from_secs,
     })
 }
 
@@ -836,5 +922,115 @@ mod tests {
 
         let meta = parse_meta(&path).unwrap();
         assert_eq!(meta.title, "Q3 planning: budget review");
+    }
+
+    #[test]
+    fn audio_from_secs_absent_by_default() {
+        let t = Transcript::new(t0());
+        assert!(!t.render().contains("audio_from:"));
+    }
+
+    #[test]
+    fn set_audio_from_secs_renders_and_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("call.md");
+        let mut t = Transcript::new(t0());
+        t.set_audio_from_secs(42);
+        t.save(&path).unwrap();
+
+        let md = std::fs::read_to_string(&path).unwrap();
+        assert!(md.contains("audio_from: 42\n"));
+
+        let session = parse_session(&path).unwrap();
+        assert_eq!(session.audio_from_secs, Some(42));
+        let meta = parse_meta(&path).unwrap();
+        assert_eq!(meta.audio_from_secs, Some(42));
+    }
+
+    #[test]
+    fn parse_session_and_parse_meta_default_audio_from_secs_to_none_when_field_missing() {
+        // v1/v2 files (everything written before stage 0.9.x) have no
+        // `audio_from` field at all -- must load fine, not error, with
+        // `None` (whole timeline covered).
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("call.md");
+        std::fs::write(
+            &path,
+            "---\ndate: 2026-06-01T09:00:00+02:00\n---\n\n## Transcript\n\n[00:00:01] Me: hi\n",
+        )
+        .unwrap();
+
+        assert_eq!(parse_session(&path).unwrap().audio_from_secs, None);
+        assert_eq!(parse_meta(&path).unwrap().audio_from_secs, None);
+    }
+
+    mod split_at {
+        use super::*;
+
+        #[test]
+        fn cutoff_zero_or_negative_keeps_nothing() {
+            let raw = "[00:00:01] Me: hi\n[00:00:10] Them: hey";
+            assert_eq!(split_transcript_at(raw, 0.0), Some(String::new()));
+            assert_eq!(split_transcript_at(raw, -5.0), Some(String::new()));
+        }
+
+        #[test]
+        fn keeps_lines_strictly_before_the_cutoff() {
+            let raw = "[00:00:01] Me: hi\n[00:00:05] Them: hey\n[00:00:12] Me: bye";
+            let kept = split_transcript_at(raw, 10.0).unwrap();
+            assert_eq!(kept, "[00:00:01] Me: hi\n[00:00:05] Them: hey");
+        }
+
+        /// The explicit boundary case: a line whose offset is EXACTLY the
+        /// cutoff is dropped, not kept (spec: "offset is < audio_from").
+        #[test]
+        fn boundary_exactly_at_cutoff_is_dropped() {
+            let raw = "[00:00:01] Me: hi\n[00:00:10] Them: exactly at cutoff\n[00:00:20] Me: later";
+            let kept = split_transcript_at(raw, 10.0).unwrap();
+            assert_eq!(kept, "[00:00:01] Me: hi");
+        }
+
+        #[test]
+        fn hand_edited_lines_before_the_cutoff_are_preserved_in_the_kept_part() {
+            let raw = "[00:00:01] Me: hi\n-- a hand-added annotation --\n[00:00:05] Them: hey\n[00:00:20] Me: later";
+            let kept = split_transcript_at(raw, 10.0).unwrap();
+            assert_eq!(
+                kept,
+                "[00:00:01] Me: hi\n-- a hand-added annotation --\n[00:00:05] Them: hey"
+            );
+        }
+
+        /// A hand-written line AFTER the first dropped timestamp is dropped
+        /// too, along with everything else past the cut.
+        #[test]
+        fn hand_edited_lines_after_the_cutoff_are_dropped() {
+            let raw = "[00:00:01] Me: hi\n[00:00:20] Them: past cutoff\n-- trailing annotation --";
+            let kept = split_transcript_at(raw, 10.0).unwrap();
+            assert_eq!(kept, "[00:00:01] Me: hi");
+        }
+
+        /// Not the same as the unparseable-refusal case: a well-defined
+        /// split that happens to keep nothing (every real line is already at
+        /// or past the cutoff) must behave like a full replace, exactly as
+        /// today -- not a refusal.
+        #[test]
+        fn empty_kept_part_behaves_like_a_full_replace() {
+            let raw = "[00:00:15] Me: hi\n[00:00:20] Them: hey";
+            assert_eq!(split_transcript_at(raw, 10.0), Some(String::new()));
+        }
+
+        #[test]
+        fn empty_document_with_positive_cutoff_is_a_well_defined_empty_keep() {
+            assert_eq!(split_transcript_at("", 10.0), Some(String::new()));
+        }
+
+        /// The refusal case: no parseable timestamp anywhere at all, so
+        /// there's no reference point to decide what predates the cutoff --
+        /// callers must refuse rather than guess and risk losing text.
+        #[test]
+        fn no_parseable_timestamp_at_all_with_a_positive_cutoff_refuses() {
+            let raw = "just some hand-written prose\nwith no timestamps in it at all";
+            assert_eq!(split_transcript_at(raw, 10.0), None);
+        }
     }
 }

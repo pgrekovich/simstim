@@ -1,6 +1,43 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
+import { convertFileSrc } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { Button } from "@/components/ui/button";
 import { TranscriptView } from "@/components/TranscriptView";
-import { saveSession, updateActiveSession, type SessionData } from "@/lib/ipc";
+import {
+  readSession,
+  retranscribeSession,
+  saveSession,
+  updateActiveSession,
+  type RetranscribeProgress,
+  type SessionData,
+} from "@/lib/ipc";
+
+/**
+ * Renders a `retranscribe-progress` event's phase into the short status text
+ * shown next to the re-transcribe button (Task 4). `"done"`/`"error"` never
+ * actually reach the screen in practice -- `handleRetranscribe` below clears
+ * the status text once the `retranscribe_session` promise itself settles,
+ * which happens at essentially the same moment those two phases fire -- but
+ * both are still handled so an event arriving in an unexpected order (or a
+ * future phase reordering) never renders `undefined`.
+ */
+function describeRetranscribeProgress(payload: RetranscribeProgress): string {
+  switch (payload.phase) {
+    case "loading-model":
+      return "loading model...";
+    case "transcribing": {
+      const who = payload.channel ? ` (${payload.channel})` : "";
+      const detail = payload.message ? ` ${payload.message}` : "";
+      return `transcribing${who}${detail}...`;
+    }
+    case "writing":
+      return "writing...";
+    case "done":
+      return "done";
+    case "error":
+      return payload.message ?? "re-transcribe failed";
+  }
+}
 
 /** Global Constraints (Task 6): notes save 500ms after the last keystroke. */
 const NOTES_DEBOUNCE_MS = 500;
@@ -92,6 +129,17 @@ export interface SessionViewHandle {
  * awaited, BEFORE calling `stop_recording`, while this instance is still
  * mounted and the backend is still genuinely recording -- see App's
  * `handleStop`.
+ *
+ * Audio playback and re-transcribe (Task 4, stage-0.7): when
+ * `initialData.audio_path` is set (never true while `isActive`, since App
+ * only fills it in from a `read_session` disk read), an `<audio>` player and
+ * a "Re-transcribe" button render above the transcript. Clicking a
+ * transcript line seeks that player (`handleSeek`, wired through
+ * `TranscriptView`'s `onSeek`); the button runs `retranscribeSession` and,
+ * once it resolves, re-reads the file so the rewritten transcript appears
+ * without a full remount (`transcript` state, seeded once like title/notes
+ * above). Progress text comes from `retranscribe-progress` events filtered
+ * to this session's `path`.
  */
 export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(function SessionView(
   {
@@ -109,6 +157,17 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
 ) {
   const [title, setTitle] = useState(initialData.title);
   const [notes, setNotes] = useState(initialData.notes);
+  // Seeded once from initialData (same "reset on remount, live otherwise"
+  // pattern as title/notes above), then updated in place after a successful
+  // re-transcribe -- see handleRetranscribe. `initialData.audio_path` itself
+  // never changes across a re-transcribe (same audio file, only the text
+  // and `asr:` change), so it's read directly from the prop rather than
+  // mirrored into its own state.
+  const [transcript, setTranscript] = useState(initialData.transcript);
+  const [retranscribing, setRetranscribing] = useState(false);
+  const [retranscribeText, setRetranscribeText] = useState<string | null>(null);
+  const [retranscribeError, setRetranscribeError] = useState<string | null>(null);
+  const audioRef = useRef<HTMLAudioElement>(null);
 
   // "Latest value" mirrors of the controlled state above, read from
   // callbacks (blur handlers, the debounce timeout, the unmount cleanup)
@@ -232,6 +291,61 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Listens for this session's own `retranscribe-progress` events (filtered
+  // by `path`, since the backend's job guard is global -- see
+  // `retranscribe.rs`'s module docs -- so a different session's job could in
+  // principle emit while this one is mounted). Kept live for the whole
+  // mounted lifetime of this instance rather than only while a job started
+  // from this instance is running, so progress is still visible if the user
+  // switches away and back to a session whose re-transcribe (started from
+  // elsewhere, or before a remount) is still in flight.
+  useEffect(() => {
+    const unlisten = listen<RetranscribeProgress>("retranscribe-progress", (event) => {
+      if (event.payload.path !== path) return;
+      setRetranscribeText(describeRetranscribeProgress(event.payload));
+    });
+    return () => {
+      unlisten.then((f) => f());
+    };
+  }, [path]);
+
+  // Click-to-seek (Task 4): seeks the audio element to the clicked
+  // transcript line's offset and starts playback. Only ever wired up by the
+  // JSX below when `initialData.audio_path` is set, so `audioRef.current`
+  // being null here would mean the player was unmounted out from under an
+  // in-flight click -- defensive, not expected in practice.
+  function handleSeek(offsetSecs: number) {
+    const audio = audioRef.current;
+    if (!audio) return;
+    audio.currentTime = offsetSecs;
+    void audio.play();
+  }
+
+  // Starts an offline re-transcribe of this session's audio and, once it
+  // resolves, re-reads the file from disk so the new transcript (and the
+  // updated `asr:`) show up without a full remount -- `retranscribeSession`
+  // only rewrites the `## Transcript` section and frontmatter, it doesn't
+  // push the new text back through an event, so a re-read is the only way
+  // to pick it up. Progress text in the meantime comes from the
+  // `retranscribe-progress` listener above, not from this function.
+  async function handleRetranscribe() {
+    if (!initialData.audio_path || isActive || retranscribing) return;
+    setRetranscribing(true);
+    setRetranscribeError(null);
+    setRetranscribeText("starting...");
+    try {
+      await retranscribeSession(path);
+      const data = await readSession(path);
+      setTranscript(data.transcript);
+    } catch (err) {
+      console.error("failed to re-transcribe session", err);
+      setRetranscribeError(String(err));
+    } finally {
+      setRetranscribing(false);
+      setRetranscribeText(null);
+    }
+  }
+
   function handleTitleChange(e: React.ChangeEvent<HTMLInputElement>) {
     const value = e.target.value;
     setTitle(value);
@@ -263,18 +377,51 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
 
   const transcriptLines = isActive
     ? liveLines
-    : initialData.transcript.split("\n").filter((line) => line.length > 0);
+    : transcript.split("\n").filter((line) => line.length > 0);
+  const audioPath = initialData.audio_path;
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-4">
-      <input
-        value={title}
-        onChange={handleTitleChange}
-        onKeyDown={handleTitleKeyDown}
-        onBlur={commitTitle}
-        placeholder="Untitled"
-        className="w-full shrink-0 bg-transparent text-xl font-semibold outline-none placeholder:text-muted-foreground"
-      />
+      <div className="flex shrink-0 items-center gap-2">
+        <input
+          value={title}
+          onChange={handleTitleChange}
+          onKeyDown={handleTitleKeyDown}
+          onBlur={commitTitle}
+          placeholder="Untitled"
+          className="min-w-0 flex-1 bg-transparent text-xl font-semibold outline-none placeholder:text-muted-foreground"
+        />
+
+        {audioPath && (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="shrink-0"
+            disabled={isActive || retranscribing}
+            onClick={handleRetranscribe}
+          >
+            {retranscribing ? "Re-transcribing..." : "Re-transcribe"}
+          </Button>
+        )}
+      </div>
+
+      {audioPath && (
+        <audio
+          ref={audioRef}
+          controls
+          preload="metadata"
+          src={convertFileSrc(audioPath)}
+          className="h-10 w-full shrink-0"
+        />
+      )}
+
+      {retranscribeText && (
+        <p className="shrink-0 text-xs text-muted-foreground">{retranscribeText}</p>
+      )}
+      {retranscribeError && (
+        <p className="shrink-0 text-sm text-destructive">{retranscribeError}</p>
+      )}
 
       <textarea
         value={notes}
@@ -288,6 +435,7 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
         lines={transcriptLines}
         interimMe={isActive ? interimMe : undefined}
         interimThem={isActive ? interimThem : undefined}
+        onSeek={audioPath ? handleSeek : undefined}
       />
     </div>
   );

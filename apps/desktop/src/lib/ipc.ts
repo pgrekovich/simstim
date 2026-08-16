@@ -48,6 +48,15 @@ export interface SessionData {
   notes: string;
   /** Raw `## Transcript` section text: one `[hh:mm:ss] Who: text` line per entry. */
   transcript: string;
+  /**
+   * The session's audio file (its `.flac`, or a `.wav` fallback if the
+   * flac-encode step failed), resolved by the same helper the re-transcribe
+   * command uses (`retranscribe::resolve_audio_path`). `null` when no audio
+   * was saved for this session (audio retention was off, or the session
+   * predates stage-0.7). Fed to `convertFileSrc` for the `<audio>` player
+   * (Task 4).
+   */
+  audio_path: string | null;
 }
 
 /** Mirrors `models::ModelInfo` (apps/desktop/src-tauri/src/models.rs). */

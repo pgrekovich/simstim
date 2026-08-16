@@ -455,7 +455,13 @@ function App() {
               key={selectedPath}
               path={selectedPath}
               isActive
-              initialData={{ title: activeTitle, notes: activeNotes, date: "", transcript: "" }}
+              initialData={{
+                title: activeTitle,
+                notes: activeNotes,
+                date: "",
+                transcript: "",
+                audio_path: null,
+              }}
               liveLines={lines}
               interimMe={interimMe}
               interimThem={interimThem}

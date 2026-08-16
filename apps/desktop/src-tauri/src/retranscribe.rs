@@ -276,7 +276,13 @@ fn decode_audio_stereo(path: &Path) -> Result<(Vec<f32>, Vec<f32>)> {
 /// entirely would be worse than leaving the bigger file around, but it
 /// means a re-transcribe must still be able to find it). `None` if neither
 /// exists, e.g. `keep_audio` was off when the session was recorded.
-fn resolve_audio_path(md_path: &Path) -> Option<PathBuf> {
+///
+/// `pub(crate)` (Task 4, stage-0.7): `sessions::read_session_at` reuses this
+/// exact resolution to fill `SessionDataOut::audio_path` for the frontend
+/// player, so playback and re-transcribe always agree on which file (if
+/// any) counts as "this session's audio" -- one definition, not two that
+/// could drift apart.
+pub(crate) fn resolve_audio_path(md_path: &Path) -> Option<PathBuf> {
     let flac_path = audio_path_for(md_path);
     if flac_path.is_file() {
         return Some(flac_path);

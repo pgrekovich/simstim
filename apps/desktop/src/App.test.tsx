@@ -16,7 +16,9 @@ import { listen } from "@tauri-apps/api/event";
 vi.mock("@/lib/ipc", () => ({
   getConfig: vi.fn().mockResolvedValue({ output_dir: "/tmp", active_model: "m1", theme: "system" }),
   listSessions: vi.fn().mockResolvedValue([]),
-  readSession: vi.fn().mockResolvedValue({ title: "", date: "", notes: "", transcript: "" }),
+  readSession: vi
+    .fn()
+    .mockResolvedValue({ title: "", date: "", notes: "", transcript: "", audio_path: null }),
   startRecording: vi.fn().mockResolvedValue("/tmp/active.md"),
   stopRecording: vi.fn().mockResolvedValue("/tmp/active.md"),
   saveSession: vi.fn().mockResolvedValue(undefined),
@@ -93,9 +95,15 @@ describe("App: active-session notes survive a switch-away-and-back (final review
     vi.mocked(ipc.listSessions).mockResolvedValue(sessions);
     vi.mocked(ipc.readSession).mockImplementation(async (path: string) => {
       if (path === "/tmp/other.md") {
-        return { title: "Other call", date: "", notes: "notes from the other call", transcript: "" };
+        return {
+          title: "Other call",
+          date: "",
+          notes: "notes from the other call",
+          transcript: "",
+          audio_path: null,
+        };
       }
-      return { title: "Untitled", date: "", notes: "", transcript: "" };
+      return { title: "Untitled", date: "", notes: "", transcript: "", audio_path: null };
     });
 
     render(<App />);
@@ -148,6 +156,7 @@ describe("App: record continues into the open note (behavior fix)", () => {
       date: "",
       notes: "old notes",
       transcript: "[00:00:01] Me: hi",
+      audio_path: null,
     });
     vi.mocked(ipc.startRecording).mockResolvedValue("/tmp/other.md");
 
@@ -189,6 +198,7 @@ describe("App: record continues into the open note (behavior fix)", () => {
       date: "",
       notes: "old notes",
       transcript: "",
+      audio_path: null,
     });
     vi.mocked(ipc.startRecording).mockResolvedValue("/tmp/other.md");
 

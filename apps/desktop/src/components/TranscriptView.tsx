@@ -18,6 +18,12 @@ function parseLine(raw: string): ParsedLine {
   return { raw, timestamp, speaker: speaker as "Me" | "Them", text };
 }
 
+/** Parses a `hh:mm:ss` timestamp (as `parseLine` extracts it) into whole seconds. */
+function timestampToSeconds(timestamp: string): number {
+  const [hours, minutes, seconds] = timestamp.split(":").map(Number);
+  return hours * 3600 + minutes * 60 + seconds;
+}
+
 interface TranscriptViewProps {
   lines: string[];
   /**
@@ -29,9 +35,21 @@ interface TranscriptViewProps {
    */
   interimMe?: string;
   interimThem?: string;
+  /**
+   * Click-to-seek (Task 4, stage-0.7): called with the offset (in seconds)
+   * parsed from a finalized line's `[hh:mm:ss]` timestamp when that line is
+   * clicked or activated via keyboard. Lines only become interactive
+   * (rendered as a real `<button>`, not a plain `<p>`) when this is
+   * provided -- the caller only passes it once an `<audio>` element exists
+   * to seek (i.e. the session has an audio file). A line with no
+   * recognizable timestamp (falls through `parseLine`'s regex) and the
+   * interim/draft lines below are never seekable, regardless of this prop:
+   * there is no offset to seek to for either.
+   */
+  onSeek?: (offsetSecs: number) => void;
 }
 
-export function TranscriptView({ lines, interimMe, interimThem }: TranscriptViewProps) {
+export function TranscriptView({ lines, interimMe, interimThem, onSeek }: TranscriptViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   // Tracks whether the user was scrolled to the bottom right before this
   // render's lines changed. Auto-scroll only replays that intent: it never
@@ -70,8 +88,8 @@ export function TranscriptView({ lines, interimMe, interimThem }: TranscriptView
                   </p>
                 );
               }
-              return (
-                <p key={i} className="whitespace-pre-wrap">
+              const content = (
+                <>
                   <span className="text-muted-foreground">[{parsed.timestamp}]</span>{" "}
                   <span
                     className={
@@ -83,7 +101,25 @@ export function TranscriptView({ lines, interimMe, interimThem }: TranscriptView
                     {parsed.speaker}:
                   </span>{" "}
                   {parsed.text}
-                </p>
+                </>
+              );
+              if (!onSeek) {
+                return (
+                  <p key={i} className="whitespace-pre-wrap">
+                    {content}
+                  </p>
+                );
+              }
+              const offsetSecs = timestampToSeconds(parsed.timestamp);
+              return (
+                <button
+                  key={i}
+                  type="button"
+                  onClick={() => onSeek(offsetSecs)}
+                  className="-mx-1 block w-full whitespace-pre-wrap rounded px-1 text-left transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                >
+                  {content}
+                </button>
               );
             })}
             {interimMe && (

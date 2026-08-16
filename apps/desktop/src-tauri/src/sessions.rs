@@ -46,6 +46,13 @@ pub struct SessionDataOut {
     pub date: String,
     pub notes: String,
     pub transcript: String,
+    /// The session's audio file, if any (Task 4, stage-0.7): the `.flac`
+    /// sibling, or its `.wav` fallback (see `retranscribe::resolve_audio_path`,
+    /// reused here so the read/playback path and the re-transcribe path never
+    /// disagree about which file counts as "this session's audio"). `None`
+    /// when neither exists -- `keep_audio` was off, or the session predates
+    /// stage-0.7's audio sink entirely.
+    pub audio_path: Option<String>,
 }
 
 /// Scans `dir` for `.md` files and parses each one's frontmatter. Files that
@@ -90,11 +97,14 @@ fn parse_rfc3339(date: &str) -> Option<DateTime<FixedOffset>> {
 /// Full read of one session file for the session view.
 pub fn read_session_at(path: &Path) -> Result<SessionDataOut> {
     let data = parse_session(path)?;
+    let audio_path = crate::retranscribe::resolve_audio_path(path)
+        .map(|p| p.display().to_string());
     Ok(SessionDataOut {
         title: data.title,
         date: data.date,
         notes: data.notes,
         transcript: data.transcript,
+        audio_path,
     })
 }
 
@@ -327,6 +337,44 @@ mod tests {
         let path = dir.path().join("notes.md");
         std::fs::write(&path, "not a transcript at all").unwrap();
         assert!(read_session_at(&path).is_err());
+    }
+
+    #[test]
+    fn read_session_at_includes_audio_path_when_a_flac_sibling_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("call.md");
+        Transcript::new(t(10, 0, 0)).save(&path).unwrap();
+        let flac = dir.path().join("call.flac");
+        std::fs::write(&flac, b"x").unwrap();
+
+        let data = read_session_at(&path).unwrap();
+        assert_eq!(data.audio_path, Some(flac.display().to_string()));
+    }
+
+    #[test]
+    fn read_session_at_falls_back_to_a_wav_sibling_when_no_flac_exists() {
+        // Mirrors `retranscribe::resolve_audio_path`'s wav fallback: a
+        // session whose flac-encode step failed on stop still has playable
+        // audio (the kept wav), and `read_session` must surface it the same
+        // way the re-transcribe path already does.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("call.md");
+        Transcript::new(t(10, 0, 0)).save(&path).unwrap();
+        let wav = dir.path().join("call.wav");
+        std::fs::write(&wav, b"x").unwrap();
+
+        let data = read_session_at(&path).unwrap();
+        assert_eq!(data.audio_path, Some(wav.display().to_string()));
+    }
+
+    #[test]
+    fn read_session_at_audio_path_is_none_when_no_audio_file_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("call.md");
+        Transcript::new(t(10, 0, 0)).save(&path).unwrap();
+
+        let data = read_session_at(&path).unwrap();
+        assert_eq!(data.audio_path, None);
     }
 
     #[test]

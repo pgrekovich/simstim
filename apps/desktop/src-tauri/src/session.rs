@@ -347,6 +347,32 @@ fn report_error(on_error: &impl Fn(String), msg: String) {
     on_error(msg);
 }
 
+/// Whether a continuation's `audio_from` marker should be set, and to what
+/// value (Critical fix-review finding, stage 0.9 -- see
+/// `simstim_transcript::Transcript::set_audio_from_secs`'s doc comment for
+/// the destructive re-transcribe bug this exists to prevent). Only set when
+/// BOTH: `had_no_prior_audio` (this continuation's `AudioSink::
+/// new_continuing` call had no existing audio file to prefill from at all --
+/// typically because `delete_audio_after_retranscribe` removed it) and
+/// `target_base_secs` (the reconciled offset `new_continuing` returned) is
+/// positive -- a continuation of a session with no prior transcript content
+/// at all has nothing to mark, `audio_from: 0` would be indistinguishable
+/// from absent anyway. `target_base_secs` is always already a whole number
+/// of seconds in this specific case (it's derived from `last_offset_secs`,
+/// itself parsed back from a `[hh:mm:ss]`-truncated line -- see that
+/// function's docs), so `.round()` here is exact, not a lossy approximation.
+///
+/// Pure and independently testable, no `AudioSink`/engine/capture involved --
+/// mirrors this module's other extracted decision functions (e.g.
+/// `should_decode_interim`).
+fn continuation_audio_from_secs(had_no_prior_audio: bool, target_base_secs: f64) -> Option<u64> {
+    if had_no_prior_audio && target_base_secs > 0.0 {
+        Some(target_base_secs.round() as u64)
+    } else {
+        None
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_worker(
     chunk_rx: Receiver<Chunk>,
@@ -404,10 +430,22 @@ fn run_worker(
     // off, or its prefill failed), in which case the transcript falls back
     // to `seed.base_offset_secs` alone below, exactly as before this fix.
     let mut continued_base_offset_secs: Option<f64> = None;
+    // Critical fix-review finding, stage 0.9: when a continuation prefills
+    // from NO prior audio at all (`existing_audio` below is `None` --
+    // typically because `delete_audio_after_retranscribe` removed it), the
+    // resulting file's first `target_base_secs` seconds are synthetic
+    // silence, not a recording of that portion of the call. Recorded on the
+    // transcript below (`Transcript::set_audio_from_secs`) so a later
+    // re-transcribe (`retranscribe.rs`) knows to keep the earlier text
+    // instead of replacing the whole transcript with whisper's new-audio-only
+    // output -- see that field's own doc comment for the destructive bug
+    // this closes.
+    let mut audio_from_secs: Option<u64> = None;
     let mut audio_sink: Option<AudioSink> = if keep_audio {
         let sink_result: anyhow::Result<AudioSink> = match &continue_from {
             Some(seed) => {
                 let existing_audio = crate::retranscribe::resolve_audio_path(&out_path);
+                let had_no_prior_audio = existing_audio.is_none();
                 AudioSink::new_continuing(
                     &out_path,
                     existing_audio.as_deref(),
@@ -416,6 +454,7 @@ fn run_worker(
                 )
                 .map(|(sink, target_base_secs)| {
                     continued_base_offset_secs = Some(target_base_secs);
+                    audio_from_secs = continuation_audio_from_secs(had_no_prior_audio, target_base_secs);
                     sink
                 })
             }
@@ -454,6 +493,13 @@ fn run_worker(
             // ever does renders at least the previous total; the final
             // save below still overwrites with the accumulated total.
             transcript.set_duration_secs(seed.previous_duration_secs);
+            // Critical fix-review finding, stage 0.9: mark how much of the
+            // timeline the audio file actually covers, when this
+            // continuation had no real prior audio to prefill from (see
+            // `audio_from_secs`'s doc comment above).
+            if let Some(secs) = audio_from_secs {
+                transcript.set_audio_from_secs(secs);
+            }
             // Important fix-review finding, wave 2: prefer the reconciled
             // offset `AudioSink::new_continuing` returned (see
             // `continued_base_offset_secs`'s doc comment above) so the
@@ -871,6 +917,41 @@ mod tests {
         let (title, notes) = pending.take();
         assert_eq!(title.as_deref(), Some("Title A"));
         assert_eq!(notes.as_deref(), Some("Notes B"));
+    }
+
+    // continuation_audio_from_secs: Critical fix-review finding, stage 0.9.
+    mod audio_from {
+        use super::*;
+
+        #[test]
+        fn set_when_there_was_no_prior_audio_and_the_offset_is_positive() {
+            assert_eq!(continuation_audio_from_secs(true, 42.0), Some(42));
+        }
+
+        #[test]
+        fn not_set_when_prior_audio_existed() {
+            // Ordinary continuation with real prior audio (or a format
+            // switch that still decoded real prior audio): the whole
+            // timeline is covered, nothing to mark.
+            assert_eq!(continuation_audio_from_secs(false, 42.0), None);
+        }
+
+        #[test]
+        fn not_set_when_the_offset_is_zero() {
+            // No prior transcript content at all (a continuation of an
+            // empty session): audio_from: 0 would be indistinguishable from
+            // absent anyway.
+            assert_eq!(continuation_audio_from_secs(true, 0.0), None);
+        }
+
+        #[test]
+        fn rounds_to_the_nearest_whole_second() {
+            // In practice this input is always already integral (see the
+            // function's doc comment), but the rounding itself is still
+            // exercised here rather than assumed.
+            assert_eq!(continuation_audio_from_secs(true, 42.4), Some(42));
+            assert_eq!(continuation_audio_from_secs(true, 42.6), Some(43));
+        }
     }
 
     // should_decode_interim: the pure interim-throttle gate. Global

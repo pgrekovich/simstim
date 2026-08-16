@@ -50,12 +50,38 @@
 //! file. (This flushes to the OS, not an `fsync`; the same durability level
 //! `simstim_transcript::Transcript::save`'s write-then-rename already relies
 //! on elsewhere in this codebase.)
+//!
+//! ## Continuing a session's audio
+//!
+//! `start_recording(Some(path))` continues an existing session (see
+//! `session.rs`'s "continuing a session" docs): the transcript's new lines
+//! are offset by the file's previous duration, and the audio must stay in
+//! sync with that same offset rather than restarting from silence.
+//! [`AudioSink::new_continuing`] handles this: before any live capture is
+//! pushed, it prefills the fresh WAV with either the session's existing
+//! audio (streamed frame-by-frame from its `.flac`/`.wav` sibling via
+//! [`stream_prefill_audio`] -- never buffered whole into memory, a 1h call
+//! would be ~460MB as decoded samples) or, if there was a previous duration
+//! but no audio file at all (`keep_audio` was off, then turned on), that many
+//! seconds of silence (see [`write_silence_frames`]).
+//!
+//! The existing audio file is never touched by this: prefilling only reads
+//! it, writing into the NEW wav at `wav_path_for`, and [`encode_flac`]'s own
+//! write-to-temp-then-rename (below) means the old `.flac` isn't replaced
+//! until the new encode has fully succeeded. If the prefill itself fails
+//! (the old file is corrupt or unreadable), `new_continuing` returns `Err`
+//! and removes the just-created (partial) new wav; the caller
+//! (`session.rs`) reports this through the usual `on_error` path and
+//! disables audio for that recording entirely, exactly like any other
+//! `AudioSink::new` failure -- the old file is left completely alone since
+//! nothing ever wrote to it.
 
 use std::collections::VecDeque;
 use std::fs::File;
 use std::io::BufWriter;
 use std::path::{Path, PathBuf};
 
+use anyhow::Context;
 use flacenc::component::BitRepr;
 use flacenc::error::Verify;
 use simstim_capture::Channel;
@@ -209,7 +235,112 @@ fn encode_flac(wav_path: &Path, flac_path: &Path) -> anyhow::Result<()> {
     stream
         .write(&mut sink)
         .map_err(|e| anyhow::anyhow!("flac bitstream write failed: {e:?}"))?;
-    std::fs::write(flac_path, sink.as_slice())?;
+
+    // Write to a temp path and rename over `flac_path` only once the new
+    // encode is fully on disk, rather than writing `flac_path` directly:
+    // when continuing a session (see the module docs), `flac_path` may
+    // already hold the previous recording's audio, and a crash or error
+    // partway through the write must never leave that file half-overwritten
+    // or missing. `std::fs::rename` within the same directory is atomic on
+    // every platform this app targets.
+    let tmp_path = flac_path.with_extension("flac.tmp");
+    let result = std::fs::write(&tmp_path, sink.as_slice())
+        .and_then(|()| std::fs::rename(&tmp_path, flac_path));
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp_path);
+    }
+    result.map_err(anyhow::Error::from)
+}
+
+/// Streams an existing session's audio (its `.flac`, or the `.wav` fallback
+/// `AudioSink::finish` keeps when the flac-encode step failed -- same
+/// dispatch as `retranscribe::decode_audio_stereo`) directly into `writer`,
+/// one interleaved stereo sample at a time, never collecting it into an
+/// in-memory buffer first (Global Constraints: a 1h call is ~460MB as
+/// decoded i32/f32 samples). Used by [`AudioSink::new_continuing`] to
+/// prefill a continued recording before any live capture is appended.
+fn stream_prefill_audio(
+    writer: &mut hound::WavWriter<BufWriter<File>>,
+    existing_path: &Path,
+) -> anyhow::Result<()> {
+    match existing_path.extension().and_then(|e| e.to_str()) {
+        Some("wav") => stream_prefill_wav(writer, existing_path),
+        _ => stream_prefill_flac(writer, existing_path),
+    }
+}
+
+/// [`stream_prefill_audio`]'s `.flac` case: claxon's own `samples()` iterator
+/// already yields one interleaved sample at a time without buffering the
+/// whole stream, so this just validates the channel layout and writes each
+/// one straight through.
+///
+/// Note: if the old file's own trailing block needed [`encode_flac`]'s
+/// minimum-block-size silence padding (see that function's docs), this reads
+/// that padding back too and carries it into the new recording verbatim --
+/// at most `MIN_BLOCK_SIZE - 1` frames (well under 2ms at 16kHz), inaudible
+/// and already a documented property of these files, not something this
+/// prefill step introduces. Not worth stripping: doing so reliably would
+/// mean reverse-engineering flacenc's own block-boundary decisions from the
+/// decoded samples, real audio can legitimately end in near-silence too, and
+/// the cost of getting the heuristic wrong (clipping real trailing audio) is
+/// worse than a couple of milliseconds of harmless extra silence.
+fn stream_prefill_flac(
+    writer: &mut hound::WavWriter<BufWriter<File>>,
+    path: &Path,
+) -> anyhow::Result<()> {
+    let mut reader = claxon::FlacReader::open(path)
+        .with_context(|| format!("opening existing audio at {}", path.display()))?;
+    let channels = reader.streaminfo().channels;
+    if channels != 2 {
+        return Err(anyhow::anyhow!(
+            "expected stereo audio in {}, found {channels} channel(s)",
+            path.display()
+        ));
+    }
+    for sample in reader.samples() {
+        let sample = sample.with_context(|| format!("decoding audio at {}", path.display()))?;
+        writer.write_sample(sample as i16)?;
+    }
+    Ok(())
+}
+
+/// [`stream_prefill_audio`]'s `.wav` fallback case: same idea as
+/// [`stream_prefill_flac`], reading through hound's own lazy sample iterator
+/// instead.
+fn stream_prefill_wav(
+    writer: &mut hound::WavWriter<BufWriter<File>>,
+    path: &Path,
+) -> anyhow::Result<()> {
+    let mut reader = hound::WavReader::open(path)
+        .with_context(|| format!("opening existing audio at {}", path.display()))?;
+    let channels = reader.spec().channels;
+    if channels != 2 {
+        return Err(anyhow::anyhow!(
+            "expected stereo audio in {}, found {channels} channel(s)",
+            path.display()
+        ));
+    }
+    for sample in reader.samples::<i16>() {
+        let sample = sample.with_context(|| format!("decoding audio at {}", path.display()))?;
+        writer.write_sample(sample)?;
+    }
+    Ok(())
+}
+
+/// Writes `duration_secs` worth of silent stereo frames straight to
+/// `writer`, for [`AudioSink::new_continuing`]'s "prior duration but no
+/// audio file" case (`keep_audio` was off when the session was previously
+/// recorded, then turned on before continuing it): keeps new timestamps and
+/// audio aligned without needing any real prior audio to prefill from.
+fn write_silence_frames(
+    writer: &mut hound::WavWriter<BufWriter<File>>,
+    duration_secs: u64,
+) -> anyhow::Result<()> {
+    let frame_count = duration_secs as usize * SAMPLE_RATE as usize;
+    for _ in 0..frame_count {
+        writer.write_sample(0i16)?;
+        writer.write_sample(0i16)?;
+    }
     Ok(())
 }
 
@@ -250,6 +381,50 @@ impl AudioSink {
             queue_them: VecDeque::new(),
             frames_since_flush: 0,
         })
+    }
+
+    /// Like [`AudioSink::new`], but for continuing an existing session (see
+    /// the module docs' "continuing a session's audio" section): prefills
+    /// the fresh WAV before any live capture is appended, either by
+    /// streaming `existing_audio_path`'s audio in (when the session already
+    /// had a `.flac`/`.wav`) or, if there was a previous recorded duration
+    /// but no audio file at all, with that many seconds of silence.
+    /// `previous_duration_secs` is ignored when `existing_audio_path` is
+    /// `Some` (the real audio already carries its own duration).
+    ///
+    /// Returns `Err` (without ever touching whatever `existing_audio_path`
+    /// pointed at -- only reads from it) if the prefill itself fails, e.g. a
+    /// corrupt or unreadable old audio file; the partially-written new wav is
+    /// removed before returning so it doesn't linger as a stray temp file.
+    /// Callers must treat this the same as an `AudioSink::new` failure:
+    /// report it and disable audio for the recording entirely, per the
+    /// Global Constraints (a sink problem must not kill the recording, and
+    /// per this task, must not silently continue with misaligned audio
+    /// either).
+    pub fn new_continuing(
+        base_path: &Path,
+        existing_audio_path: Option<&Path>,
+        previous_duration_secs: u64,
+    ) -> anyhow::Result<AudioSink> {
+        let mut sink = Self::new(base_path)?;
+        let prefill_result = match existing_audio_path {
+            Some(existing) => stream_prefill_audio(&mut sink.writer, existing),
+            None if previous_duration_secs > 0 => {
+                write_silence_frames(&mut sink.writer, previous_duration_secs)
+            }
+            None => Ok(()),
+        };
+        if let Err(e) = prefill_result {
+            let _ = std::fs::remove_file(&sink.wav_path);
+            return Err(e);
+        }
+        // Flush right after prefilling, same crash-safety reasoning as
+        // `push`'s own periodic flush (module docs): otherwise the entire
+        // prefilled prefix -- not just the tail since the last flush -- would
+        // read back as 0 samples if the process died before the first
+        // regular `push`-triggered flush.
+        sink.writer.flush()?;
+        Ok(sink)
     }
 
     /// Queues `samples` for `channel`, immediately writes whatever the sync
@@ -534,9 +709,11 @@ mod tests {
 
     /// Design note (see the module docs): a failed FLAC encode must keep the
     /// WAV rather than lose the audio. Simulated cheaply by pre-creating a
-    /// directory at the exact path `encode_flac` will try to write the
-    /// encoded bytes to, so its final `std::fs::write` fails -- no need to
-    /// reach into flacenc internals to provoke a real encoder error.
+    /// directory at the exact path `encode_flac` ultimately renames its temp
+    /// file onto -- the write to the temp path succeeds, but renaming a file
+    /// over an existing directory fails, so this still exercises the
+    /// "encode_flac returns Err" path without reaching into flacenc
+    /// internals to provoke a real encoder error.
     #[test]
     fn finish_keeps_the_wav_when_the_flac_encode_fails() {
         let dir = tempfile::tempdir().unwrap();
@@ -561,5 +738,178 @@ mod tests {
             !errors.borrow().is_empty(),
             "the encode failure must be reported via on_error"
         );
+    }
+
+    // `AudioSink::new_continuing`: prefilling a continued session's audio
+    // before live capture starts (see the module docs' "continuing a
+    // session's audio" section, and the Critical fix-review finding this
+    // whole feature exists for -- continuing a recording used to silently
+    // truncate/overwrite the existing audio).
+    mod continuing {
+        use super::*;
+
+        #[test]
+        fn prefills_existing_flac_audio_before_new_pushes() {
+            let dir = tempfile::tempdir().unwrap();
+            let md_path = dir.path().join("call.md");
+            let no_op = |_msg: String| {};
+
+            // A "previous recording": known samples, cleanly finished to a
+            // real flac. At least `flacenc::constant::MIN_BLOCK_SIZE` (32)
+            // frames, so `encode_flac`'s own trailing-block silence padding
+            // (see its docs) never kicks in here -- keeping this test's
+            // byte-exact comparison meaningful instead of having to account
+            // for that unrelated, harmless padding.
+            let old_me: Vec<f32> = (0..40).map(|i| (i as f32 / 100.0) - 0.2).collect();
+            let old_them: Vec<f32> = (0..40).map(|i| 0.2 - (i as f32 / 100.0)).collect();
+            {
+                let mut sink = AudioSink::new(&md_path).unwrap();
+                for i in 0..old_me.len() {
+                    sink.push(Channel::Me, &old_me[i..i + 1], &no_op);
+                    sink.push(Channel::Them, &old_them[i..i + 1], &no_op);
+                }
+                sink.finish(&no_op).unwrap();
+            }
+            let flac_path = audio_path_for(&md_path);
+            assert!(flac_path.exists(), "old flac should exist before continuing");
+
+            let mut sink = AudioSink::new_continuing(&md_path, Some(&flac_path), 0).unwrap();
+
+            // New live audio appended after the prefill.
+            let new_me = [0.2f32, -0.4];
+            let new_them = [0.3f32, -0.6];
+            for i in 0..new_me.len() {
+                sink.push(Channel::Me, &new_me[i..i + 1], &no_op);
+                sink.push(Channel::Them, &new_them[i..i + 1], &no_op);
+            }
+            let new_flac_path = sink.finish(&no_op).unwrap();
+            assert_eq!(new_flac_path, flac_path);
+
+            let mut reader = claxon::FlacReader::open(&new_flac_path).unwrap();
+            let decoded: Vec<i32> = reader.samples().map(|s| s.unwrap()).collect();
+
+            let expected: Vec<i32> = old_me
+                .iter()
+                .zip(old_them.iter())
+                .chain(new_me.iter().zip(new_them.iter()))
+                .flat_map(|(&m, &t)| [f32_to_i16(m) as i32, f32_to_i16(t) as i32])
+                .collect();
+            assert!(
+                decoded.len() >= expected.len(),
+                "expected at least the old+new frames, got {} samples",
+                decoded.len()
+            );
+            assert_eq!(
+                &decoded[..expected.len()],
+                &expected[..],
+                "old audio must be prefilled byte-exact, followed by the new audio"
+            );
+        }
+
+        #[test]
+        fn prefills_silence_when_no_existing_audio_but_a_prior_duration() {
+            let dir = tempfile::tempdir().unwrap();
+            let md_path = dir.path().join("call.md");
+            let no_op = |_msg: String| {};
+
+            let previous_duration_secs = 2u64; // keep it small: still exercises the path without a slow test.
+            let mut sink = AudioSink::new_continuing(&md_path, None, previous_duration_secs).unwrap();
+            sink.push(Channel::Me, &[0.5], &no_op);
+            sink.push(Channel::Them, &[0.5], &no_op);
+            let flac_path = sink.finish(&no_op).unwrap();
+
+            let mut reader = claxon::FlacReader::open(&flac_path).unwrap();
+            let decoded: Vec<i32> = reader.samples().map(|s| s.unwrap()).collect();
+            let expected_silence_frames = previous_duration_secs as usize * SAMPLE_RATE as usize;
+            assert!(
+                decoded.len() / 2 > expected_silence_frames,
+                "expected the silence prefill plus at least one real frame after it"
+            );
+            for frame in decoded[..expected_silence_frames * 2].chunks(2) {
+                assert_eq!(frame, [0, 0], "prefilled region must be silence");
+            }
+            // The one real pushed frame right after the silence.
+            let after_silence = &decoded[expected_silence_frames * 2..expected_silence_frames * 2 + 2];
+            assert_eq!(after_silence, [f32_to_i16(0.5) as i32, f32_to_i16(0.5) as i32]);
+        }
+
+        #[test]
+        fn no_previous_duration_and_no_existing_audio_prefills_nothing() {
+            let dir = tempfile::tempdir().unwrap();
+            let md_path = dir.path().join("call.md");
+            let no_op = |_msg: String| {};
+
+            let mut sink = AudioSink::new_continuing(&md_path, None, 0).unwrap();
+            sink.push(Channel::Me, &[0.5], &no_op);
+            sink.push(Channel::Them, &[0.25], &no_op);
+            let flac_path = sink.finish(&no_op).unwrap();
+
+            let mut reader = claxon::FlacReader::open(&flac_path).unwrap();
+            let decoded: Vec<i32> = reader.samples().map(|s| s.unwrap()).collect();
+            assert_eq!(decoded[0], f32_to_i16(0.5) as i32);
+            assert_eq!(decoded[1], f32_to_i16(0.25) as i32);
+        }
+
+        /// Critical fix-review finding, the core regression guard: a corrupt
+        /// (unreadable) existing audio file must make `new_continuing` fail
+        /// loudly rather than silently starting fresh -- and must leave that
+        /// file completely untouched, since prefilling only ever reads it.
+        #[test]
+        fn corrupt_existing_audio_fails_and_leaves_the_original_untouched() {
+            let dir = tempfile::tempdir().unwrap();
+            let md_path = dir.path().join("call.md");
+            let flac_path = audio_path_for(&md_path);
+            let corrupt_bytes = b"not a real flac file at all";
+            std::fs::write(&flac_path, corrupt_bytes).unwrap();
+
+            let result = AudioSink::new_continuing(&md_path, Some(&flac_path), 0);
+            assert!(result.is_err(), "a corrupt existing audio file must fail the prefill");
+
+            let after = std::fs::read(&flac_path).unwrap();
+            assert_eq!(
+                after, corrupt_bytes,
+                "the original (corrupt) file must survive byte-exact -- new_continuing only reads it"
+            );
+            assert!(
+                !wav_path_for(&md_path).exists(),
+                "the partially-prefilled new wav must be cleaned up on failure"
+            );
+        }
+
+        /// A mono existing file (same shape `decode_flac_stereo` rejects in
+        /// retranscribe.rs) must also be rejected here, not silently
+        /// misread as alternating channels.
+        #[test]
+        fn mono_existing_audio_is_rejected() {
+            let dir = tempfile::tempdir().unwrap();
+            let md_path = dir.path().join("call.md");
+            let flac_path = audio_path_for(&md_path);
+            let wav_path = dir.path().join("mono.wav");
+            let spec = hound::WavSpec {
+                channels: 1,
+                sample_rate: 16_000,
+                bits_per_sample: 16,
+                sample_format: hound::SampleFormat::Int,
+            };
+            {
+                let mut writer = hound::WavWriter::create(&wav_path, spec).unwrap();
+                for i in 0..64i16 {
+                    writer.write_sample(i * 10).unwrap();
+                }
+                writer.finalize().unwrap();
+            }
+            let mut reader = hound::WavReader::open(&wav_path).unwrap();
+            let samples: Vec<i32> = reader.samples::<i16>().map(|s| s.unwrap() as i32).collect();
+            let config = flacenc::config::Encoder::default().into_verified().unwrap();
+            let source = flacenc::source::MemSource::from_samples(&samples, 1, 16, 16_000);
+            let stream =
+                flacenc::encode_with_fixed_block_size(&config, source, config.block_size).unwrap();
+            let mut bitsink = flacenc::bitsink::ByteSink::new();
+            stream.write(&mut bitsink).unwrap();
+            std::fs::write(&flac_path, bitsink.as_slice()).unwrap();
+
+            let result = AudioSink::new_continuing(&md_path, Some(&flac_path), 0);
+            assert!(result.is_err(), "a mono existing audio file must be rejected");
+        }
     }
 }

@@ -369,9 +369,31 @@ fn run_worker(
     // Global Constraints: a problem standing up the audio sink must not
     // block the recording from starting -- report it and continue with
     // `audio_sink` left `None` (transcribing without audio) rather than
-    // propagating an `Err` the way engine/VAD init failures above do.
+    // propagating an `Err` the way engine/VAD init failures above do. This
+    // also covers the Critical fix-review finding for continuing a session:
+    // when `continue_from` is `Some`, the sink must be prefilled with the
+    // existing audio (or silence, if there was a previous duration but no
+    // audio file) before any live capture lands, rather than starting a
+    // fresh WAV that would silently truncate/overwrite the old one on
+    // finish (see `audio_sink`'s "continuing a session's audio" docs). If
+    // that prefill itself fails (a corrupt or unreadable old file), audio is
+    // disabled for this recording entirely rather than silently continuing
+    // with misaligned timestamps -- the transcript still records normally,
+    // and the old audio file is left untouched since prefilling only ever
+    // reads it.
     let mut audio_sink = if keep_audio {
-        match AudioSink::new(&out_path) {
+        let sink_result = match &continue_from {
+            Some(seed) => {
+                let existing_audio = crate::retranscribe::resolve_audio_path(&out_path);
+                AudioSink::new_continuing(
+                    &out_path,
+                    existing_audio.as_deref(),
+                    seed.previous_duration_secs,
+                )
+            }
+            None => AudioSink::new(&out_path),
+        };
+        match sink_result {
             Ok(sink) => Some(sink),
             Err(e) => {
                 report_error(&on_error, format!("session: audio sink init failed: {e}"));

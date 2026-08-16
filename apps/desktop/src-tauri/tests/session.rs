@@ -531,3 +531,211 @@ fn continuing_a_session_does_not_wipe_its_existing_duration_before_the_final_sav
         "duration should still be present after a clean stop:\n{md}"
     );
 }
+
+// Critical fix-review finding: continuing a session used to silently
+// truncate/overwrite its existing audio (`AudioSink::new` always starts a
+// fresh, empty wav) while the transcript's new lines were correctly offset
+// past the old content -- desyncing every existing seek offset and, on a
+// later re-transcribe, replacing the whole transcript with one decoded from
+// only the new (truncated) audio. These three tests exercise the fix through
+// a real `Session::start` continuation, the same way the transcript-side
+// continuation tests above do.
+mod continuing_audio {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    fn existing_md(duration_line: &str) -> String {
+        format!(
+            "---\ndate: 2026-06-01T09:00:00+02:00\ntitle: Weekly sync\nasr: parakeet-tdt-0.6b-v3\n{duration_line}---\n\n## Transcript\n\n[00:00:01] Me: hi\n"
+        )
+    }
+
+    #[test]
+    fn continuing_with_an_existing_flac_prefills_it_before_new_capture() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("call.md");
+        std::fs::write(&out, existing_md("duration: 1m\n")).unwrap();
+
+        // A real, known-content old flac -- written the same way a previous
+        // recording's `AudioSink::finish` would have.
+        let old_me = [0.5f32, -0.25, 0.1, 0.75];
+        let old_them = [-0.5f32, 0.25, -0.1, -0.75];
+        {
+            let mut sink = desktop_lib::audio_sink::AudioSink::new(&out).unwrap();
+            let no_op = |_msg: String| {};
+            for i in 0..old_me.len() {
+                sink.push(Channel::Me, &old_me[i..i + 1], &no_op);
+                sink.push(Channel::Them, &old_them[i..i + 1], &no_op);
+            }
+            sink.finish(&no_op).unwrap();
+        }
+        let flac_path = desktop_lib::audio_sink::audio_path_for(&out);
+        assert!(flac_path.exists(), "expected an existing flac before continuing");
+
+        let seed = desktop_lib::session::load_continue_from(&out).unwrap();
+        let samples = load_wav_16k_mono(&test_wav_path());
+        let (tx, rx) = channel();
+        let session = desktop_lib::session::Session::start(
+            rx,
+            out.clone(),
+            Some(seed),
+            no_pending_edits(),
+            true,
+            |_| {},
+            |_, _| {},
+            |_| {},
+        );
+        for chunk in samples.chunks(1600) {
+            tx.send(Chunk {
+                channel: Channel::Them,
+                samples: chunk.to_vec(),
+            })
+            .unwrap();
+        }
+        drop(tx);
+        let path = session.stop().unwrap();
+
+        let new_flac_path = desktop_lib::audio_sink::audio_path_for(&path);
+        assert!(new_flac_path.exists());
+        let mut reader = claxon::FlacReader::open(&new_flac_path).unwrap();
+        let decoded: Vec<i32> = reader.samples().map(|s| s.unwrap()).collect();
+
+        // The first 4 stereo frames (8 interleaved samples) must be the old
+        // audio, byte-exact -- proving it was prefilled, not lost.
+        let expected: Vec<i32> = old_me
+            .iter()
+            .zip(old_them.iter())
+            .flat_map(|(&m, &t)| {
+                [
+                    (m.clamp(-1.0, 1.0) * i16::MAX as f32).round() as i32,
+                    (t.clamp(-1.0, 1.0) * i16::MAX as f32).round() as i32,
+                ]
+            })
+            .collect();
+        assert!(decoded.len() >= expected.len());
+        assert_eq!(
+            &decoded[..expected.len()],
+            &expected[..],
+            "old audio must survive byte-exact at the start of the continued recording's audio"
+        );
+
+        // New (real speech) audio must have been appended after the old
+        // prefill -- old+new, not just old or just new.
+        let old_frames = old_me.len();
+        let total_frames = decoded.len() / 2;
+        assert!(
+            total_frames > old_frames,
+            "expected new audio appended after the {old_frames}-frame old prefill, got {total_frames} total frames"
+        );
+    }
+
+    #[test]
+    fn continuing_with_no_audio_but_a_prior_duration_prefills_silence() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("call.md");
+        // `duration: 1m` but deliberately no audio file at all -- the
+        // "keep_audio was off, now on" scenario.
+        std::fs::write(&out, existing_md("duration: 1m\n")).unwrap();
+
+        let seed = desktop_lib::session::load_continue_from(&out).unwrap();
+        assert_eq!(seed.previous_duration_secs, 60);
+
+        let samples = load_wav_16k_mono(&test_wav_path());
+        let (tx, rx) = channel();
+        let session = desktop_lib::session::Session::start(
+            rx,
+            out.clone(),
+            Some(seed),
+            no_pending_edits(),
+            true,
+            |_| {},
+            |_, _| {},
+            |_| {},
+        );
+        for chunk in samples.chunks(1600) {
+            tx.send(Chunk {
+                channel: Channel::Them,
+                samples: chunk.to_vec(),
+            })
+            .unwrap();
+        }
+        drop(tx);
+        let path = session.stop().unwrap();
+
+        let flac_path = desktop_lib::audio_sink::audio_path_for(&path);
+        let mut reader = claxon::FlacReader::open(&flac_path).unwrap();
+        let decoded: Vec<i32> = reader.samples().map(|s| s.unwrap()).collect();
+
+        let expected_silence_frames = 60usize * 16_000;
+        let total_frames = decoded.len() / 2;
+        assert!(
+            total_frames > expected_silence_frames,
+            "expected {expected_silence_frames} silence frames plus real audio after, got {total_frames} total frames"
+        );
+        assert!(
+            decoded[..expected_silence_frames * 2].iter().all(|&s| s == 0),
+            "the prefilled region must be silence"
+        );
+    }
+
+    /// Regression guard for the fix's error-handling requirement: a corrupt
+    /// old audio file must not be silently skipped (which would leave the
+    /// new recording's audio misaligned with its transcript's continued
+    /// offsets) -- it must report an error and disable audio for this
+    /// recording, while leaving the original file completely untouched.
+    #[test]
+    fn continuing_with_a_corrupt_existing_audio_reports_an_error_and_leaves_it_untouched() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("call.md");
+        std::fs::write(&out, existing_md("duration: 1m\n")).unwrap();
+
+        let flac_path = desktop_lib::audio_sink::audio_path_for(&out);
+        let corrupt_bytes = b"not a real flac file, definitely corrupt".to_vec();
+        std::fs::write(&flac_path, &corrupt_bytes).unwrap();
+
+        let seed = desktop_lib::session::load_continue_from(&out).unwrap();
+        let samples = load_wav_16k_mono(&test_wav_path());
+        let (tx, rx) = channel();
+        let errors: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let errors_for_worker = errors.clone();
+        let session = desktop_lib::session::Session::start(
+            rx,
+            out.clone(),
+            Some(seed),
+            no_pending_edits(),
+            true,
+            |_| {},
+            |_, _| {},
+            move |msg| {
+                errors_for_worker.lock().unwrap().push(msg);
+            },
+        );
+        for chunk in samples.chunks(1600) {
+            tx.send(Chunk {
+                channel: Channel::Them,
+                samples: chunk.to_vec(),
+            })
+            .unwrap();
+        }
+        drop(tx);
+        let path = session.stop().unwrap();
+
+        assert!(
+            !errors.lock().unwrap().is_empty(),
+            "expected a session-error reporting the audio prefill failure"
+        );
+        let after = std::fs::read(&flac_path).unwrap();
+        assert_eq!(
+            after, corrupt_bytes,
+            "the original (corrupt) audio file must be left byte-exact untouched"
+        );
+        // The transcript must still have recorded despite audio being
+        // disabled for this recording (Global Constraints: a sink problem
+        // must not kill the recording).
+        let md = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            md.contains("Them:"),
+            "transcript should still record when audio prefill fails:\n{md}"
+        );
+    }
+}

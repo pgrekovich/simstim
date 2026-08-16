@@ -57,8 +57,12 @@ Parakeet's live transcript can be rough, especially in Russian. To get a better 
 3. Whisper runs at about 12x realtime, so a 30 minute call takes about 2.5 minutes. Progress shows in the session header.
 4. The old transcript is replaced outright, not merged or kept. Everything else (title, notes, date, duration) stays.
 
-The audio file lives right next to the `.md` (same basename, `.flac` extension) and macOS plays FLAC natively in QuickTime and Quick Look.
+The audio file lives right next to the `.md` (same basename, `.m4a` or `.flac` extension depending on Settings > Audio format). Both play natively in QuickTime, Quick Look and the app's own player.
+
+## Audio format
+
+A measured codec benchmark on real call audio settled this: AAC at 32 kbps, forced to 16 kHz, is ~17 MB/hour at 3.8% word-error-rate versus lossless; FLAC is ~137 MB/hour at 0% WER. Raising the AAC bitrate doesn't recover accuracy (64 kbps measured 4.3% WER, worse, not better), so 32 kbps is the setting, not a corner cut. AAC is the default; FLAC stays available in Settings > Audio format for anyone who wants zero transcription-quality cost from the codec itself. Switching formats only affects future recordings; continuing an existing session re-encodes its whole audio (old + new) in whatever format is currently selected, so a session never ends up split across two audio files.
 
 ## Status
 
-stage 0.7 shipped: call audio kept as a stereo FLAC next to the transcript (mic = left/Me, system = right/Them, configurable via Settings > Keep call audio), whisper large-v3-turbo re-transcribe pass for better quality (especially Russian), click-to-seek playback on transcript lines. Known gaps: no meeting detection yet, no menu bar/hotkeys.
+stage 0.7 shipped: call audio kept next to the transcript as AAC by default or FLAC as an opt-in (mic = left/Me, system = right/Them, configurable via Settings > Audio format), whisper large-v3-turbo re-transcribe pass for better quality (especially Russian), click-to-seek playback on transcript lines. Known gaps: no meeting detection yet, no menu bar/hotkeys.

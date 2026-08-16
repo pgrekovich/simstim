@@ -19,6 +19,24 @@ fn default_keep_audio() -> bool {
     true
 }
 
+/// Valid `audio_format` values: `set_audio_format` rejects anything else.
+/// Mirrors `audio_sink::AudioFormat`'s two variants (kept as plain strings
+/// here, the same way `theme` is, rather than a serde enum, so an unknown
+/// future value on disk still deserializes -- see `validate_audio_format`'s
+/// doc comment for why that matters).
+pub const VALID_AUDIO_FORMATS: &[&str] = &["aac", "flac"];
+
+/// Default for `audio_format` (owner decision, stage-0.7 format change, after
+/// the measured codec benchmark: AAC 32 kbps forced to 16 kHz is ~17 MB/hour
+/// at 3.8% WER vs lossless, against FLAC's 137 MB/hour at 0% WER -- see
+/// `aac.rs`'s module docs for the full writeup). New installs, and any
+/// config.json written before this field existed, default to the smaller
+/// format; FLAC stays available as an explicit opt-in for users who want
+/// zero transcription-quality cost from the audio codec itself.
+fn default_audio_format() -> String {
+    "aac".to_string()
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Config {
     pub output_dir: PathBuf,
@@ -35,6 +53,13 @@ pub struct Config {
     /// deserialization entirely.
     #[serde(default = "default_keep_audio")]
     pub keep_audio: bool,
+    /// `"aac" | "flac"` (stage-0.7 format change): which format
+    /// `AudioSink::finish` encodes the working WAV to. `serde(default)` so
+    /// config.json files written before this field existed still load
+    /// (defaulting to `"aac"`, the new owner-chosen default) instead of
+    /// failing deserialization entirely.
+    #[serde(default = "default_audio_format")]
+    pub audio_format: String,
 }
 
 impl Default for Config {
@@ -44,6 +69,7 @@ impl Default for Config {
             active_model: KNOWN_MODEL_ID.to_string(),
             theme: default_theme(),
             keep_audio: default_keep_audio(),
+            audio_format: default_audio_format(),
         }
     }
 }
@@ -79,6 +105,32 @@ pub fn set_theme(theme: String) -> Result<(), String> {
 pub fn set_keep_audio(keep_audio: bool) -> Result<(), String> {
     let mut cfg = Config::load();
     cfg.keep_audio = keep_audio;
+    cfg.save().map_err(|e| e.to_string())
+}
+
+/// `Err` with a message naming the allowed values unless `format` is one of
+/// [`VALID_AUDIO_FORMATS`]. Split out from `set_audio_format` the same way
+/// `validate_theme` is, so it's testable without touching the real config
+/// file on disk.
+fn validate_audio_format(format: &str) -> Result<(), String> {
+    if VALID_AUDIO_FORMATS.contains(&format) {
+        Ok(())
+    } else {
+        Err(format!(
+            "invalid audio format: {format} (expected one of {VALID_AUDIO_FORMATS:?})"
+        ))
+    }
+}
+
+/// Sets and persists which format new recordings are encoded to (stage-0.7
+/// format change). Only affects future encodes: an already-recorded
+/// session's audio file keeps whatever format it was written in (see
+/// `audio_sink`'s module docs on continuing a session across formats).
+#[tauri::command]
+pub fn set_audio_format(format: String) -> Result<(), String> {
+    validate_audio_format(&format)?;
+    let mut cfg = Config::load();
+    cfg.audio_format = format;
     cfg.save().map_err(|e| e.to_string())
 }
 
@@ -149,6 +201,7 @@ mod tests {
             active_model: "custom-model-id".to_string(),
             theme: "dark".to_string(),
             keep_audio: false,
+            audio_format: "flac".to_string(),
         };
         cfg.save_to(&path).unwrap();
         let loaded = Config::load_from(&path);
@@ -163,6 +216,38 @@ mod tests {
     #[test]
     fn keep_audio_defaults_to_true() {
         assert!(Config::default().keep_audio);
+    }
+
+    #[test]
+    fn audio_format_defaults_to_aac() {
+        assert_eq!(Config::default().audio_format, "aac");
+    }
+
+    #[test]
+    fn old_config_json_without_audio_format_field_loads_with_aac_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        // Exactly what stage-0.7's audio-sink task (before this format
+        // change) wrote: no "audio_format" key at all.
+        std::fs::write(
+            &path,
+            r#"{"output_dir":"/tmp/some-output","active_model":"custom-model-id","theme":"dark","keep_audio":true}"#,
+        )
+        .unwrap();
+        let cfg = Config::load_from(&path);
+        assert_eq!(cfg.audio_format, "aac");
+    }
+
+    #[test]
+    fn validate_audio_format_accepts_aac_and_flac() {
+        assert!(validate_audio_format("aac").is_ok());
+        assert!(validate_audio_format("flac").is_ok());
+    }
+
+    #[test]
+    fn validate_audio_format_rejects_unknown_value() {
+        let err = validate_audio_format("mp3").unwrap_err();
+        assert!(err.contains("mp3"));
     }
 
     #[test]

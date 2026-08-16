@@ -1,3 +1,4 @@
+pub mod aac;
 pub mod audio_sink;
 pub mod config;
 pub mod models;
@@ -161,6 +162,7 @@ fn start_recording(app: AppHandle, path: Option<String>, state: State<AppState>)
         continue_from,
         pending_edits.clone(),
         cfg.keep_audio,
+        audio_sink::AudioFormat::from_config_str(&cfg.audio_format),
         move |line| {
             let _ = line_emitter.emit("transcript-line", line);
         },
@@ -394,6 +396,7 @@ pub fn run() {
             set_active_model,
             config::set_theme,
             config::set_keep_audio,
+            config::set_audio_format,
             models::list_models,
             models::download_model,
             sessions::list_sessions,

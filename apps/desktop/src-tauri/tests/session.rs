@@ -101,6 +101,7 @@ fn session_transcribes_fake_channel_stream() {
         None,
         no_pending_edits(),
         true,
+        desktop_lib::audio_sink::AudioFormat::Flac,
         |_| {},
         |_, _| {},
         |_| {},
@@ -139,6 +140,7 @@ fn keep_audio_true_produces_a_flac_file_next_to_the_transcript() {
         None,
         no_pending_edits(),
         true,
+        desktop_lib::audio_sink::AudioFormat::Flac,
         |_| {},
         |_, _| {},
         |_| {},
@@ -177,6 +179,7 @@ fn keep_audio_false_writes_no_audio_file() {
         None,
         no_pending_edits(),
         false,
+        desktop_lib::audio_sink::AudioFormat::Flac,
         |_| {},
         |_, _| {},
         |_| {},
@@ -212,6 +215,7 @@ fn session_stop_with_no_chunks_still_produces_valid_file() {
         None,
         no_pending_edits(),
         true,
+        desktop_lib::audio_sink::AudioFormat::Flac,
         |_| {},
         |_, _| {},
         |_| {},
@@ -252,6 +256,7 @@ fn pending_edits_set_before_start_land_in_the_saved_file() {
         None,
         pending,
         true,
+        desktop_lib::audio_sink::AudioFormat::Flac,
         |_| {},
         |_, _| {},
         |_| {},
@@ -290,6 +295,7 @@ fn save_failures_are_reported_via_on_error_and_stop_returns_err() {
         None,
         no_pending_edits(),
         true,
+        desktop_lib::audio_sink::AudioFormat::Flac,
         |_| {},
         |_, _| {},
         move |msg| {
@@ -365,6 +371,7 @@ fn continuing_an_existing_session_appends_after_existing_content_with_continued_
         Some(seed),
         no_pending_edits(),
         true,
+        desktop_lib::audio_sink::AudioFormat::Flac,
         |_| {},
         |_, _| {},
         |_| {},
@@ -448,6 +455,7 @@ fn continuing_a_session_with_no_prior_transcript_starts_offsets_at_zero() {
         Some(seed),
         no_pending_edits(),
         true,
+        desktop_lib::audio_sink::AudioFormat::Flac,
         |_| {},
         |_, _| {},
         |_| {},
@@ -493,6 +501,7 @@ fn continuing_a_session_does_not_wipe_its_existing_duration_before_the_final_sav
         Some(seed),
         no_pending_edits(),
         true,
+        desktop_lib::audio_sink::AudioFormat::Flac,
         |_| {},
         |_, _| {},
         |_| {},
@@ -577,7 +586,7 @@ mod continuing_audio {
     /// trailing-block silence padding (see its docs) never kicks in and
     /// muddies frame-exact assertions.
     fn write_old_flac(out: &std::path::Path, frame_count: usize, sample_value: f32) {
-        let mut sink = desktop_lib::audio_sink::AudioSink::new(out).unwrap();
+        let mut sink = desktop_lib::audio_sink::AudioSink::new(out, desktop_lib::audio_sink::AudioFormat::Flac).unwrap();
         let no_op = |_msg: String| {};
         let chunk = vec![sample_value; 1600];
         let mut remaining = frame_count;
@@ -601,7 +610,7 @@ mod continuing_audio {
         let old_me = [0.5f32, -0.25, 0.1, 0.75];
         let old_them = [-0.5f32, 0.25, -0.1, -0.75];
         {
-            let mut sink = desktop_lib::audio_sink::AudioSink::new(&out).unwrap();
+            let mut sink = desktop_lib::audio_sink::AudioSink::new(&out, desktop_lib::audio_sink::AudioFormat::Flac).unwrap();
             let no_op = |_msg: String| {};
             for i in 0..old_me.len() {
                 sink.push(Channel::Me, &old_me[i..i + 1], &no_op);
@@ -625,6 +634,7 @@ mod continuing_audio {
             Some(seed),
             no_pending_edits(),
             true,
+            desktop_lib::audio_sink::AudioFormat::Flac,
             move |line| lines_for_worker.lock().unwrap().push(line),
             |_, _| {},
             |_| {},
@@ -718,6 +728,7 @@ mod continuing_audio {
             Some(seed),
             no_pending_edits(),
             true,
+            desktop_lib::audio_sink::AudioFormat::Flac,
             |_| {},
             |_, _| {},
             |_| {},
@@ -782,6 +793,7 @@ mod continuing_audio {
             Some(seed),
             no_pending_edits(),
             true,
+            desktop_lib::audio_sink::AudioFormat::Flac,
             move |line| lines_for_worker.lock().unwrap().push(line),
             |_, _| {},
             |_| {},
@@ -864,6 +876,7 @@ mod continuing_audio {
             Some(seed),
             no_pending_edits(),
             true,
+            desktop_lib::audio_sink::AudioFormat::Flac,
             |_| {},
             |_, _| {},
             |_| {},
@@ -944,6 +957,7 @@ mod continuing_audio {
             Some(seed),
             no_pending_edits(),
             true,
+            desktop_lib::audio_sink::AudioFormat::Flac,
             |_| {},
             |_, _| {},
             |_| {},
@@ -1004,6 +1018,7 @@ mod continuing_audio {
             Some(seed),
             no_pending_edits(),
             true,
+            desktop_lib::audio_sink::AudioFormat::Flac,
             |_| {},
             |_, _| {},
             move |msg| {

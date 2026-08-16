@@ -75,7 +75,7 @@ use simstim_capture::{Channel, Chunk};
 use simstim_engine::{models_dir, Engine, Segment, Vad};
 use simstim_transcript::{last_offset_secs, parse_meta, parse_session, Speaker, Transcript};
 
-use crate::audio_sink::AudioSink;
+use crate::audio_sink::{AudioFormat, AudioSink};
 
 /// Minimum gap between edit-triggered saves (saves that happen only because
 /// a pending title/notes edit landed with no segment finalizing alongside
@@ -284,8 +284,14 @@ impl Session {
     ///
     /// `keep_audio` (Global Constraints, config's `keep_audio` field): when
     /// true, the worker also runs an [`AudioSink`] alongside the transcript,
-    /// writing `<out_path>`'s `.wav`/`.flac` sibling (see `audio_sink`'s
-    /// module docs). When false, no audio file is written at all.
+    /// writing `<out_path>`'s `.wav`/`.flac`-or-`.m4a` sibling (see
+    /// `audio_sink`'s module docs). When false, no audio file is written at
+    /// all. `audio_format` (stage-0.7 format change, ignored when
+    /// `keep_audio` is false) picks which of those two the encode target is;
+    /// callers derive it from `config::Config::audio_format` at the moment
+    /// recording starts, not from whatever format an existing session's
+    /// audio already happens to be in (a continuation can cross formats,
+    /// see `audio_sink`'s module docs).
     #[allow(clippy::too_many_arguments)]
     pub fn start(
         chunk_rx: Receiver<Chunk>,
@@ -293,6 +299,7 @@ impl Session {
         continue_from: Option<ContinueFrom>,
         pending_edits: Arc<Mutex<PendingEdits>>,
         keep_audio: bool,
+        audio_format: AudioFormat,
         on_line: impl Fn(String) + Send + 'static,
         on_interim: impl Fn(Channel, String) + Send + 'static,
         on_error: impl Fn(String) + Send + 'static,
@@ -306,6 +313,7 @@ impl Session {
                 continue_from,
                 pending_edits,
                 keep_audio,
+                audio_format,
                 on_line,
                 on_interim,
                 on_error,
@@ -346,6 +354,7 @@ fn run_worker(
     continue_from: Option<ContinueFrom>,
     pending_edits: Arc<Mutex<PendingEdits>>,
     keep_audio: bool,
+    audio_format: AudioFormat,
     on_line: impl Fn(String),
     on_interim: impl Fn(Channel, String),
     on_error: impl Fn(String),
@@ -399,13 +408,18 @@ fn run_worker(
         let sink_result: anyhow::Result<AudioSink> = match &continue_from {
             Some(seed) => {
                 let existing_audio = crate::retranscribe::resolve_audio_path(&out_path);
-                AudioSink::new_continuing(&out_path, existing_audio.as_deref(), seed.base_offset_secs)
-                    .map(|(sink, target_base_secs)| {
-                        continued_base_offset_secs = Some(target_base_secs);
-                        sink
-                    })
+                AudioSink::new_continuing(
+                    &out_path,
+                    existing_audio.as_deref(),
+                    seed.base_offset_secs,
+                    audio_format,
+                )
+                .map(|(sink, target_base_secs)| {
+                    continued_base_offset_secs = Some(target_base_secs);
+                    sink
+                })
             }
-            None => AudioSink::new(&out_path),
+            None => AudioSink::new(&out_path, audio_format),
         };
         match sink_result {
             Ok(sink) => Some(sink),

@@ -15,11 +15,20 @@ export interface AppConfig {
   /** `"system" | "light" | "dark"`. */
   theme: string;
   /**
-   * Whether recordings keep a stereo audio file (wav during capture, flac
-   * after stop) next to the transcript. Defaults to `true`. Toggled from the
-   * Settings dialog's "Keep call audio" checkbox (Task 5).
+   * Whether recordings keep a stereo audio file (wav during capture,
+   * encoded to `audio_format` after stop) next to the transcript. Defaults
+   * to `true`. Toggled from the Settings dialog's "Keep call audio"
+   * checkbox (Task 5).
    */
   keep_audio: boolean;
+  /**
+   * `"aac" | "flac"` (stage-0.7 format change): which format new recordings
+   * are encoded to. Defaults to `"aac"` (owner decision after a measured
+   * codec benchmark: ~17 MB/hour at 3.8% WER vs lossless, against FLAC's
+   * ~137 MB/hour at 0% WER). Toggled from the Settings dialog's audio
+   * format control, next to "Keep call audio".
+   */
+  audio_format: string;
 }
 
 /**
@@ -170,6 +179,17 @@ export function setTheme(theme: string): Promise<void> {
  */
 export function setKeepAudio(keepAudio: boolean): Promise<void> {
   return invoke("set_keep_audio", { keepAudio });
+}
+
+/**
+ * Sets and persists which format new recordings are encoded to (stage-0.7
+ * format change). Mirrors `config::set_audio_format`
+ * (apps/desktop/src-tauri/src/config.rs). Only affects future encodes: an
+ * already-recorded session's audio file keeps whatever format it was
+ * written in.
+ */
+export function setAudioFormat(format: string): Promise<void> {
+  return invoke("set_audio_format", { format });
 }
 
 export function listSessions(): Promise<SessionMeta[]> {

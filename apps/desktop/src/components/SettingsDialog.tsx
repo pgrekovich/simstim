@@ -17,6 +17,7 @@ import {
   getConfig,
   listModels,
   setActiveModel,
+  setAudioFormat,
   setKeepAudio,
   setOutputDir,
   setTheme,
@@ -30,6 +31,18 @@ const THEME_OPTIONS: { value: string; label: string }[] = [
   { value: "system", label: "System" },
   { value: "light", label: "Light" },
   { value: "dark", label: "Dark" },
+];
+
+/**
+ * Stage-0.7 format change: AAC is the default (owner decision after a
+ * measured codec benchmark), FLAC stays available as a lossless opt-in. The
+ * numbers in the helper text below are the actual measured ones, not
+ * estimates, so the size/quality tradeoff is visible before someone flips
+ * the toggle.
+ */
+const AUDIO_FORMAT_OPTIONS: { value: string; label: string }[] = [
+  { value: "aac", label: "AAC" },
+  { value: "flac", label: "FLAC" },
 ];
 
 /** Formats a byte count as "487 MB" or "1.2 GB" (one decimal above 1024 MB). */
@@ -64,6 +77,7 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
   const [themeError, setThemeError] = useState<string | null>(null);
   const [folderError, setFolderError] = useState<string | null>(null);
   const [keepAudioError, setKeepAudioError] = useState<string | null>(null);
+  const [audioFormatError, setAudioFormatError] = useState<string | null>(null);
   const [progress, setProgress] = useState<Record<string, DownloadProgress>>({});
   const [busyIds, setBusyIds] = useState<Set<string>>(new Set());
   const onModelsChangedRef = useRef(onModelsChanged);
@@ -165,6 +179,22 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
     } catch (err) {
       setConfig((prev) => (prev ? { ...prev, keep_audio: previous } : prev));
       setKeepAudioError(String(err));
+    }
+  }
+
+  async function handleSetAudioFormat(format: string) {
+    const previous = config?.audio_format;
+    if (format === previous || previous === undefined) return;
+    setAudioFormatError(null);
+    // Same optimistic-update-with-rollback pattern as `handleSetTheme`/
+    // `handleSetKeepAudio`: only affects FUTURE recordings, so there's
+    // nothing to re-render besides the button state itself.
+    setConfig((prev) => (prev ? { ...prev, audio_format: format } : prev));
+    try {
+      await setAudioFormat(format);
+    } catch (err) {
+      setConfig((prev) => (prev ? { ...prev, audio_format: previous } : prev));
+      setAudioFormatError(String(err));
     }
   }
 
@@ -280,11 +310,32 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
             <div className="flex flex-col gap-0.5">
               <Label htmlFor="keep-audio">Keep call audio</Label>
               <span className="text-xs text-muted-foreground">
-                Stores a stereo FLAC next to each transcript (about 130 MB per hour). Re-transcribing needs it.
+                Stores a stereo audio file next to each transcript. Re-transcribing needs it.
               </span>
             </div>
           </div>
           {keepAudioError && <span className="text-xs text-destructive">{keepAudioError}</span>}
+
+          <div className="flex flex-col gap-1.5 pt-1">
+            <Label>Audio format</Label>
+            <div className="flex gap-1.5">
+              {AUDIO_FORMAT_OPTIONS.map((option) => (
+                <Button
+                  key={option.value}
+                  variant={config?.audio_format === option.value ? "default" : "outline"}
+                  size="sm"
+                  disabled={!config || !config.keep_audio}
+                  onClick={() => handleSetAudioFormat(option.value)}
+                >
+                  {option.label}
+                </Button>
+              ))}
+            </div>
+            <span className="text-xs text-muted-foreground">
+              AAC: about 17 MB per hour, small quality loss (default). FLAC: lossless, about 137 MB per hour.
+            </span>
+            {audioFormatError && <span className="text-xs text-destructive">{audioFormatError}</span>}
+          </div>
         </section>
 
         <section className="flex flex-col gap-2">

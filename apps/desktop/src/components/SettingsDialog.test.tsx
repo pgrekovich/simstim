@@ -12,6 +12,7 @@ vi.mock("@/lib/ipc", () => ({
   setOutputDir: vi.fn().mockResolvedValue(undefined),
   setTheme: vi.fn().mockResolvedValue(undefined),
   setKeepAudio: vi.fn().mockResolvedValue(undefined),
+  setAudioFormat: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("@tauri-apps/api/event", () => ({
@@ -27,12 +28,14 @@ const baseConfig: AppConfig = {
   active_model: "parakeet-tdt-0.6b-v3-int8",
   theme: "system",
   keep_audio: true,
+  audio_format: "aac",
 };
 
 beforeEach(() => {
   vi.mocked(ipc.getConfig).mockClear().mockResolvedValue(baseConfig);
   vi.mocked(ipc.listModels).mockClear().mockResolvedValue([]);
   vi.mocked(ipc.setKeepAudio).mockClear().mockResolvedValue(undefined);
+  vi.mocked(ipc.setAudioFormat).mockClear().mockResolvedValue(undefined);
   vi.mocked(ipc.setActiveModel).mockClear().mockResolvedValue(undefined);
 });
 
@@ -75,6 +78,51 @@ describe("SettingsDialog: keep-audio toggle (stage 0.7 Task 5)", () => {
     // optimistic (unsaved) state.
     await waitFor(() => expect(checkbox).toHaveAttribute("aria-checked", "true"));
     await screen.findByText(/disk write failed/i);
+  });
+});
+
+describe("SettingsDialog: audio format toggle (stage 0.7 format change)", () => {
+  it("shows AAC active by default and switches to FLAC on click", async () => {
+    let persisted = { ...baseConfig };
+    vi.mocked(ipc.getConfig).mockImplementation(async () => ({ ...persisted }));
+    vi.mocked(ipc.setAudioFormat).mockImplementation(async (format: string) => {
+      persisted = { ...persisted, audio_format: format };
+    });
+
+    render(<SettingsDialog open onOpenChange={() => {}} />);
+
+    const aacButton = await screen.findByRole("button", { name: "AAC" });
+    const flacButton = await screen.findByRole("button", { name: "FLAC" });
+    expect(aacButton).toHaveAttribute("data-slot", "button");
+
+    // Helper text states the real measured numbers, not a rounded guess.
+    await screen.findByText(/17 mb per hour/i);
+    await screen.findByText(/137 mb per hour/i);
+
+    fireEvent.click(flacButton);
+
+    await waitFor(() => expect(ipc.setAudioFormat).toHaveBeenCalledWith("flac"));
+  });
+
+  it("reverts to the previous format and shows an inline error when setAudioFormat rejects", async () => {
+    vi.mocked(ipc.setAudioFormat).mockRejectedValueOnce(new Error("disk write failed"));
+
+    render(<SettingsDialog open onOpenChange={() => {}} />);
+
+    const flacButton = await screen.findByRole("button", { name: "FLAC" });
+    fireEvent.click(flacButton);
+
+    await waitFor(() => expect(ipc.setAudioFormat).toHaveBeenCalledWith("flac"));
+    await screen.findByText(/disk write failed/i);
+  });
+
+  it("disables the format buttons when keep-audio is off", async () => {
+    vi.mocked(ipc.getConfig).mockResolvedValue({ ...baseConfig, keep_audio: false });
+
+    render(<SettingsDialog open onOpenChange={() => {}} />);
+
+    const flacButton = await screen.findByRole("button", { name: "FLAC" });
+    expect(flacButton).toBeDisabled();
   });
 });
 

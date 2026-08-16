@@ -76,7 +76,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use simstim_engine::{WhisperEngine, WhisperSegment};
 use simstim_transcript::Speaker;
 
-use crate::audio_sink::{audio_path_for, wav_path_for};
+use crate::audio_sink::{audio_path_for, m4a_path_for, wav_path_for};
 use crate::models::{self, ModelLayout};
 use crate::sessions;
 use crate::AppState;
@@ -260,30 +260,54 @@ fn decode_wav_stereo(path: &Path) -> Result<(Vec<f32>, Vec<f32>)> {
     Ok((me, them))
 }
 
+/// Decodes an `.m4a` (stage-0.7 format change) into independent f32 mono
+/// streams the same way [`decode_flac_stereo`]/[`decode_wav_stereo`] do.
+/// This codebase has no in-process AAC decoder (see `aac.rs`'s module docs
+/// for why encode/decode both shell out to `afconvert`), so this decodes
+/// the whole file to a scratch WAV first via
+/// [`crate::aac::decode_m4a_to_wav`], then reuses [`decode_wav_stereo`] on
+/// that. The scratch file is a `tempfile::NamedTempFile`, cleaned up
+/// automatically once this function returns.
+fn decode_aac_stereo(path: &Path) -> Result<(Vec<f32>, Vec<f32>)> {
+    let scratch = tempfile::Builder::new()
+        .suffix(".wav")
+        .tempfile()
+        .context("creating a scratch file to decode aac audio")?;
+    crate::aac::decode_m4a_to_wav(path, scratch.path())
+        .with_context(|| format!("decoding audio at {}", path.display()))?;
+    decode_wav_stereo(scratch.path())
+}
+
 /// Decodes whichever audio file `path` actually is, dispatching on its
 /// extension: `.wav` via [`decode_wav_stereo`] (this also covers
 /// `resolve_audio_path`'s `.recording.wav` last resort -- `Path::extension`
 /// only looks at the part after the LAST dot, so it reads as `"wav"` too,
 /// and it's the exact same stereo PCM format `AudioSink` always writes),
-/// anything else (in practice always `.flac`) via [`decode_flac_stereo`].
+/// `.m4a` (stage-0.7 format change) via [`decode_aac_stereo`], anything else
+/// (in practice always `.flac`) via [`decode_flac_stereo`].
 fn decode_audio_stereo(path: &Path) -> Result<(Vec<f32>, Vec<f32>)> {
     match path.extension().and_then(|e| e.to_str()) {
         Some("wav") => decode_wav_stereo(path),
+        Some("m4a") => decode_aac_stereo(path),
         _ => decode_flac_stereo(path),
     }
 }
 
 /// Resolves which audio file to use for `md_path`: prefer the `.flac`
-/// sibling (the normal case), falling back to the `.wav` sibling if the
-/// flac encode step failed and `AudioSink::finish` kept the wav instead of
-/// deleting it (see that method's docs -- losing the recorded audio
-/// entirely would be worse than leaving the bigger file around, but it
-/// means a re-transcribe must still be able to find it), and as a LAST
-/// resort the dedicated `.recording.wav` working file a CONTINUED recording
-/// writes to while it's live (see `audio_sink::recording_wav_path_for`'s
-/// docs -- never the canonical `.wav` while a continuation is still in
-/// progress or mid-encode). `None` if none of the three exist, e.g.
-/// `keep_audio` was off when the session was recorded.
+/// sibling, then the `.m4a` sibling (stage-0.7 format change -- both are
+/// "real", fully-encoded formats; `.flac` is preferred when somehow both
+/// exist, e.g. a stale cross-format leftover that `AudioSink::finish`
+/// failed to clean up -- see that method's docs -- since it's the richer,
+/// lossless one), falling back to the `.wav` sibling if the encode step
+/// failed and `AudioSink::finish` kept the wav instead of deleting it (see
+/// that method's docs -- losing the recorded audio entirely would be worse
+/// than leaving the bigger file around, but it means a re-transcribe must
+/// still be able to find it), and as a LAST resort the dedicated
+/// `.recording.wav` working file a CONTINUED recording writes to while it's
+/// live (see `audio_sink::recording_wav_path_for`'s docs -- never the
+/// canonical `.wav` while a continuation is still in progress or
+/// mid-encode). `None` if none of the four exist, e.g. `keep_audio` was off
+/// when the session was recorded.
 ///
 /// This third fallback (Important fix-review finding, wave 3) is what makes
 /// a crashed continuation's captured audio recoverable at all: without it,
@@ -304,6 +328,10 @@ pub(crate) fn resolve_audio_path(md_path: &Path) -> Option<PathBuf> {
     let flac_path = audio_path_for(md_path);
     if flac_path.is_file() {
         return Some(flac_path);
+    }
+    let m4a_path = m4a_path_for(md_path);
+    if m4a_path.is_file() {
+        return Some(m4a_path);
     }
     let wav_path = wav_path_for(md_path);
     if wav_path.is_file() {
@@ -577,6 +605,7 @@ pub async fn retranscribe_session(
 mod tests {
     use super::*;
     use crate::audio_sink::AudioSink;
+    use chrono::TimeZone;
     use simstim_capture::Channel;
 
     fn seg(start: f64, text: &str) -> WhisperSegment {
@@ -800,6 +829,47 @@ mod tests {
             assert_eq!(resolve_audio_path(&md_path), Some(dir.path().join("call.flac")));
         }
 
+        /// Stage-0.7 format change: `.m4a` is a normal, first-class encode
+        /// target now, resolved the same way `.flac` always was.
+        #[test]
+        fn m4a_only_resolves_to_the_m4a() {
+            let dir = tempfile::tempdir().unwrap();
+            let md_path = dir.path().join("call.md");
+            std::fs::write(dir.path().join("call.m4a"), b"x").unwrap();
+            assert_eq!(resolve_audio_path(&md_path), Some(dir.path().join("call.m4a")));
+        }
+
+        /// `.flac` is preferred over `.m4a` when both somehow exist (e.g. a
+        /// cross-format continuation whose stale-cleanup step failed to
+        /// remove the old file -- see `AudioSink::finish`'s docs): `.flac`
+        /// is the richer, lossless format.
+        #[test]
+        fn flac_is_preferred_over_m4a_when_both_exist() {
+            let dir = tempfile::tempdir().unwrap();
+            let md_path = dir.path().join("call.md");
+            std::fs::write(dir.path().join("call.flac"), b"x").unwrap();
+            std::fs::write(dir.path().join("call.m4a"), b"x").unwrap();
+            assert_eq!(resolve_audio_path(&md_path), Some(dir.path().join("call.flac")));
+        }
+
+        #[test]
+        fn m4a_is_preferred_over_wav_when_both_exist() {
+            let dir = tempfile::tempdir().unwrap();
+            let md_path = dir.path().join("call.md");
+            std::fs::write(dir.path().join("call.m4a"), b"x").unwrap();
+            std::fs::write(dir.path().join("call.wav"), b"x").unwrap();
+            assert_eq!(resolve_audio_path(&md_path), Some(dir.path().join("call.m4a")));
+        }
+
+        #[test]
+        fn m4a_is_preferred_over_recording_wav_when_both_exist() {
+            let dir = tempfile::tempdir().unwrap();
+            let md_path = dir.path().join("call.md");
+            std::fs::write(dir.path().join("call.m4a"), b"x").unwrap();
+            std::fs::write(dir.path().join("call.recording.wav"), b"x").unwrap();
+            assert_eq!(resolve_audio_path(&md_path), Some(dir.path().join("call.m4a")));
+        }
+
         /// Important fix-review finding, wave 3: a crashed CONTINUED
         /// recording only ever wrote to `<base>.recording.wav` (never
         /// `wav_path_for`, see `audio_sink::recording_wav_path_for`'s
@@ -849,7 +919,7 @@ mod tests {
     fn decode_flac_stereo_round_trips_known_samples() {
         let dir = tempfile::tempdir().unwrap();
         let md_path = dir.path().join("call.md");
-        let mut sink = AudioSink::new(&md_path).unwrap();
+        let mut sink = AudioSink::new(&md_path, crate::audio_sink::AudioFormat::Flac).unwrap();
         let no_op = |_msg: String| {};
 
         let me_samples = [0.5f32, -0.25, 0.1];
@@ -904,6 +974,55 @@ mod tests {
         }
         for (expected, actual) in them_samples.iter().zip(decoded_them.iter()) {
             assert!((*expected as f32 / 32768.0 - actual).abs() < 1e-6);
+        }
+    }
+
+    /// Round-trips a small stereo clip through a real `AudioSink` configured
+    /// for AAC (stage-0.7 format change) and this module's
+    /// `decode_aac_stereo`, mirroring `decode_flac_stereo_round_trips_known_
+    /// samples` above. AAC-LC is lossy (unlike the flac round trip, an exact
+    /// float match isn't expected), so this asserts each channel's decoded
+    /// samples track the input's shape closely rather than bit-exactly --
+    /// the exhaustive priming/length-exactness proof lives in `aac.rs`'s own
+    /// `priming_round_trip_preserves_length_and_impulse_position` test; this
+    /// one is about `decode_audio_stereo`'s dispatch and the L/R split being
+    /// correct, not a second priming measurement.
+    #[test]
+    fn decode_aac_stereo_round_trips_known_samples() {
+        use crate::audio_sink::AudioFormat;
+        let dir = tempfile::tempdir().unwrap();
+        let md_path = dir.path().join("call.md");
+        let mut sink = AudioSink::new(&md_path, AudioFormat::Aac).unwrap();
+        let no_op = |_msg: String| {};
+
+        // 200ms of two distinct tones per channel: enough real signal for a
+        // lossy codec's shape to still be meaningfully comparable, unlike a
+        // handful of raw samples.
+        let n = 3200;
+        let me_samples: Vec<f32> = (0..n)
+            .map(|i| 0.4 * (2.0 * std::f32::consts::PI * 440.0 * i as f32 / 16000.0).sin())
+            .collect();
+        let them_samples: Vec<f32> = (0..n)
+            .map(|i| 0.3 * (2.0 * std::f32::consts::PI * 220.0 * i as f32 / 16000.0).sin())
+            .collect();
+        sink.push(Channel::Me, &me_samples, &no_op);
+        sink.push(Channel::Them, &them_samples, &no_op);
+        let m4a_path = sink.finish(&no_op).unwrap();
+        assert_eq!(m4a_path.extension().and_then(|e| e.to_str()), Some("m4a"));
+
+        let (decoded_me, decoded_them) = decode_audio_stereo(&m4a_path).unwrap();
+        assert_eq!(decoded_me.len(), me_samples.len());
+        assert_eq!(decoded_them.len(), them_samples.len());
+
+        // Lossy tolerance, not a bit-exact comparison: 0.15 is generous
+        // relative to the 0.3-0.4 amplitude signals above, but tight enough
+        // to catch a real dispatch bug (e.g. reading the wrong channel, or
+        // decoding raw bytes without the 1/32768 PCM<->float scale).
+        for (expected, actual) in me_samples.iter().zip(decoded_me.iter()) {
+            assert!((expected - actual).abs() < 0.15, "{expected} vs {actual}");
+        }
+        for (expected, actual) in them_samples.iter().zip(decoded_them.iter()) {
+            assert!((expected - actual).abs() < 0.15, "{expected} vs {actual}");
         }
     }
 
@@ -1130,7 +1249,7 @@ mod tests {
         let me_clip = load_wav_16k_mono(&models.join("parakeet-tdt-0.6b-v3-int8/test_wavs/en.wav"));
         let them_clip = load_wav_16k_mono(&models.join("parakeet-tdt-0.6b-v3-int8/test_wavs/fr.wav"));
 
-        let mut sink = AudioSink::new(&md_path).unwrap();
+        let mut sink = AudioSink::new(&md_path, crate::audio_sink::AudioFormat::Flac).unwrap();
         let no_op = |_msg: String| {};
         const CHUNK: usize = 1600;
         let max_len = me_clip.len().max(them_clip.len());
@@ -1169,5 +1288,105 @@ mod tests {
         assert!(after.contains("title: Hey-ho"), "title must be preserved");
         assert!(after.contains("duration: 0m"), "duration must be preserved");
         assert!(after.contains("lkfdsj afkdlsj fsd"), "notes must be preserved");
+    }
+
+    /// Stage-0.7 format change: the brief's manual end-to-end requirement,
+    /// specifically for the NEW default AAC path (the test above already
+    /// covers FLAC). Self-contained (unlike the FLAC test above, doesn't
+    /// depend on a specific real file under `~/Desktop`): produces a
+    /// recording-shaped stereo WAV via a real `AudioSink` in AAC mode,
+    /// `finish()`es it to a real `.m4a`, shells out to the real
+    /// `/usr/bin/afinfo` to independently confirm the produced file is
+    /// 16 kHz AAC (not just trusting `encode_wav_to_m4a`'s own internal
+    /// verification), decodes it back, and runs it through the real whisper
+    /// model. Run manually with:
+    /// `cargo test -p desktop --lib -- --ignored manual_e2e_aac --nocapture`
+    #[test]
+    #[ignore = "needs the real whisper model on disk; run manually, see doc comment"]
+    fn manual_e2e_aac_encode_afinfo_verify_and_retranscribe() {
+        let models = simstim_engine::models_dir();
+        let model_path = models.join("ggml-large-v3-turbo-q8_0.bin");
+        assert!(
+            model_path.is_file(),
+            "whisper model not downloaded at {}",
+            model_path.display()
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        let md_path = dir.path().join("2026-08-16 11-00-00 aac e2e call.md");
+        {
+            let mut tr = simstim_transcript::Transcript::new(
+                chrono::Local.with_ymd_and_hms(2026, 8, 16, 11, 0, 0).unwrap(),
+            );
+            tr.set_title("AAC manual e2e".to_string());
+            tr.set_notes("stage-0.7 aac format change manual e2e check".to_string());
+            tr.save(&md_path).unwrap();
+        }
+        let before = std::fs::read_to_string(&md_path).unwrap();
+
+        // Same real speech clips the FLAC manual e2e test above uses -- real
+        // audio, not a synthetic tone, so the transcription result is
+        // meaningful.
+        let me_clip = load_wav_16k_mono(&models.join("parakeet-tdt-0.6b-v3-int8/test_wavs/en.wav"));
+        let them_clip = load_wav_16k_mono(&models.join("parakeet-tdt-0.6b-v3-int8/test_wavs/fr.wav"));
+
+        let mut sink = AudioSink::new(&md_path, crate::audio_sink::AudioFormat::Aac).unwrap();
+        let no_op = |_msg: String| {};
+        const CHUNK: usize = 1600;
+        let max_len = me_clip.len().max(them_clip.len());
+        for start in (0..max_len).step_by(CHUNK) {
+            let me_end = (start + CHUNK).min(me_clip.len());
+            if start < me_clip.len() {
+                sink.push(Channel::Me, &me_clip[start..me_end], &no_op);
+            }
+            let them_end = (start + CHUNK).min(them_clip.len());
+            if start < them_clip.len() {
+                sink.push(Channel::Them, &them_clip[start..them_end], &no_op);
+            }
+        }
+        let m4a_path = sink.finish(&no_op).unwrap();
+        assert_eq!(m4a_path, m4a_path_for(&md_path), "expected the aac target, not a fallback");
+
+        let file_size_bytes = std::fs::metadata(&m4a_path).unwrap().len();
+
+        // Independent confirmation via the real system `afinfo` binary
+        // (not `encode_wav_to_m4a`'s own internal check, which already
+        // passed or `finish` would have kept the wav instead): the brief
+        // asks for this to be confirmed explicitly, not just trusted.
+        let afinfo_output = std::process::Command::new("/usr/bin/afinfo")
+            .arg(&m4a_path)
+            .output()
+            .unwrap();
+        let afinfo_text = String::from_utf8_lossy(&afinfo_output.stdout).to_string();
+        println!("=== afinfo {} ===\n{afinfo_text}", m4a_path.display());
+        assert!(afinfo_text.contains("16000 Hz"), "expected 16000 Hz in afinfo output: {afinfo_text}");
+        assert!(afinfo_text.contains("aac"), "expected aac codec in afinfo output: {afinfo_text}");
+
+        let started = std::time::Instant::now();
+        run_retranscribe_pipeline(
+            &md_path,
+            &m4a_path,
+            &model_path,
+            WHISPER_MODEL_ID,
+            || Ok(()),
+            |phase, channel, message| {
+                println!("[retranscribe] phase={phase} channel={channel:?} message={message:?}");
+            },
+        )
+        .unwrap();
+        let elapsed = started.elapsed();
+
+        let after = std::fs::read_to_string(&md_path).unwrap();
+        println!("=== elapsed: {elapsed:?} ===");
+        println!("=== m4a file size: {file_size_bytes} bytes ===");
+        println!("=== BEFORE ===\n{before}");
+        println!("=== AFTER ===\n{after}");
+
+        assert!(after.contains("asr: whisper-large-v3-turbo-q8"));
+        assert!(after.contains("title: AAC manual e2e"), "title must be preserved");
+        assert!(
+            after.contains("stage-0.7 aac format change manual e2e check"),
+            "notes must be preserved"
+        );
     }
 }

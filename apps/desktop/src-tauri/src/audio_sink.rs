@@ -1,7 +1,31 @@
 //! Stereo audio sink for a recording session: writes the two 16 kHz mono
 //! channels as one stereo WAV file while recording (left = mic/Me, right =
 //! system/Them, 16-bit, Global Constraints), then on [`AudioSink::finish`]
-//! encodes that WAV to FLAC and deletes it.
+//! encodes that WAV to the configured [`AudioFormat`] (AAC `.m4a` by
+//! default, FLAC `.flac` as an opt-in -- stage-0.7 format change, see
+//! `aac.rs`'s module docs for the benchmark behind the default) and deletes
+//! the WAV.
+//!
+//! ## Multi-format continuation (stage-0.7 format change)
+//!
+//! A session's audio format is decided per-recording, from whatever
+//! `config::Config::audio_format` is set to at that moment -- not baked into
+//! the session file. Continuing a session (see "continuing a session's
+//! audio" below) whose EXISTING audio is one format while the CURRENT
+//! setting is the other must still produce exactly one canonical audio file
+//! afterward, in the CURRENT format: decode the old file (whichever format
+//! it's in), prefill it same as ever, and encode the combined result fresh.
+//! [`AudioSink`]'s `prior_audio_path` field is what makes this safe: it
+//! remembers which file (if any, and at what path) this recording continued
+//! FROM, so [`AudioSink::finish`] can tell whether that file is the SAME
+//! path it just wrote (ordinary same-format continuation, already
+//! overwritten via `encode_flac`/`encode_aac`'s own temp-then-rename) or a
+//! DIFFERENT path (a format switch, or a continuation from the retained
+//! `.wav` fallback) that is now stale and must be removed once the new,
+//! consolidated file is safely in place -- generalizing the same
+//! stale-cleanup reasoning the pre-existing "remove the now-stale
+//! pre-continuation flac" fix already established, just no longer assuming
+//! the old and new formats are always identical.
 //!
 //! ## Sync rule
 //!
@@ -175,6 +199,67 @@ pub(crate) fn recording_wav_path_for(md_path: &Path) -> PathBuf {
     md_path.with_extension("recording.wav")
 }
 
+/// The `.m4a` sibling (stage-0.7 format change): the AAC encode target,
+/// alongside [`audio_path_for`]'s `.flac`. `pub(crate)` for the same reason
+/// as [`recording_wav_path_for`]: `retranscribe::resolve_audio_path` needs
+/// it to resolve a session's audio regardless of which format it was
+/// recorded in.
+pub(crate) fn m4a_path_for(md_path: &Path) -> PathBuf {
+    md_path.with_extension("m4a")
+}
+
+/// The two supported encode targets for a session's audio (stage-0.7 format
+/// change, owner decision after a measured codec benchmark comparing FLAC
+/// against AAC at several bitrates -- see `aac.rs`'s module docs for the
+/// full numbers and the encoder pitfall it guards against). Mirrors
+/// `config::VALID_AUDIO_FORMATS`'s two string values one for one; kept as a
+/// real enum here (rather than threading the raw config string through)
+/// so [`AudioSink::finish`]'s encode dispatch is exhaustively checked by the
+/// compiler.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AudioFormat {
+    Aac,
+    Flac,
+}
+
+impl AudioFormat {
+    /// Parses a `config::Config::audio_format` string. Anything other than
+    /// `"flac"` maps to `Aac` (the current default) rather than panicking --
+    /// `config::validate_audio_format` is the actual gate on what can ever be
+    /// saved to disk, so this is a defensive fallback for an unexpected
+    /// value reaching here some other way, not the primary validation.
+    pub fn from_config_str(s: &str) -> AudioFormat {
+        match s {
+            "flac" => AudioFormat::Flac,
+            _ => AudioFormat::Aac,
+        }
+    }
+
+    fn extension(self) -> &'static str {
+        match self {
+            AudioFormat::Aac => "m4a",
+            AudioFormat::Flac => "flac",
+        }
+    }
+
+    /// For error messages (`AudioSink::finish`'s `on_error` reports), not
+    /// for anything parsed back -- [`AudioFormat::from_config_str`] is the
+    /// only parse direction this type needs.
+    fn label(self) -> &'static str {
+        self.extension()
+    }
+}
+
+/// The canonical encode target for `format`: [`audio_path_for`]'s `.flac` or
+/// [`m4a_path_for`]'s `.m4a`. [`AudioSink::new`]/[`AudioSink::new_continuing`]
+/// use this to pick where [`AudioSink::finish`] encodes to.
+/// `retranscribe::resolve_audio_path` does NOT use this -- it doesn't know a
+/// specific session's configured format, only which files actually exist on
+/// disk, so it reimplements its own format-preference order separately.
+fn audio_target_path_for(md_path: &Path, format: AudioFormat) -> PathBuf {
+    md_path.with_extension(format.extension())
+}
+
 /// Converts one f32 sample (expected roughly within `[-1.0, 1.0]`, matching
 /// the rest of the pipeline) to i16 PCM, clamping out-of-range values rather
 /// than wrapping.
@@ -309,6 +394,28 @@ fn encode_flac(wav_path: &Path, flac_path: &Path) -> anyhow::Result<()> {
     result.map_err(anyhow::Error::from)
 }
 
+/// Encodes `wav_path` (must already be a finalized, readable WAV file) to
+/// `m4a_path` as AAC (stage-0.7 format change): the encode itself, INCLUDING
+/// the forced-sample-rate verification, is `aac::encode_wav_to_m4a`'s job
+/// (see that module's docs for the measured 12kHz pitfall it guards
+/// against); this function only adds the same temp-then-rename discipline
+/// [`encode_flac`] already uses, for the same reason -- `afconvert` writes
+/// straight to `<base>.m4a.tmp` first, and only once that file has been
+/// verified as real, correctly-rated AAC is it renamed onto `m4a_path`. A
+/// mid-encode crash, a wrong-bitrate/wrong-rate result, or any other
+/// `afconvert` failure never touches `m4a_path` itself -- when continuing a
+/// session, that path may already hold the previous recording's audio (see
+/// the module docs), and this must never leave it half-overwritten.
+fn encode_aac(wav_path: &Path, m4a_path: &Path) -> anyhow::Result<()> {
+    let tmp_path = m4a_path.with_extension("m4a.tmp");
+    let result = crate::aac::encode_wav_to_m4a(wav_path, &tmp_path)
+        .and_then(|()| std::fs::rename(&tmp_path, m4a_path).map_err(anyhow::Error::from));
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp_path);
+    }
+    result
+}
+
 /// Streams an existing session's audio (its `.flac`, or the `.wav` fallback
 /// `AudioSink::finish` keeps when the flac-encode step failed -- same
 /// dispatch as `retranscribe::decode_audio_stereo`) directly into `writer`,
@@ -325,8 +432,32 @@ fn stream_prefill_audio(
 ) -> anyhow::Result<usize> {
     match existing_path.extension().and_then(|e| e.to_str()) {
         Some("wav") => stream_prefill_wav(writer, existing_path),
+        Some("m4a") => stream_prefill_m4a(writer, existing_path),
         _ => stream_prefill_flac(writer, existing_path),
     }
+}
+
+/// [`stream_prefill_audio`]'s `.m4a` case (stage-0.7 format change): unlike
+/// claxon's/hound's own lazy per-sample iterators the flac/wav cases stream
+/// through directly, this codebase has no in-process AAC decoder (see
+/// `aac.rs`'s module docs for why decode -- like encode -- shells out to
+/// `afconvert`), so this decodes the WHOLE file to a scratch WAV first via
+/// [`crate::aac::decode_m4a_to_wav`], then streams THAT through
+/// [`stream_prefill_wav`] exactly like any other wav fallback. The scratch
+/// file is a `tempfile::NamedTempFile`: its `Drop` removes it once this
+/// function returns, success or error, rather than leaving a stray temp file
+/// behind on an early return.
+fn stream_prefill_m4a(
+    writer: &mut hound::WavWriter<BufWriter<File>>,
+    path: &Path,
+) -> anyhow::Result<usize> {
+    let scratch = tempfile::Builder::new()
+        .suffix(".wav")
+        .tempfile()
+        .context("creating a scratch file to decode existing aac audio")?;
+    crate::aac::decode_m4a_to_wav(path, scratch.path())
+        .with_context(|| format!("decoding existing audio at {}", path.display()))?;
+    stream_prefill_wav(writer, scratch.path())
 }
 
 /// [`stream_prefill_audio`]'s `.flac` case: claxon's own `samples()` iterator
@@ -449,7 +580,21 @@ fn target_base_frames(prefilled_frames: usize, last_offset_secs: f64) -> usize {
 /// FLAC, and deletes the WAV.
 pub struct AudioSink {
     wav_path: PathBuf,
-    flac_path: PathBuf,
+    /// The canonical encode target [`AudioSink::finish`] writes to --
+    /// `.flac` or `.m4a` depending on `format` (stage-0.7 format change; was
+    /// unconditionally `.flac` before).
+    audio_path: PathBuf,
+    format: AudioFormat,
+    /// The audio file this recording continued FROM, if any (`None` for a
+    /// fresh, non-continuing recording, and also `None` in the
+    /// working-path-self-collision recovery case -- see
+    /// [`AudioSink::new_continuing`], that file is already fully consumed
+    /// and cleaned up before this field would ever matter). Stage-0.7
+    /// format-change addition: `finish()` needs this to know whether a
+    /// continuation crossed formats (so `prior_audio_path != audio_path`)
+    /// and must clean up the now-stale old file once the new one is safely
+    /// in place -- see the module docs' "multi-format continuation" section.
+    prior_audio_path: Option<PathBuf>,
     writer: hound::WavWriter<BufWriter<File>>,
     queue_me: VecDeque<f32>,
     queue_them: VecDeque<f32>,
@@ -463,9 +608,15 @@ impl AudioSink {
     /// Shared constructor: creates the WAV writer at `wav_path` (truncating
     /// it if it already exists -- callers are responsible for choosing a
     /// `wav_path` that's safe to truncate, see [`AudioSink::new`] and
-    /// [`AudioSink::new_continuing`]) with `flac_path` as the eventual
-    /// encode target.
-    fn create_at(wav_path: PathBuf, flac_path: PathBuf) -> anyhow::Result<AudioSink> {
+    /// [`AudioSink::new_continuing`]) with `audio_path` as the eventual
+    /// encode target and `prior_audio_path` recorded for `finish()`'s
+    /// cross-format stale-cleanup (see the module docs).
+    fn create_at(
+        wav_path: PathBuf,
+        audio_path: PathBuf,
+        format: AudioFormat,
+        prior_audio_path: Option<PathBuf>,
+    ) -> anyhow::Result<AudioSink> {
         let spec = hound::WavSpec {
             channels: 2,
             sample_rate: SAMPLE_RATE,
@@ -475,7 +626,9 @@ impl AudioSink {
         let writer = hound::WavWriter::create(&wav_path, spec)?;
         Ok(AudioSink {
             wav_path,
-            flac_path,
+            audio_path,
+            format,
+            prior_audio_path,
             writer,
             queue_me: VecDeque::new(),
             queue_them: VecDeque::new(),
@@ -483,10 +636,16 @@ impl AudioSink {
         })
     }
 
-    /// `base_path` is the session's `.md` path; the WAV/FLAC siblings are
-    /// derived from it (Global Constraints: same basename).
-    pub fn new(base_path: &Path) -> anyhow::Result<AudioSink> {
-        Self::create_at(wav_path_for(base_path), audio_path_for(base_path))
+    /// `base_path` is the session's `.md` path; the WAV sibling and the
+    /// `format`-dependent encode target (`.flac` or `.m4a`) are derived from
+    /// it (Global Constraints: same basename).
+    pub fn new(base_path: &Path, format: AudioFormat) -> anyhow::Result<AudioSink> {
+        Self::create_at(
+            wav_path_for(base_path),
+            audio_target_path_for(base_path, format),
+            format,
+            None,
+        )
     }
 
     /// Like [`AudioSink::new`], but for continuing an existing session (see
@@ -536,13 +695,24 @@ impl AudioSink {
     /// left in place on disk, and the returned error names it explicitly so
     /// nothing is silently lost even on a double failure (a crashed
     /// recording whose own captured audio also turns out to be corrupt).
+    ///
+    /// `format` (stage-0.7 format change) is the CURRENT configured format,
+    /// which need not match whatever format `existing_audio_path` is
+    /// already in -- decoding an old file in one format and re-encoding the
+    /// combined (prefilled + new) result in a DIFFERENT one is exactly what
+    /// continuing across a format switch means. See the module docs'
+    /// "multi-format continuation" section for how `finish()` uses
+    /// `prior_audio_path` (recorded here) to clean up the old file once the
+    /// new one is safely in place.
     pub fn new_continuing(
         base_path: &Path,
         existing_audio_path: Option<&Path>,
         last_offset_secs: f64,
+        format: AudioFormat,
     ) -> anyhow::Result<(AudioSink, f64)> {
         let working_path = recording_wav_path_for(base_path);
         let recovery_path = base_path.with_extension("recovering.wav");
+        let target_audio_path = audio_target_path_for(base_path, format);
 
         let (prefill_source, recovering) = match existing_audio_path {
             Some(existing) if existing == working_path => {
@@ -552,7 +722,18 @@ impl AudioSink {
             other => (other.map(Path::to_path_buf), false),
         };
 
-        let mut sink = Self::create_at(working_path, audio_path_for(base_path))?;
+        // `prior_audio_path`: the file this recording continues FROM, for
+        // `finish()`'s cross-format stale-cleanup -- NOT `recovery_path` in
+        // the working-path-collision case, since that copy is already fully
+        // consumed and removed right below (the `recovering` branch), before
+        // `finish()` ever runs; nothing would be left there to clean up.
+        let prior_audio_path = if recovering {
+            None
+        } else {
+            existing_audio_path.map(Path::to_path_buf)
+        };
+
+        let mut sink = Self::create_at(working_path, target_audio_path, format, prior_audio_path)?;
 
         match Self::prefill_and_pad(&mut sink.writer, prefill_source.as_deref(), last_offset_secs) {
             Ok(target_frames) => {
@@ -640,54 +821,95 @@ impl AudioSink {
     }
 
     /// Flushes remaining queued samples (padded with silence), closes the
-    /// WAV, encodes it to FLAC, and removes the WAV, returning the FLAC
-    /// path. If the FLAC encode fails, the WAV is kept instead of deleted
-    /// and its path is returned instead (`on_error` reports why): losing the
-    /// recorded audio is worse than leaving the bigger file around. `Err` is
-    /// reserved for a failure finishing the WAV itself (flush/finalize),
-    /// which leaves nothing usable to fall back to.
+    /// WAV, encodes it to the configured [`AudioFormat`], and removes the
+    /// WAV, returning the encoded file's path. If the encode fails, the WAV
+    /// is kept instead of deleted and its path is returned instead
+    /// (`on_error` reports why): losing the recorded audio is worse than
+    /// leaving the bigger file around. `Err` is reserved for a failure
+    /// finishing the WAV itself (flush/finalize), which leaves nothing
+    /// usable to fall back to.
     ///
     /// For a continued recording (see [`AudioSink::new_continuing`]), the
     /// in-progress file lives at a working path distinct from the canonical
     /// `.wav` sibling: on a successful encode, any stale retained `.wav`
     /// that got prefilled from is cleaned up (it's now fully absorbed into
-    /// the fresh flac); on a failed encode, the working file is moved into
+    /// the fresh encode); on a failed encode, the working file is moved into
     /// the canonical `.wav` slot instead of just being left under its
     /// working name, so it stays discoverable by `resolve_audio_path` the
     /// same way a fresh recording's kept wav already is -- old+new
     /// consolidated, since the old content was already read into it by the
-    /// prefill step. In that same failed-encode case, if this continued from
-    /// an existing `.flac` (rather than a `.wav` fallback), that now-stale
-    /// pre-continuation `.flac` is ALSO removed once the wav is safely in
-    /// place (never before -- the rename must succeed first): left in place,
-    /// it would permanently shadow the just-consolidated wav, since
-    /// `resolve_audio_path` always prefers `.flac` over `.wav` (Important
-    /// fix-review finding, wave 3).
+    /// prefill step.
+    ///
+    /// Stage-0.7 format change: `prior_audio_path` (see that field's docs)
+    /// generalizes what used to be flac-specific cleanup here. On a
+    /// SUCCESSFUL encode, if this recording continued from an existing file
+    /// at a DIFFERENT path than the one just written (a format switch --
+    /// e.g. continuing a `.flac` session while the current setting is AAC),
+    /// that now-stale old file is removed once the new one is safely in
+    /// place. On a FAILED encode, both the (never-actually-written-this-time)
+    /// intended encode target and any different-path `prior_audio_path` are
+    /// removed once the consolidated wav is safely renamed into place --
+    /// otherwise either one could permanently shadow that wav, since
+    /// `resolve_audio_path` prefers a real `.flac`/`.m4a` over the wav
+    /// fallback (Important fix-review finding, wave 3, generalized here from
+    /// flac-only to any format).
     pub fn finish(mut self, on_error: &impl Fn(String)) -> anyhow::Result<PathBuf> {
         let frames = flush_remaining(&mut self.queue_me, &mut self.queue_them);
         write_frames(&mut self.writer, &frames)?;
         self.writer.finalize()?;
 
-        let canonical_wav_path = self.flac_path.with_extension("wav");
+        let canonical_wav_path = self.audio_path.with_extension("wav");
 
-        match encode_flac(&self.wav_path, &self.flac_path) {
+        let encode_result = match self.format {
+            AudioFormat::Flac => encode_flac(&self.wav_path, &self.audio_path),
+            AudioFormat::Aac => encode_aac(&self.wav_path, &self.audio_path),
+        };
+
+        match encode_result {
             Ok(()) => {
                 if let Err(e) = std::fs::remove_file(&self.wav_path) {
                     on_error(format!(
-                        "audio sink: failed to remove wav after flac encode: {e}"
+                        "audio sink: failed to remove wav after {} encode: {e}",
+                        self.format.label()
                     ));
                 }
                 if canonical_wav_path != self.wav_path {
                     // Tidiness only, never a correctness issue
-                    // (`resolve_audio_path` always prefers `.flac`): a
-                    // failure here is silently ignored.
+                    // (`resolve_audio_path` always prefers a real encoded
+                    // file over this wav fallback): a failure here is
+                    // silently ignored.
                     let _ = std::fs::remove_file(&canonical_wav_path);
                 }
-                Ok(self.flac_path)
+                // Stage-0.7 format change: a cross-format continuation's old
+                // file (e.g. the pre-continuation `.flac` when this
+                // recording just wrote `.m4a`) is now fully absorbed into
+                // `self.audio_path` and must be removed, the same way the
+                // pre-existing (flac-only) failed-encode cleanup below
+                // already did for the single-format case. Reported via
+                // `on_error`, not silently ignored, since leaving it behind
+                // is a discoverability problem: a stale richer-looking file
+                // could confuse a human browsing the output folder, even
+                // though `resolve_audio_path`'s own preference order (see
+                // that function's docs) still resolves to the correct one.
+                if let Some(prior) = &self.prior_audio_path {
+                    if prior != &self.audio_path && prior.exists() {
+                        if let Err(e) = std::fs::remove_file(prior) {
+                            on_error(format!(
+                                "audio sink: failed to remove the now-stale prior audio at {}: \
+                                 {e} -- the file at {} is the authoritative, complete audio \
+                                 for this session; remove the old one manually",
+                                prior.display(),
+                                self.audio_path.display()
+                            ));
+                        }
+                    }
+                }
+                Ok(self.audio_path)
             }
             Err(e) => {
                 on_error(format!(
-                    "audio sink: flac encode failed, keeping wav instead: {e}"
+                    "audio sink: {} encode failed, keeping wav instead: {e}",
+                    self.format.label()
                 ));
                 if canonical_wav_path == self.wav_path {
                     return Ok(self.wav_path);
@@ -698,23 +920,38 @@ impl AudioSink {
                         // working path differs from canonical -- see
                         // `recording_wav_path_for`'s docs). The canonical
                         // wav just put in place holds old+new consolidated;
-                        // any `.flac` left over from BEFORE this
-                        // continuation is now stale and, worse, would
+                        // BOTH this recording's own (never actually written,
+                        // since the encode failed) target path AND whatever
+                        // it continued FROM (if a different path -- a format
+                        // switch) are now stale, and either would
                         // permanently shadow that wav (`resolve_audio_path`
-                        // always checks `.flac` first). Only ever reached
-                        // after the rename above has already succeeded, so
-                        // the old file is never removed before its
-                        // replacement is safely in place.
-                        if self.flac_path.exists() {
-                            if let Err(remove_err) = std::fs::remove_file(&self.flac_path) {
-                                on_error(format!(
-                                    "audio sink: failed to remove the now-stale flac at {}: \
-                                     {remove_err} -- the canonical wav at {} is the \
-                                     authoritative, complete audio for this session; remove \
-                                     the flac manually",
-                                    self.flac_path.display(),
-                                    canonical_wav_path.display()
-                                ));
+                        // always checks a real encoded file first). Only
+                        // ever reached after the rename above has already
+                        // succeeded, so neither is removed before its
+                        // replacement is safely in place. Deduplicated (a
+                        // same-format continuation has both point at the
+                        // identical path) so a shared file is never attempted
+                        // twice.
+                        let mut already_handled: Vec<PathBuf> = Vec::new();
+                        for stale in [Some(self.audio_path.clone()), self.prior_audio_path.clone()]
+                            .into_iter()
+                            .flatten()
+                        {
+                            if stale == canonical_wav_path || already_handled.contains(&stale) {
+                                continue;
+                            }
+                            already_handled.push(stale.clone());
+                            if stale.exists() {
+                                if let Err(remove_err) = std::fs::remove_file(&stale) {
+                                    on_error(format!(
+                                        "audio sink: failed to remove the now-stale audio at {}: \
+                                         {remove_err} -- the canonical wav at {} is the \
+                                         authoritative, complete audio for this session; remove \
+                                         it manually",
+                                        stale.display(),
+                                        canonical_wav_path.display()
+                                    ));
+                                }
                             }
                         }
                         Ok(canonical_wav_path)
@@ -858,7 +1095,7 @@ mod tests {
     fn push_flushes_periodically_so_a_crash_leaves_a_readable_wav() {
         let dir = tempfile::tempdir().unwrap();
         let md_path = dir.path().join("call.md");
-        let mut sink = AudioSink::new(&md_path).unwrap();
+        let mut sink = AudioSink::new(&md_path, AudioFormat::Flac).unwrap();
         let no_op = |_msg: String| {};
 
         // Lockstep on both channels so the sync rule passes every sample
@@ -895,7 +1132,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let md_path = dir.path().join("call.md");
 
-        let mut sink = AudioSink::new(&md_path).unwrap();
+        let mut sink = AudioSink::new(&md_path, AudioFormat::Flac).unwrap();
         let no_op = |_msg: String| {};
 
         // Interleave in lockstep so the sync rule passes everything straight
@@ -942,7 +1179,7 @@ mod tests {
     fn finish_with_no_pushes_still_produces_an_empty_valid_flac() {
         let dir = tempfile::tempdir().unwrap();
         let md_path = dir.path().join("call.md");
-        let sink = AudioSink::new(&md_path).unwrap();
+        let sink = AudioSink::new(&md_path, AudioFormat::Flac).unwrap();
         let no_op = |_msg: String| {};
         let flac_path = sink.finish(&no_op).unwrap();
         assert!(flac_path.exists());
@@ -962,7 +1199,7 @@ mod tests {
     fn finish_keeps_the_wav_when_the_flac_encode_fails() {
         let dir = tempfile::tempdir().unwrap();
         let md_path = dir.path().join("call.md");
-        let mut sink = AudioSink::new(&md_path).unwrap();
+        let mut sink = AudioSink::new(&md_path, AudioFormat::Flac).unwrap();
         let no_op = |_msg: String| {};
         sink.push(Channel::Me, &[0.1, 0.2], &no_op);
         sink.push(Channel::Them, &[0.1, 0.2], &no_op);
@@ -1046,7 +1283,7 @@ mod tests {
             let old_me: Vec<f32> = (0..40).map(|i| (i as f32 / 100.0) - 0.2).collect();
             let old_them: Vec<f32> = (0..40).map(|i| 0.2 - (i as f32 / 100.0)).collect();
             {
-                let mut sink = AudioSink::new(&md_path).unwrap();
+                let mut sink = AudioSink::new(&md_path, AudioFormat::Flac).unwrap();
                 for i in 0..old_me.len() {
                     sink.push(Channel::Me, &old_me[i..i + 1], &no_op);
                     sink.push(Channel::Them, &old_them[i..i + 1], &no_op);
@@ -1062,7 +1299,7 @@ mod tests {
             // seam, not the reconciliation itself (covered by `target_base`
             // and `wav_fallback_collision` above/below).
             let (mut sink, target_base_secs) =
-                AudioSink::new_continuing(&md_path, Some(&flac_path), 0.0).unwrap();
+                AudioSink::new_continuing(&md_path, Some(&flac_path), 0.0, AudioFormat::Flac).unwrap();
             assert_eq!(
                 target_base_secs,
                 old_me.len() as f64 / SAMPLE_RATE as f64,
@@ -1108,7 +1345,7 @@ mod tests {
 
             let last_offset_secs = 2.0; // keep it small: still exercises the path without a slow test.
             let (mut sink, target_base_secs) =
-                AudioSink::new_continuing(&md_path, None, last_offset_secs).unwrap();
+                AudioSink::new_continuing(&md_path, None, last_offset_secs, AudioFormat::Flac).unwrap();
             assert_eq!(target_base_secs, last_offset_secs);
             sink.push(Channel::Me, &[0.5], &no_op);
             sink.push(Channel::Them, &[0.5], &no_op);
@@ -1136,7 +1373,7 @@ mod tests {
             let no_op = |_msg: String| {};
 
             let (mut sink, target_base_secs) =
-                AudioSink::new_continuing(&md_path, None, 0.0).unwrap();
+                AudioSink::new_continuing(&md_path, None, 0.0, AudioFormat::Flac).unwrap();
             assert_eq!(target_base_secs, 0.0);
             sink.push(Channel::Me, &[0.5], &no_op);
             sink.push(Channel::Them, &[0.25], &no_op);
@@ -1192,7 +1429,7 @@ mod tests {
             // The exact call shape `session.rs` uses: `resolve_audio_path`
             // would have returned this same working path here.
             let (mut sink, _target_base_secs) =
-                AudioSink::new_continuing(&md_path, Some(&working_path), 0.0).unwrap();
+                AudioSink::new_continuing(&md_path, Some(&working_path), 0.0, AudioFormat::Flac).unwrap();
 
             let new_me = [0.2f32, -0.4];
             let new_them = [0.3f32, -0.6];
@@ -1256,7 +1493,7 @@ mod tests {
             let corrupt_bytes = b"not a real wav file, definitely corrupt";
             std::fs::write(&working_path, corrupt_bytes).unwrap();
 
-            let result = AudioSink::new_continuing(&md_path, Some(&working_path), 0.0);
+            let result = AudioSink::new_continuing(&md_path, Some(&working_path), 0.0, AudioFormat::Flac);
             let err = result.err().expect("a corrupt existing audio file must fail the prefill");
             let recovery_path = md_path.with_extension("recovering.wav");
             assert!(
@@ -1291,7 +1528,7 @@ mod tests {
             let corrupt_bytes = b"not a real flac file at all";
             std::fs::write(&flac_path, corrupt_bytes).unwrap();
 
-            let result = AudioSink::new_continuing(&md_path, Some(&flac_path), 0.0);
+            let result = AudioSink::new_continuing(&md_path, Some(&flac_path), 0.0, AudioFormat::Flac);
             assert!(result.is_err(), "a corrupt existing audio file must fail the prefill");
 
             let after = std::fs::read(&flac_path).unwrap();
@@ -1342,7 +1579,7 @@ mod tests {
             stream.write(&mut bitsink).unwrap();
             std::fs::write(&flac_path, bitsink.as_slice()).unwrap();
 
-            let result = AudioSink::new_continuing(&md_path, Some(&flac_path), 0.0);
+            let result = AudioSink::new_continuing(&md_path, Some(&flac_path), 0.0, AudioFormat::Flac);
             assert!(result.is_err(), "a mono existing audio file must be rejected");
         }
 
@@ -1387,7 +1624,7 @@ mod tests {
             assert!(retained_wav_path.exists(), "the retained wav fallback must exist before continuing");
 
             let (mut sink, _target_base_secs) =
-                AudioSink::new_continuing(&md_path, Some(&retained_wav_path), 0.0).unwrap();
+                AudioSink::new_continuing(&md_path, Some(&retained_wav_path), 0.0, AudioFormat::Flac).unwrap();
 
             let new_me = [0.15f32, -0.35];
             let new_them = [0.35f32, -0.15];
@@ -1463,7 +1700,7 @@ mod tests {
             let old_me: Vec<f32> = (0..40).map(|i| (i as f32 / 100.0) - 0.2).collect();
             let old_them: Vec<f32> = (0..40).map(|i| 0.2 - (i as f32 / 100.0)).collect();
             {
-                let mut sink = AudioSink::new(&md_path).unwrap();
+                let mut sink = AudioSink::new(&md_path, AudioFormat::Flac).unwrap();
                 for i in 0..old_me.len() {
                     sink.push(Channel::Me, &old_me[i..i + 1], &no_op);
                     sink.push(Channel::Them, &old_them[i..i + 1], &no_op);
@@ -1474,7 +1711,7 @@ mod tests {
             assert!(flac_path.exists(), "expected the pre-continuation flac to exist");
 
             let (mut sink, _target_base_secs) =
-                AudioSink::new_continuing(&md_path, Some(&flac_path), 0.0).unwrap();
+                AudioSink::new_continuing(&md_path, Some(&flac_path), 0.0, AudioFormat::Flac).unwrap();
             let new_me = [0.2f32, -0.4];
             let new_them = [0.3f32, -0.6];
             for i in 0..new_me.len() {
@@ -1523,6 +1760,216 @@ mod tests {
                 new_me.iter().map(|&s| f32_to_i16(s) as i32).collect::<Vec<_>>()[..],
                 "the surviving canonical audio must contain old+new, not just old"
             );
+        }
+    }
+
+    // Stage-0.7 format change: AAC as its own encode target, and continuing
+    // a session across a format switch in either direction. The exhaustive
+    // priming/sample-rate proofs live in `aac.rs`'s own tests; these are
+    // about `AudioSink`'s own dispatch and file-management, not the codec
+    // itself.
+    mod aac_format {
+        use super::*;
+
+        fn tone(n: usize, freq: f32, amp: f32) -> Vec<f32> {
+            (0..n)
+                .map(|i| amp * (2.0 * std::f32::consts::PI * freq * i as f32 / SAMPLE_RATE as f32).sin())
+                .collect()
+        }
+
+        #[test]
+        fn round_trip_push_then_finish_in_aac_produces_a_decodable_stereo_m4a() {
+            let dir = tempfile::tempdir().unwrap();
+            let md_path = dir.path().join("call.md");
+            let no_op = |_msg: String| {};
+
+            let mut sink = AudioSink::new(&md_path, AudioFormat::Aac).unwrap();
+            let me_samples = tone(3200, 440.0, 0.4);
+            let them_samples = tone(3200, 220.0, 0.3);
+            sink.push(Channel::Me, &me_samples, &no_op);
+            sink.push(Channel::Them, &them_samples, &no_op);
+
+            let m4a_path = sink.finish(&no_op).unwrap();
+            assert_eq!(m4a_path, m4a_path_for(&md_path));
+            assert!(m4a_path.exists(), "m4a file should exist");
+            assert!(
+                !wav_path_for(&md_path).exists(),
+                "wav should be removed after a clean encode"
+            );
+
+            let scratch = tempfile::Builder::new().suffix(".wav").tempfile().unwrap();
+            crate::aac::decode_m4a_to_wav(&m4a_path, scratch.path()).unwrap();
+            let mut reader = hound::WavReader::open(scratch.path()).unwrap();
+            assert_eq!(reader.spec().channels, 2);
+            assert_eq!(reader.spec().sample_rate, SAMPLE_RATE);
+            let samples: Vec<i16> = reader.samples::<i16>().map(|s| s.unwrap()).collect();
+            assert_eq!(
+                samples.len() / 2,
+                me_samples.len(),
+                "decoded frame count must match what was pushed (afconvert's own priming \
+                 handling -- see aac.rs's tests for the exhaustive proof)"
+            );
+        }
+
+        #[test]
+        fn finish_keeps_the_wav_when_the_aac_encode_fails() {
+            // Mirrors `finish_keeps_the_wav_when_the_flac_encode_fails` above:
+            // pre-create a directory at the exact path `encode_aac` renames
+            // its temp file onto, so the rename fails without needing a real
+            // afconvert failure.
+            let dir = tempfile::tempdir().unwrap();
+            let md_path = dir.path().join("call.md");
+            let mut sink = AudioSink::new(&md_path, AudioFormat::Aac).unwrap();
+            let no_op = |_msg: String| {};
+            sink.push(Channel::Me, &[0.1, 0.2], &no_op);
+            sink.push(Channel::Them, &[0.1, 0.2], &no_op);
+
+            std::fs::create_dir(m4a_path_for(&md_path)).unwrap();
+
+            let errors = std::cell::RefCell::new(Vec::<String>::new());
+            let on_error = |msg: String| errors.borrow_mut().push(msg);
+            let result_path = sink.finish(&on_error).unwrap();
+
+            assert_eq!(result_path, wav_path_for(&md_path));
+            assert!(result_path.exists(), "wav must be kept when the aac encode fails");
+            assert!(!errors.borrow().is_empty(), "the encode failure must be reported via on_error");
+        }
+
+        /// Continuing a session whose EXISTING audio is `.flac` while the
+        /// CURRENT setting is AAC must decode the old flac, prefill it, and
+        /// encode the combined (old+new) result as `.m4a` -- exactly one
+        /// canonical audio file left behind, with the stale pre-continuation
+        /// `.flac` removed once the new one is safely in place.
+        #[test]
+        fn continuing_a_flac_session_while_current_format_is_aac_consolidates_into_one_m4a() {
+            let dir = tempfile::tempdir().unwrap();
+            let md_path = dir.path().join("call.md");
+            let no_op = |_msg: String| {};
+
+            let old_me = tone(3200, 440.0, 0.4);
+            let old_them = tone(3200, 220.0, 0.3);
+            {
+                let mut sink = AudioSink::new(&md_path, AudioFormat::Flac).unwrap();
+                sink.push(Channel::Me, &old_me, &no_op);
+                sink.push(Channel::Them, &old_them, &no_op);
+                sink.finish(&no_op).unwrap();
+            }
+            let flac_path = audio_path_for(&md_path);
+            assert!(flac_path.exists(), "expected an existing flac before continuing");
+
+            let (mut sink, _target_base_secs) =
+                AudioSink::new_continuing(&md_path, Some(&flac_path), 0.0, AudioFormat::Aac).unwrap();
+            let new_me = tone(1600, 300.0, 0.35);
+            let new_them = tone(1600, 150.0, 0.25);
+            sink.push(Channel::Me, &new_me, &no_op);
+            sink.push(Channel::Them, &new_them, &no_op);
+            let final_path = sink.finish(&no_op).unwrap();
+
+            assert_eq!(
+                final_path,
+                m4a_path_for(&md_path),
+                "must encode in the CURRENT (aac) format, not the old flac's"
+            );
+            assert!(final_path.exists());
+            assert!(
+                !flac_path.exists(),
+                "the stale pre-continuation flac must be removed once the m4a is in place"
+            );
+            assert!(!wav_path_for(&md_path).exists());
+            assert!(!recording_wav_path_for(&md_path).exists());
+
+            let scratch = tempfile::Builder::new().suffix(".wav").tempfile().unwrap();
+            crate::aac::decode_m4a_to_wav(&final_path, scratch.path()).unwrap();
+            let mut reader = hound::WavReader::open(scratch.path()).unwrap();
+            let samples: Vec<i16> = reader.samples::<i16>().map(|s| s.unwrap()).collect();
+            let decoded_me: Vec<i16> = samples.iter().step_by(2).copied().collect();
+            assert_eq!(
+                decoded_me.len(),
+                old_me.len() + new_me.len(),
+                "expected exactly the old (prefilled) plus new frames, one consolidated file"
+            );
+        }
+
+        /// The reverse direction: continuing an existing `.m4a` session while
+        /// the CURRENT setting is FLAC must decode the old aac audio, prefill
+        /// it, and encode the combined result as `.flac` -- with the stale
+        /// pre-continuation `.m4a` removed.
+        #[test]
+        fn continuing_an_aac_session_while_current_format_is_flac_consolidates_into_one_flac() {
+            let dir = tempfile::tempdir().unwrap();
+            let md_path = dir.path().join("call.md");
+            let no_op = |_msg: String| {};
+
+            let old_me = tone(3200, 440.0, 0.4);
+            let old_them = tone(3200, 220.0, 0.3);
+            {
+                let mut sink = AudioSink::new(&md_path, AudioFormat::Aac).unwrap();
+                sink.push(Channel::Me, &old_me, &no_op);
+                sink.push(Channel::Them, &old_them, &no_op);
+                sink.finish(&no_op).unwrap();
+            }
+            let m4a_path = m4a_path_for(&md_path);
+            assert!(m4a_path.exists(), "expected an existing m4a before continuing");
+
+            let (mut sink, _target_base_secs) =
+                AudioSink::new_continuing(&md_path, Some(&m4a_path), 0.0, AudioFormat::Flac).unwrap();
+            let new_me = tone(1600, 300.0, 0.35);
+            let new_them = tone(1600, 150.0, 0.25);
+            sink.push(Channel::Me, &new_me, &no_op);
+            sink.push(Channel::Them, &new_them, &no_op);
+            let final_path = sink.finish(&no_op).unwrap();
+
+            assert_eq!(
+                final_path,
+                audio_path_for(&md_path),
+                "must encode in the CURRENT (flac) format, not the old aac's"
+            );
+            assert!(final_path.exists());
+            assert!(
+                !m4a_path.exists(),
+                "the stale pre-continuation m4a must be removed once the flac is in place"
+            );
+            assert!(!wav_path_for(&md_path).exists());
+            assert!(!recording_wav_path_for(&md_path).exists());
+
+            let mut reader = claxon::FlacReader::open(&final_path).unwrap();
+            let samples: Vec<i32> = reader.samples().map(|s| s.unwrap()).collect();
+            let decoded_me: Vec<i32> = samples.iter().step_by(2).copied().collect();
+            assert!(
+                decoded_me.len() >= old_me.len() + new_me.len(),
+                "expected at least the old (prefilled, decoded from aac) plus new frames"
+            );
+        }
+
+        /// When the encode target and the format continued FROM are the
+        /// SAME path (ordinary same-format aac continuation, no switch),
+        /// `finish`'s stale-cleanup must not attempt to remove the file it
+        /// just wrote -- `encode_aac`'s own temp-then-rename already put the
+        /// consolidated content there.
+        #[test]
+        fn continuing_within_the_same_aac_format_does_not_remove_its_own_fresh_encode() {
+            let dir = tempfile::tempdir().unwrap();
+            let md_path = dir.path().join("call.md");
+            let no_op = |_msg: String| {};
+
+            let old_me = tone(3200, 440.0, 0.4);
+            let old_them = tone(3200, 220.0, 0.3);
+            {
+                let mut sink = AudioSink::new(&md_path, AudioFormat::Aac).unwrap();
+                sink.push(Channel::Me, &old_me, &no_op);
+                sink.push(Channel::Them, &old_them, &no_op);
+                sink.finish(&no_op).unwrap();
+            }
+            let m4a_path = m4a_path_for(&md_path);
+
+            let (mut sink, _) =
+                AudioSink::new_continuing(&md_path, Some(&m4a_path), 0.0, AudioFormat::Aac).unwrap();
+            sink.push(Channel::Me, &tone(1600, 300.0, 0.35), &no_op);
+            sink.push(Channel::Them, &tone(1600, 150.0, 0.25), &no_op);
+            let final_path = sink.finish(&no_op).unwrap();
+
+            assert_eq!(final_path, m4a_path);
+            assert!(final_path.exists(), "the same-path aac file must survive, not get deleted");
         }
     }
 }

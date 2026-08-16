@@ -9,7 +9,7 @@ import {
   updateActiveSession,
   type SessionData,
 } from "@/lib/ipc";
-import type { RetranscribeJob } from "@/lib/retranscribeStatus";
+import { isTranscriptUpdatedButAudioDeleteFailed, type RetranscribeJob } from "@/lib/retranscribeStatus";
 
 /** Global Constraints (Task 6): notes save 500ms after the last keystroke. */
 const NOTES_DEBOUNCE_MS = 500;
@@ -181,10 +181,16 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
   const [notes, setNotes] = useState(initialData.notes);
   // Seeded once from initialData (same "reset on remount, live otherwise"
   // pattern as title/notes above), then updated in place after a successful
-  // re-transcribe -- see handleRetranscribe. `initialData.audio_path` itself
-  // never changes across a re-transcribe (same audio file, only the text
-  // and `asr:` change), so it's read directly from the prop rather than
-  // mirrored into its own state.
+  // re-transcribe -- see handleRetranscribe. `initialData.audio_path` is
+  // read directly from the prop rather than mirrored into its own state --
+  // NOT because it's immutable across a re-transcribe (fix-review
+  // correction, stage 0.9: `delete_audio_after_retranscribe` can remove the
+  // audio file entirely once a pass succeeds), but because this component
+  // never needs to react to that change live: a delete-after failure/success
+  // doesn't change what this mounted instance renders for `audioPath` below
+  // until the next remount (switching sessions away and back, or the
+  // App-driven `reloadTick` remount after a background job) re-seeds it fresh
+  // from a real `read_session` disk read.
   const [transcript, setTranscript] = useState(initialData.transcript);
   // Local-only optimistic flag: disables the button the instant it's
   // clicked, before the backend's first `retranscribe-progress` event has
@@ -357,6 +363,19 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
     } catch (err) {
       console.error("failed to re-transcribe session", err);
       setRetranscribeError(String(err));
+      // Minor fix-review finding, stage 0.9 final review: the "transcript
+      // updated, but the audio could not be deleted" rejection is the one
+      // case where the promise rejects even though the transcript itself WAS
+      // rewritten -- `maybe_delete_audio`'s own failure surfaces through the
+      // same "error" phase/rejection as a genuine pipeline failure, but only
+      // the deletion step afterward actually failed. Without refetching
+      // here too, this on-screen transcript stays stale (the success path
+      // above never runs, since the promise rejected).
+      if (isTranscriptUpdatedButAudioDeleteFailed(String(err))) {
+        readSession(path)
+          .then((data) => setTranscript(data.transcript))
+          .catch((refetchErr) => console.error("failed to refetch after re-transcribe", refetchErr));
+      }
       // Covers the rejections that never produce a `retranscribe-progress`
       // event at all (the up-front validation checks -- see
       // `onRetranscribeEnd`'s doc comment) as well as the rarer case where

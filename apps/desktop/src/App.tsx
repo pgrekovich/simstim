@@ -21,7 +21,11 @@ import {
   type SessionMeta,
   type TranscriptInterimPayload,
 } from "@/lib/ipc";
-import { describeRetranscribeProgress, type RetranscribeJob } from "@/lib/retranscribeStatus";
+import {
+  describeRetranscribeProgress,
+  isTranscriptUpdatedButAudioDeleteFailed,
+  type RetranscribeJob,
+} from "@/lib/retranscribeStatus";
 import { initTheme } from "@/lib/theme";
 import { truncateMiddle } from "@/lib/utils";
 
@@ -116,6 +120,21 @@ function App() {
   function handleManualRetranscribeStart(path: string) {
     manualRetranscribePathsRef.current.add(path);
   }
+  // Final-review Important finding: an auto job's terminal "error" can land
+  // in the `retranscribe-progress` listener below while `status.kind` is
+  // STILL "recording" -- e.g. session A's auto-triggered job (queued behind
+  // another one) finally reports failure right as a brand-new recording B
+  // has started. The listener already skips clobbering "recording" with that
+  // failure (correct: don't stomp on a genuinely live recording's status),
+  // but the old code just discarded the message there, permanently -- if
+  // nothing else happened to trigger another background job's error while
+  // status was NOT "recording", the owner would simply never learn about it.
+  // Stashing it here (one slot is enough: only one background job is ever
+  // running at a time, see `retranscribe.rs`'s module docs) and surfacing it
+  // the instant `status.kind` leaves "recording" (the effect below, which
+  // already tracks that same transition) closes that window instead of just
+  // narrowing it.
+  const suppressedAutoErrorRef = useRef<string | null>(null);
   // Third review round: `retranscribe_session` rejects up front, before
   // emitting anything, on several validation paths (not-active/finalizing,
   // missing audio, retired/missing model, already-running/already-queued --
@@ -293,9 +312,17 @@ function App() {
         // theoretically possible, and clobbering "recording" with an
         // unrelated background failure would be worse than staying quiet.
         if (phase === "error" && !wasManual) {
-          setStatus((prev) =>
-            prev.kind === "recording" ? prev : { kind: "error", message: message ?? "re-transcribe failed" }
-          );
+          const errorMessage = message ?? "re-transcribe failed";
+          setStatus((prev) => {
+            if (prev.kind === "recording") {
+              // Final-review Important finding: don't just drop this on the
+              // floor -- stash it so it still reaches the owner once the
+              // header stops showing a live recording (the effect below).
+              suppressedAutoErrorRef.current = errorMessage;
+              return prev;
+            }
+            return { kind: "error", message: errorMessage };
+          });
         }
         // Minor fix-review finding: a SessionView only re-seeds its local
         // `transcript` state from `initialData` on mount (see its class doc
@@ -312,6 +339,16 @@ function App() {
         // be the initiating instance too -- it just remounts with the same
         // data it already fetched itself.
         //
+        // Also refetch on the "transcript updated, but the audio could not
+        // be deleted" error (minor fix-review finding, stage 0.9 final
+        // review): that specific "error" phase is the one case where the
+        // transcript on disk DID change even though the phase isn't "done" --
+        // `maybe_delete_audio`'s failure surfaces through the "error" phase
+        // (see `retranscribe.rs`), but the whisper pass itself already
+        // succeeded and wrote the new transcript before the deletion step
+        // ever ran. Without this, the on-screen transcript stays stale after
+        // that error the same way it would after a "done" with no refetch.
+        //
         // Fix-review finding (wave 2): the fetch must resolve BEFORE
         // `reloadTick` bumps, not just before this callback returns --
         // `setSessionData` and `setReloadTick` used to fire in the same
@@ -322,7 +359,9 @@ function App() {
         // the earlier, stale value) rather than the just-fetched one. Doing
         // this as one async sequence -- await the read, THEN bump the tick
         // -- guarantees the remount always sees the fresh data.
-        if (phase === "done" && path === selectedPath && path !== activePath) {
+        const shouldRefetchTranscript =
+          phase === "done" || (phase === "error" && isTranscriptUpdatedButAudioDeleteFailed(message));
+        if (shouldRefetchTranscript && path === selectedPath && path !== activePath) {
           readSession(path)
             .then((data) => {
               setSessionData(data);
@@ -357,6 +396,20 @@ function App() {
   useEffect(() => {
     if (prevStatusKindRef.current === "loading-model" && status.kind === "recording") {
       refreshSessions();
+    }
+    // Final-review Important finding: surface a re-transcribe error that
+    // landed mid-recording and got stashed instead of shown (see
+    // `suppressedAutoErrorRef`'s doc comment and the `retranscribe-progress`
+    // listener above) the instant status leaves "recording" for anything
+    // else -- this is the same transition this effect already watches for
+    // the sidebar-refresh case above, just the opposite direction. Without
+    // this, that error would otherwise never reach the owner at all unless
+    // some LATER, unrelated background job happened to fail while a
+    // recording wasn't in progress.
+    if (prevStatusKindRef.current === "recording" && status.kind !== "recording" && suppressedAutoErrorRef.current) {
+      const message = suppressedAutoErrorRef.current;
+      suppressedAutoErrorRef.current = null;
+      setStatus({ kind: "error", message });
     }
     prevStatusKindRef.current = status.kind;
   }, [status.kind, refreshSessions]);

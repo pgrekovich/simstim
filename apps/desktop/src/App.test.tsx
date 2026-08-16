@@ -335,6 +335,81 @@ describe("App: refreshes a re-transcribed session after a background done event 
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(vi.mocked(ipc.readSession).mock.calls.length).toBe(callsBeforeEvent);
   });
+
+  it("also refetches on the 'transcript updated, but the audio could not be deleted' error (minor fix-review finding)", async () => {
+    // That specific "error" phase is the one case where the transcript on
+    // disk DID change even though the phase isn't "done" -- the whisper pass
+    // succeeded and wrote the new transcript; only the follow-up audio
+    // deletion failed. Without this, the on-screen transcript stays stale
+    // exactly like the "done" case above would without ITS refetch.
+    const sessions: SessionMeta[] = [
+      { path: "/tmp/other.md", title: "Other call", date: new Date().toISOString(), duration_secs: null },
+    ];
+    vi.mocked(ipc.listSessions).mockResolvedValue(sessions);
+    vi.mocked(ipc.readSession).mockResolvedValueOnce({
+      title: "Other call",
+      date: "",
+      notes: "old notes",
+      transcript: "[00:00:01] Me: original parakeet text",
+      audio_path: "/tmp/other.flac",
+    });
+
+    render(<App />);
+
+    const otherRow = await screen.findByRole("button", { name: /other call/i });
+    fireEvent.click(otherRow);
+    await waitFor(() => expect(document.body.textContent).toContain("original parakeet text"));
+
+    vi.mocked(ipc.readSession).mockResolvedValueOnce({
+      title: "Other call",
+      date: "",
+      notes: "old notes",
+      transcript: "[00:00:01] Me: rewritten by whisper",
+      audio_path: "/tmp/other.flac",
+    });
+
+    emit("retranscribe-progress", {
+      path: "/tmp/other.md",
+      phase: "error",
+      channel: null,
+      message: "transcript updated, but the audio could not be deleted: permission denied",
+    });
+
+    await waitFor(() => expect(document.body.textContent).toContain("rewritten by whisper"));
+    expect(document.body.textContent).not.toContain("original parakeet text");
+  });
+
+  it("does not refetch on an ordinary re-transcribe error (the transcript was never touched)", async () => {
+    const sessions: SessionMeta[] = [
+      { path: "/tmp/other.md", title: "Other call", date: new Date().toISOString(), duration_secs: null },
+    ];
+    vi.mocked(ipc.listSessions).mockResolvedValue(sessions);
+    vi.mocked(ipc.readSession).mockResolvedValue({
+      title: "Other call",
+      date: "",
+      notes: "old notes",
+      transcript: "[00:00:01] Me: hi",
+      audio_path: "/tmp/other.flac",
+    });
+
+    render(<App />);
+
+    const otherRow = await screen.findByRole("button", { name: /other call/i });
+    fireEvent.click(otherRow);
+    await waitFor(() => expect(document.body.textContent).toContain("hi"));
+
+    const callsBeforeEvent = vi.mocked(ipc.readSession).mock.calls.length;
+
+    emit("retranscribe-progress", {
+      path: "/tmp/other.md",
+      phase: "error",
+      channel: null,
+      message: "whisper model not downloaded",
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(vi.mocked(ipc.readSession).mock.calls.length).toBe(callsBeforeEvent);
+  });
 });
 
 describe("App: surfaces terminal re-transcribe errors from background jobs (stage 0.9 Task 2 review finding)", () => {
@@ -504,6 +579,45 @@ describe("App: surfaces terminal re-transcribe errors from background jobs (stag
     });
 
     await screen.findByText(/delete-after-retranscribe failed: permission denied/i);
+  });
+
+  it("does not lose a background error that lands mid-recording -- surfaces it once the recording stops (final review Important finding)", async () => {
+    // Reproduces the bug: `maybe_auto_retranscribe` emits its terminal error
+    // inside `stop_recording`, before that command's own promise resolves.
+    // The listener already (correctly) refuses to clobber a genuinely live
+    // "recording" status with an unrelated background failure -- but the old
+    // code just discarded the message right there in that branch, forever.
+    // If status never happens to be non-"recording" again while some OTHER
+    // background error also fires, the owner would never learn about this
+    // one at all.
+    render(<App />);
+
+    const recordButton = await screen.findByRole("button", { name: /^record$/i });
+    fireEvent.click(recordButton);
+    await waitFor(() => expect(ipc.startRecording).toHaveBeenCalledTimes(1));
+    // Flips status.kind from "loading-model" to "recording".
+    emit("transcript-line", "[00:00:01] Me: hi");
+    await screen.findByRole("button", { name: /stop/i });
+
+    // A background job's error lands WHILE status is genuinely "recording".
+    emit("retranscribe-progress", {
+      path: "/tmp/some-other-session.md",
+      phase: "error",
+      channel: null,
+      message: "whisper model not downloaded",
+    });
+
+    // Must not be shown yet -- and must not clobber the "recording" status.
+    expect(screen.queryByText(/whisper model not downloaded/i)).not.toBeInTheDocument();
+    await screen.findByRole("button", { name: /stop/i });
+
+    // Stop the recording: status leaves "recording" (-> "saved").
+    const stopButton = await screen.findByRole("button", { name: /stop/i });
+    fireEvent.click(stopButton);
+    await waitFor(() => expect(ipc.stopRecording).toHaveBeenCalledTimes(1));
+
+    // The stashed error surfaces now, instead of "saved to ..." or nothing.
+    await screen.findByText(/whisper model not downloaded/i);
   });
 });
 

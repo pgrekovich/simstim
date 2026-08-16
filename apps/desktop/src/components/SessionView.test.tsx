@@ -324,6 +324,46 @@ describe("SessionView: audio playback and re-transcribe (Task 4, stage-0.7)", ()
     expect(ipc.readSession).not.toHaveBeenCalled();
   });
 
+  it("refetches the transcript even on the 'transcript updated, but the audio could not be deleted' rejection (minor fix-review finding)", async () => {
+    // That rejection is the one case where the promise rejects even though
+    // the transcript itself WAS rewritten on disk -- only the follow-up
+    // audio-deletion step failed. Unlike an ordinary failure (the test
+    // above), the on-screen transcript must still refresh here.
+    vi.mocked(ipc.retranscribeSession).mockRejectedValueOnce(
+      new Error("transcript updated, but the audio could not be deleted: permission denied")
+    );
+    vi.mocked(ipc.readSession).mockResolvedValueOnce({
+      title: "Weekly sync",
+      date: "",
+      notes: "",
+      transcript: "[00:00:03] Me: new whisper text\n",
+      audio_path: "/tmp/call.flac",
+    });
+    render(
+      <SessionView
+        path="/tmp/call.md"
+        isActive={false}
+        initialData={{
+          ...baseData,
+          audio_path: "/tmp/call.flac",
+          transcript: "[00:00:03] Me: old parakeet text\n",
+        }}
+        liveLines={[]}
+        interimMe=""
+        interimThem=""
+        retranscribingJob={null}
+      />
+    );
+
+    expect(screen.getByText(/old parakeet text/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /re-transcribe/i }));
+
+    await screen.findByText(/could not be deleted/i);
+    await screen.findByText(/new whisper text/);
+    expect(screen.queryByText(/old parakeet text/)).toBeNull();
+  });
+
   it("re-reads the session and refreshes the transcript after a successful re-transcribe", async () => {
     vi.mocked(ipc.readSession).mockResolvedValueOnce({
       title: "Weekly sync",

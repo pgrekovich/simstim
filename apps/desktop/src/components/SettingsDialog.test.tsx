@@ -392,6 +392,25 @@ describe("SettingsDialog: model manager (stage 0.8 Task 2)", () => {
     expect(screen.queryByText(/selected model is not downloaded/i)).not.toBeInTheDocument();
   });
 
+  it("shows a distinct 'no longer offered' note (not the download one) when the configured model is retired but still on disk", async () => {
+    // Review finding: the config can point at a retired model that IS still
+    // downloaded (e.g. a legacy config from before this model was curated
+    // out). The generic "not downloaded... download it again" copy would be
+    // false in that case (it's downloaded) and impossible advice (retired
+    // ids can never be re-downloaded), and would contradict the
+    // "(no longer offered)" label on the row itself.
+    vi.mocked(ipc.getConfig).mockResolvedValue({
+      ...baseConfig,
+      retranscribe_model: whisperLargeQ5Retired.id,
+    });
+    vi.mocked(ipc.listModels).mockResolvedValue([parakeet, whisperQ8, whisperLargeQ5Retired]);
+
+    render(<SettingsDialog open onOpenChange={() => {}} />);
+
+    await screen.findByText(/selected model is no longer offered/i);
+    expect(screen.queryByText(/selected model is not downloaded/i)).not.toBeInTheDocument();
+  });
+
   it("shows total disk used near each group heading, labeled with its own scope", async () => {
     vi.mocked(ipc.listModels).mockResolvedValue([parakeet, whisperQ8, whisperLargeV3NotDownloaded]);
 

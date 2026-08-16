@@ -412,17 +412,24 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
 
   const liveModels = models.filter((m) => m.role === "live");
   const retranscribeModels = models.filter((m) => m.role === "retranscribe");
-  // True once a retranscribe model is configured but no longer selectable:
-  // either it's not downloaded (e.g. it was just deleted from this same
-  // screen), or it's a retired entry that's still on disk (stage 0.8.x
-  // curation -- retired rows never render a radio, so a config pointing at
-  // one leaves the group with nothing checked too). Every radio in the group
-  // reflects `model.downloaded && !model.retired`, so this is the one case
-  // where none of them ends up checked and the group would otherwise look
-  // broken with no explanation.
+  const selectedRetranscribeModel = models.find((m) => m.id === config?.retranscribe_model);
+  // True when the configured re-transcribe model is a retired entry that's
+  // still on disk (stage 0.8.x curation): distinct from "missing" below,
+  // since the file genuinely IS there and re-downloading it is impossible
+  // (the backend rejects retired ids) -- the generic "not downloaded...
+  // download it again" copy would contradict the "(no longer offered)"
+  // label on the row right below it. Retired rows never render a radio, so
+  // a config pointing at one also leaves the group with nothing checked;
+  // this gives that state its own accurate explanation.
+  const retranscribeModelRetired = Boolean(selectedRetranscribeModel?.retired);
+  // True once a retranscribe model is configured but genuinely not on disk
+  // (e.g. it was just deleted from this same screen, or names an id
+  // `list_models` doesn't currently report at all) -- excludes the
+  // retired-but-downloaded case above, which gets its own distinct message.
   const retranscribeModelMissing =
     Boolean(config?.retranscribe_model) &&
-    !models.some((m) => m.id === config?.retranscribe_model && m.downloaded && !m.retired);
+    !retranscribeModelRetired &&
+    !models.some((m) => m.id === config?.retranscribe_model && m.downloaded);
 
   return (
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
@@ -577,6 +584,11 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                 Large-v3 is slower but the strongest on non-English speech.
               </span>
               {retranscribeError && <span className="text-xs text-destructive">{retranscribeError}</span>}
+              {retranscribeModelRetired && (
+                <span className="text-xs text-muted-foreground">
+                  Selected model is no longer offered. Pick another model.
+                </span>
+              )}
               {retranscribeModelMissing && (
                 <span className="text-xs text-muted-foreground">
                   Selected model is not downloaded. Pick another or download it again.

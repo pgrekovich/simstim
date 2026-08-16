@@ -400,14 +400,24 @@ pub fn list_models() -> Vec<ModelInfo> {
     list_models_at(&simstim_engine::models_dir(), &Config::load())
 }
 
+/// `Err` unless `id` names a registered, still-offered model spec; `Ok` with
+/// the resolved spec otherwise. `download_model`'s own gate, split out so
+/// the retired-download rejection is directly unit-testable against the
+/// real command path's logic without a live Tauri app (mirrors `validate_
+/// delete`'s own split in this module for the same reason).
+fn validate_downloadable(id: &str) -> Result<&'static ModelSpec, String> {
+    let spec = find(id).ok_or_else(|| format!("unknown model id: {id}"))?;
+    validate_not_retired(spec)?;
+    Ok(spec)
+}
+
 #[tauri::command]
 pub async fn download_model(
     app: AppHandle,
     state: State<'_, DownloadState>,
     id: String,
 ) -> Result<(), String> {
-    let spec = find(&id).ok_or_else(|| format!("unknown model id: {id}"))?;
-    validate_not_retired(spec)?;
+    let spec = validate_downloadable(&id)?;
 
     {
         let mut in_flight = state.0.lock().unwrap();
@@ -778,6 +788,30 @@ mod tests {
             let err = validate_not_retired(find(id).unwrap()).unwrap_err();
             assert!(err.contains("no longer offered"), "{id}: {err}");
         }
+    }
+
+    /// Exercises `download_model`'s actual gate (it calls this exact
+    /// function first, before touching the network or the download-in-flight
+    /// guard), proving a retired id can never start a download -- not just
+    /// that `validate_not_retired` rejects it in isolation.
+    #[test]
+    fn validate_downloadable_rejects_a_retired_id() {
+        for id in ["whisper-large-v3-turbo-q5", "whisper-large-v3-q5"] {
+            let err = validate_downloadable(id).unwrap_err();
+            assert!(err.contains("no longer offered"), "{id}: {err}");
+        }
+    }
+
+    #[test]
+    fn validate_downloadable_accepts_a_currently_offered_id() {
+        assert!(validate_downloadable("whisper-large-v3-turbo-q8").is_ok());
+        assert!(validate_downloadable("whisper-large-v3").is_ok());
+    }
+
+    #[test]
+    fn validate_downloadable_rejects_an_unknown_id() {
+        let err = validate_downloadable("no-such-model").unwrap_err();
+        assert!(err.contains("no-such-model"));
     }
 
     mod list_models_at_tests {

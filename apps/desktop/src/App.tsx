@@ -116,6 +116,22 @@ function App() {
   function handleManualRetranscribeStart(path: string) {
     manualRetranscribePathsRef.current.add(path);
   }
+  // Third review round: `retranscribe_session` rejects up front, before
+  // emitting anything, on several validation paths (not-active/finalizing,
+  // missing audio, retired/missing model, already-running/already-queued --
+  // see `retranscribe.rs`'s doc comments), so the terminal-event cleanup in
+  // the listener below never runs for those. Without this, a path would stay
+  // marked "manual in flight" forever after one of those rejections,
+  // permanently suppressing the header for a LATER genuine auto-job failure
+  // on the very same session -- exactly the silence this whole fix exists to
+  // remove, just deferred. SessionView calls this from its own catch block
+  // (see `onRetranscribeEnd`'s doc comment there) whenever a manual attempt
+  // ends without ever producing a terminal event. `Set.delete` on an absent
+  // path is a no-op, so this is also safe to call for a rejection that
+  // arrives AFTER a terminal event already cleared the path.
+  function handleManualRetranscribeEnd(path: string) {
+    manualRetranscribePathsRef.current.delete(path);
+  }
   // Attached to WHICHEVER SessionView is currently mounted -- active or
   // inactive (see the JSX below, both branches carry this ref). handleStop
   // reads this to flush any pending title/notes edit through
@@ -607,6 +623,7 @@ function App() {
               onTitleChange={refreshSessions}
               onSaveError={(message) => setStatus({ kind: "error", message })}
               onRetranscribeStart={handleManualRetranscribeStart}
+              onRetranscribeEnd={handleManualRetranscribeEnd}
             />
           )}
         </div>

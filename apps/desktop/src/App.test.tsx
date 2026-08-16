@@ -454,6 +454,57 @@ describe("App: surfaces terminal re-transcribe errors from background jobs (stag
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(screen.queryByText(/whisper model not downloaded/i)).not.toBeInTheDocument();
   });
+
+  it("does not permanently silence a LATER auto-job failure after a manual click rejects with no terminal event (third review round)", async () => {
+    // Reproduces the leak: `retranscribe_session` rejects up front, before
+    // emitting anything at all, on several validation paths (model not
+    // downloaded, missing audio, not-active, already-running/queued -- see
+    // retranscribe.rs). A manual click hitting one of those shows its error
+    // inline correctly (SessionView's own catch), but no
+    // `retranscribe-progress` event ever fires for it -- so the listener's
+    // terminal-event cleanup never runs, and the old code left the path
+    // marked "manual in flight" forever. The very next genuine auto-job
+    // failure for that same session would then be silently swallowed too.
+    const sessions: SessionMeta[] = [
+      { path: "/tmp/viewed.md", title: "Viewed call", date: new Date().toISOString(), duration_secs: null },
+    ];
+    vi.mocked(ipc.listSessions).mockResolvedValue(sessions);
+    vi.mocked(ipc.readSession).mockResolvedValue({
+      title: "Viewed call",
+      date: "",
+      notes: "",
+      transcript: "[00:00:01] Me: hi",
+      audio_path: "/tmp/viewed.flac",
+    });
+    // Rejects immediately, exactly like one of the up-front validation
+    // checks -- no progress event ever accompanies this.
+    vi.mocked(ipc.retranscribeSession).mockRejectedValueOnce(new Error("whisper model not downloaded"));
+
+    render(<App />);
+
+    const viewedRow = await screen.findByRole("button", { name: /viewed call/i });
+    fireEvent.click(viewedRow);
+    await waitFor(() => expect(document.body.textContent).toContain("hi"));
+
+    const retranscribeButton = await screen.findByRole("button", { name: /^re-transcribe$/i });
+    fireEvent.click(retranscribeButton);
+
+    // The manual click's own inline error, exactly as before this fix.
+    await screen.findByText(/whisper model not downloaded/i);
+
+    // A LATER, genuinely automatic job for the SAME session fails. Nothing
+    // manual is in flight anymore (the click above already rejected and
+    // finished) -- this must reach the header, not be swallowed by a stale
+    // "manual in flight" entry left over from the click.
+    emit("retranscribe-progress", {
+      path: "/tmp/viewed.md",
+      phase: "error",
+      channel: null,
+      message: "delete-after-retranscribe failed: permission denied",
+    });
+
+    await screen.findByText(/delete-after-retranscribe failed: permission denied/i);
+  });
 });
 
 describe("App: sidebar refresh on model-ready (final review Important finding)", () => {

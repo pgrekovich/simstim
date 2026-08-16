@@ -66,6 +66,23 @@ interface SessionViewProps {
    * never true while `isActive`).
    */
   onRetranscribeStart?: (path: string) => void;
+  /**
+   * Fires when a MANUAL job for this `path` ends WITHOUT ever producing a
+   * terminal `retranscribe-progress` event (stage 0.9 Task 2, second review
+   * round): `retranscribe_session` rejects up front, before emitting
+   * anything, on several validation paths (not-active/finalizing check,
+   * missing audio, retired/missing model, already-running/already-queued --
+   * see `retranscribe.rs`'s doc comments), so `handleRetranscribe`'s catch
+   * is the only signal App ever gets that this attempt is over. Without
+   * this, `path` would stay marked "manual in flight" forever, permanently
+   * suppressing the header for a LATER genuine auto-job failure on the same
+   * session -- exactly the silence this whole fix exists to remove, just
+   * deferred. Harmless to also fire when a terminal event DID already
+   * arrive first (App's cleanup there is a plain `Set.delete`, a no-op on
+   * an already-removed path), so this only needs to cover the no-event
+   * case, not detect it.
+   */
+  onRetranscribeEnd?: (path: string) => void;
 }
 
 /**
@@ -156,6 +173,7 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
     onSaveError,
     onActiveEdit,
     onRetranscribeStart,
+    onRetranscribeEnd,
   },
   ref
 ) {
@@ -339,6 +357,13 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
     } catch (err) {
       console.error("failed to re-transcribe session", err);
       setRetranscribeError(String(err));
+      // Covers the rejections that never produce a `retranscribe-progress`
+      // event at all (the up-front validation checks -- see
+      // `onRetranscribeEnd`'s doc comment) as well as the rarer case where
+      // the pass itself succeeded but the follow-up `readSession` failed
+      // (that one DID already get a "done" event, so this is a harmless
+      // no-op there).
+      onRetranscribeEnd?.(path);
     } finally {
       setClicking(false);
     }

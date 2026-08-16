@@ -136,20 +136,24 @@ describe("SettingsDialog: whisper model row (stage 0.7 Task 5)", () => {
     {
       id: "parakeet-tdt-0.6b-v3-int8",
       name: "Parakeet TDT 0.6B v3 (int8)",
+      tagline: null,
       size_mb: 487,
       downloaded: true,
       active: true,
       role: "live",
       size_on_disk_bytes: 487_000_000,
+      retired: false,
     },
     {
       id: "whisper-large-v3-turbo-q8",
-      name: "Whisper large-v3-turbo (q8)",
+      name: "Whisper turbo",
+      tagline: "faster, slightly weaker on non-English",
       size_mb: 874,
       downloaded: true,
       active: false,
       role: "retranscribe",
       size_on_disk_bytes: 874_188_075,
+      retired: false,
     },
   ];
 
@@ -158,7 +162,7 @@ describe("SettingsDialog: whisper model row (stage 0.7 Task 5)", () => {
 
     render(<SettingsDialog open onOpenChange={() => {}} />);
 
-    await screen.findByText("Whisper large-v3-turbo (q8)");
+    await screen.findByText("Whisper turbo");
     await screen.findByText("874 MB");
 
     // The live-engine row still gets its normal Active affordance.
@@ -168,7 +172,7 @@ describe("SettingsDialog: whisper model row (stage 0.7 Task 5)", () => {
     // Whisper is downloaded but must never show Use or Active: it can't
     // become the live engine. Being downloaded now surfaces as a selection
     // radio plus a delete control instead (stage 0.8 model manager).
-    const whisperRow = screen.getByText("Whisper large-v3-turbo (q8)").closest("li")!;
+    const whisperRow = screen.getByText("Whisper turbo").closest("li")!;
     expect(within(whisperRow).queryByRole("button", { name: /use/i })).not.toBeInTheDocument();
     expect(within(whisperRow).queryByText(/^active$/i)).not.toBeInTheDocument();
     expect(within(whisperRow).getByRole("radio")).toBeInTheDocument();
@@ -191,64 +195,99 @@ describe("SettingsDialog: model manager (stage 0.8 Task 2)", () => {
   const parakeet: ModelInfo = {
     id: "parakeet-tdt-0.6b-v3-int8",
     name: "Parakeet TDT 0.6B v3 (int8)",
+    tagline: null,
     size_mb: 487,
     downloaded: true,
     active: true,
     role: "live",
     size_on_disk_bytes: 487_000_000,
+    retired: false,
   };
 
   const whisperQ8: ModelInfo = {
     id: "whisper-large-v3-turbo-q8",
-    name: "Whisper large-v3-turbo (q8) - faster",
+    name: "Whisper turbo",
+    tagline: "faster, slightly weaker on non-English",
     size_mb: 874,
     downloaded: true,
     active: false,
     role: "retranscribe",
     size_on_disk_bytes: 874_188_075,
+    retired: false,
   };
 
-  const whisperLargeQ5: ModelInfo = {
+  const whisperLargeV3: ModelInfo = {
+    id: "whisper-large-v3",
+    name: "Whisper large-v3",
+    tagline: "best quality, slower",
+    size_mb: 3095,
+    downloaded: true,
+    active: false,
+    role: "retranscribe",
+    size_on_disk_bytes: 3_095_033_483,
+    retired: false,
+  };
+
+  const whisperLargeV3NotDownloaded: ModelInfo = {
+    ...whisperLargeV3,
+    downloaded: false,
+    size_on_disk_bytes: null,
+  };
+
+  // Retired (stage 0.8.x curation): `whisper-large-v3-q5` was curated out of
+  // the offered lineup, but stays visible here because a copy is still on
+  // disk (`list_models` only ever sends a retired entry in that case -- an
+  // absent one is hidden outright, so a fixture with `downloaded: false`
+  // would never actually arrive from the real backend).
+  const whisperLargeQ5Retired: ModelInfo = {
     id: "whisper-large-v3-q5",
-    name: "Whisper large-v3 (q5) - slower, usually better on non-English",
+    name: "Whisper large-v3 (older version)",
+    tagline: null,
     size_mb: 1081,
     downloaded: true,
     active: false,
     role: "retranscribe",
     size_on_disk_bytes: 1_100_000_000,
-  };
-
-  const whisperTurboQ5NotDownloaded: ModelInfo = {
-    id: "whisper-large-v3-turbo-q5",
-    name: "Whisper large-v3-turbo (q5) - fastest, smallest",
-    size_mb: 574,
-    downloaded: false,
-    active: false,
-    role: "retranscribe",
-    size_on_disk_bytes: null,
+    retired: true,
   };
 
   it("selecting a downloaded re-transcribe model calls setRetranscribeModel and reflects the selection", async () => {
     let persisted = { ...baseConfig, retranscribe_model: whisperQ8.id };
     vi.mocked(ipc.getConfig).mockImplementation(async () => ({ ...persisted }));
-    vi.mocked(ipc.listModels).mockResolvedValue([parakeet, whisperQ8, whisperLargeQ5]);
+    vi.mocked(ipc.listModels).mockResolvedValue([parakeet, whisperQ8, whisperLargeV3]);
     vi.mocked(ipc.setRetranscribeModel).mockImplementation(async (id: string) => {
       persisted = { ...persisted, retranscribe_model: id };
     });
 
     render(<SettingsDialog open onOpenChange={() => {}} />);
 
-    const currentRadio = await screen.findByRole("radio", { name: /whisper large-v3-turbo \(q8\)/i });
+    const currentRadio = await screen.findByRole("radio", { name: "Whisper turbo" });
     expect(currentRadio).toBeChecked();
 
-    const otherRadio = screen.getByRole("radio", { name: /whisper large-v3 \(q5\)/i });
+    const otherRadio = screen.getByRole("radio", { name: "Whisper large-v3" });
     expect(otherRadio).not.toBeChecked();
 
     fireEvent.click(otherRadio);
 
-    await waitFor(() => expect(ipc.setRetranscribeModel).toHaveBeenCalledWith(whisperLargeQ5.id));
+    await waitFor(() => expect(ipc.setRetranscribeModel).toHaveBeenCalledWith(whisperLargeV3.id));
     await waitFor(() => expect(otherRadio).toBeChecked());
     expect(currentRadio).not.toBeChecked();
+  });
+
+  it("renders a retired model (still on disk) with size and delete only, no radio, no download, no tagline", async () => {
+    vi.mocked(ipc.listModels).mockResolvedValue([parakeet, whisperQ8, whisperLargeQ5Retired]);
+
+    render(<SettingsDialog open onOpenChange={() => {}} />);
+
+    const row = (await screen.findByText(/whisper large-v3 \(older version\)/i)).closest("li")!;
+    expect(within(row).queryByRole("radio")).not.toBeInTheDocument();
+    expect(within(row).queryByRole("button", { name: /download/i })).not.toBeInTheDocument();
+    expect(within(row).getByRole("button", { name: /delete/i })).toBeInTheDocument();
+    expect(within(row).getByText(/no longer offered/i)).toBeInTheDocument();
+    expect(within(row).getByText("1.08 GB")).toBeInTheDocument();
+
+    // The still-offered rows are unaffected by a retired sibling being present.
+    expect(screen.getByRole("radio", { name: "Whisper turbo" })).toBeInTheDocument();
   });
 
   it("requires confirmation before deleting, and states the real freed size", async () => {
@@ -256,8 +295,8 @@ describe("SettingsDialog: model manager (stage 0.8 Task 2)", () => {
 
     render(<SettingsDialog open onOpenChange={() => {}} />);
 
-    const row = (await screen.findByText(/whisper large-v3-turbo \(q8\)/i)).closest("li")!;
-    const deleteButton = within(row).getByRole("button", { name: /delete whisper large-v3-turbo \(q8\)/i });
+    const row = (await screen.findByText("Whisper turbo")).closest("li")!;
+    const deleteButton = within(row).getByRole("button", { name: /delete whisper turbo/i });
 
     fireEvent.click(deleteButton);
     expect(ipc.deleteModel).not.toHaveBeenCalled();
@@ -280,11 +319,11 @@ describe("SettingsDialog: model manager (stage 0.8 Task 2)", () => {
   });
 
   it("offers Download and no selection control for a not-downloaded re-transcribe model", async () => {
-    vi.mocked(ipc.listModels).mockResolvedValue([parakeet, whisperTurboQ5NotDownloaded]);
+    vi.mocked(ipc.listModels).mockResolvedValue([parakeet, whisperLargeV3NotDownloaded]);
 
     render(<SettingsDialog open onOpenChange={() => {}} />);
 
-    const row = (await screen.findByText(/whisper large-v3-turbo \(q5\)/i)).closest("li")!;
+    const row = (await screen.findByText("Whisper large-v3")).closest("li")!;
     expect(within(row).getByRole("button", { name: /download/i })).toBeInTheDocument();
     expect(within(row).queryByRole("radio")).not.toBeInTheDocument();
     expect(within(row).queryByRole("button", { name: /delete/i })).not.toBeInTheDocument();
@@ -307,33 +346,26 @@ describe("SettingsDialog: model manager (stage 0.8 Task 2)", () => {
 
     render(<SettingsDialog open onOpenChange={() => {}} />);
 
-    const row = (await screen.findByText(/whisper large-v3-turbo \(q8\)/i)).closest("li")!;
-    fireEvent.click(within(row).getByRole("button", { name: /delete whisper large-v3-turbo \(q8\)/i }));
+    const row = (await screen.findByText("Whisper turbo")).closest("li")!;
+    fireEvent.click(within(row).getByRole("button", { name: /delete whisper turbo/i }));
     fireEvent.click(await within(row).findByRole("button", { name: /delete 874 mb\?/i }));
 
     await waitFor(() => expect(ipc.deleteModel).toHaveBeenCalledWith(whisperQ8.id));
     await waitFor(() => {
-      const refreshedRow = screen.getByText(/whisper large-v3-turbo \(q8\)/i).closest("li")!;
+      const refreshedRow = screen.getByText("Whisper turbo").closest("li")!;
       expect(within(refreshedRow).getByRole("button", { name: /download/i })).toBeInTheDocument();
       expect(within(refreshedRow).queryByRole("radio")).not.toBeInTheDocument();
     });
   });
 
   it("formats GB sizes decimally, matching the README (1081 MB -> 1.08 GB, 3095 MB -> 3.1 GB)", async () => {
-    const whisperLargeFull: ModelInfo = {
-      id: "whisper-large-v3",
-      name: "Whisper large-v3 (full) - slowest, usually best on non-English",
-      size_mb: 3095,
-      downloaded: true,
-      active: false,
-      role: "retranscribe",
-      size_on_disk_bytes: 3_095_033_483,
-    };
-    vi.mocked(ipc.listModels).mockResolvedValue([parakeet, whisperLargeQ5, whisperLargeFull]);
+    vi.mocked(ipc.listModels).mockResolvedValue([parakeet, whisperLargeQ5Retired, whisperLargeV3]);
 
     render(<SettingsDialog open onOpenChange={() => {}} />);
 
-    // `humanSizeMb` (the advertised size_mb, decimal MB throughout).
+    // `humanSizeMb` (the advertised size_mb, decimal MB throughout) -- shown
+    // on both a retired row (whisperLargeQ5Retired) and a still-offered one
+    // (whisperLargeV3), since size formatting doesn't depend on retired status.
     await screen.findByText("1.08 GB");
     await screen.findByText("3.1 GB");
   });
@@ -356,19 +388,19 @@ describe("SettingsDialog: model manager (stage 0.8 Task 2)", () => {
 
     render(<SettingsDialog open onOpenChange={() => {}} />);
 
-    await screen.findByText(/whisper large-v3-turbo \(q8\)/i);
+    await screen.findByText("Whisper turbo");
     expect(screen.queryByText(/selected model is not downloaded/i)).not.toBeInTheDocument();
   });
 
   it("shows total disk used near each group heading, labeled with its own scope", async () => {
-    vi.mocked(ipc.listModels).mockResolvedValue([parakeet, whisperQ8, whisperTurboQ5NotDownloaded]);
+    vi.mocked(ipc.listModels).mockResolvedValue([parakeet, whisperQ8, whisperLargeV3NotDownloaded]);
 
     render(<SettingsDialog open onOpenChange={() => {}} />);
 
     await screen.findByText("Recording");
     // Recording: only parakeet, 487_000_000 bytes -> 487 MB.
     // Re-transcribe: only whisperQ8 is downloaded, 874_188_075 bytes -> 874 MB
-    // (the not-downloaded turbo q5 contributes nothing). Each total names its
+    // (the not-downloaded large-v3 contributes nothing). Each total names its
     // own group so neither reads as a whole-app total.
     await screen.findByText(/recording models: 487 mb on disk/i);
     await screen.findByText(/re-transcribe models: 874 mb on disk/i);
@@ -384,17 +416,17 @@ describe("SettingsDialog: model manager (stage 0.8 Task 2)", () => {
 
     const { rerender } = render(<SettingsDialog open onOpenChange={() => {}} />);
 
-    const row = (await screen.findByText(/whisper large-v3-turbo \(q8\)/i)).closest("li")!;
-    fireEvent.click(within(row).getByRole("button", { name: /delete whisper large-v3-turbo \(q8\)/i }));
+    const row = (await screen.findByText("Whisper turbo")).closest("li")!;
+    fireEvent.click(within(row).getByRole("button", { name: /delete whisper turbo/i }));
     await within(row).findByRole("button", { name: /delete 874 mb\?/i });
 
     rerender(<SettingsDialog open={false} onOpenChange={() => {}} />);
     rerender(<SettingsDialog open onOpenChange={() => {}} />);
 
-    const reopenedRow = (await screen.findByText(/whisper large-v3-turbo \(q8\)/i)).closest("li")!;
+    const reopenedRow = (await screen.findByText("Whisper turbo")).closest("li")!;
     // Back to the trash icon, not the armed "Delete 874 MB?" button.
     const trashButton = await within(reopenedRow).findByRole("button", {
-      name: /delete whisper large-v3-turbo \(q8\)/i,
+      name: /delete whisper turbo/i,
     });
     expect(within(reopenedRow).queryByRole("button", { name: /delete 874 mb\?/i })).not.toBeInTheDocument();
 

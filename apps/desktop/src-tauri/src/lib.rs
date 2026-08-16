@@ -367,18 +367,21 @@ fn set_active_model(id: String) -> Result<(), String> {
     cfg.save().map_err(|e| e.to_string())
 }
 
-/// `Err` unless `id` names a registered model with the `Retranscribe` role.
-/// Split out from `set_retranscribe_model` the same way `validate_active_model`
-/// is split from `set_active_model` -- symmetric validation for the other
-/// half of `ModelRole` (stage 0.8: the owner picks which whisper model
-/// re-transcribes calls).
+/// `Err` unless `id` names a registered model with the `Retranscribe` role
+/// that is still offered (stage 0.8.x curation: `models::validate_not_
+/// retired` rejects a retired id, e.g. one of the two whisper entries the
+/// owner curated out, even though it stays in the registry). Split out from
+/// `set_retranscribe_model` the same way `validate_active_model` is split
+/// from `set_active_model` -- symmetric validation for the other half of
+/// `ModelRole` (stage 0.8: the owner picks which whisper model re-transcribes
+/// calls).
 fn validate_retranscribe_model(id: &str) -> Result<(), String> {
     match models::find(id) {
         None => Err(format!("unknown model id: {id}")),
         Some(spec) if spec.role != models::ModelRole::Retranscribe => {
             Err(format!("model is not selectable for re-transcribe: {id}"))
         }
-        Some(_) => Ok(()),
+        Some(spec) => models::validate_not_retired(spec),
     }
 }
 
@@ -535,6 +538,16 @@ mod tests {
         // weights to run a re-transcribe pass with.
         let err = validate_retranscribe_model("parakeet-tdt-0.6b-v3-int8").unwrap_err();
         assert!(err.contains("parakeet-tdt-0.6b-v3-int8"));
+    }
+
+    #[test]
+    fn validate_retranscribe_model_rejects_a_retired_id() {
+        // Stage-0.8.x curation: the owner curated the offered lineup down to
+        // turbo + large-v3; the other two whisper entries stay registered
+        // (so an already-downloaded copy can still be deleted) but must never
+        // become selectable again.
+        let err = validate_retranscribe_model("whisper-large-v3-turbo-q5").unwrap_err();
+        assert!(err.contains("no longer offered"), "{err}");
     }
 
     mod asset_scope {

@@ -52,7 +52,7 @@ so this only matters for `pnpm tauri dev`.
 
 Parakeet's live transcript can be rough, especially in Russian. To get a better pass:
 
-1. Settings > Models > download "Whisper large-v3-turbo (q8)" (about 874 MB, one-time).
+1. Settings > Models > download "Whisper turbo" (about 874 MB, one-time).
 2. Open a session that has audio (recorded with "Keep call audio" on) and press Re-transcribe.
 3. Whisper runs at about 12x realtime, so a 30 minute call takes about 2.5 minutes. Progress shows in the session header.
 4. The old transcript is replaced outright, not merged or kept. Everything else (title, notes, date, duration) stays.
@@ -65,15 +65,13 @@ A measured codec benchmark on real call audio settled this: AAC at 32 kbps, forc
 
 ## Models
 
-Parakeet runs the live recording and is not switchable. Whisper models are for the Re-transcribe action and can be picked in Settings > Models. Four whisper options exist:
+Parakeet runs the live recording and is not switchable. Whisper models are for the Re-transcribe action and can be picked in Settings > Models. The curated lineup is two options:
 
-- Whisper turbo q5 (574 MB)
-- Whisper turbo q8 (874 MB, default)
-- Whisper large-v3 q5 (1.08 GB)
-- Whisper large-v3 (3.1 GB)
+- Whisper turbo (874 MB, default) - faster, slightly weaker on non-English.
+- Whisper large-v3 (3.1 GB) - best quality, slower.
 
-Turbo is faster: about 12x realtime measured on an M1 Max for turbo q8; a 30-minute call takes about 2.5 minutes. Non-turbo large-v3 is slower but usually better on non-English. Models can be deleted from the same screen to reclaim disk (shows real on-disk sizes).
+Turbo is faster: about 12x realtime measured on this machine; a 30-minute call takes about 2.5 minutes. Large-v3 is slower but the strongest on non-English speech. Models can be deleted from the same screen to reclaim disk (shows real on-disk sizes). Two older whisper variants were curated out of the offered lineup; if either is still downloaded from before, it stays visible in Settings for deletion only, labeled "no longer offered" - it can't be re-downloaded or selected again.
 
 ## Status
 
-stage 0.8 shipped: a Settings > Models manager with model roles (Recording vs Re-transcribe), four whisper options for re-transcribe picked in-app instead of a fixed default, and per-model deletion (with confirmation) to reclaim disk. Known gaps: no meeting detection yet, no menu bar/hotkeys.
+stage 0.8 shipped: a Settings > Models manager with model roles (Recording vs Re-transcribe), a curated two-model re-transcribe lineup (turbo and large-v3) picked in-app instead of a fixed default, and per-model deletion (with confirmation) to reclaim disk. Known gaps: no meeting detection yet, no menu bar/hotkeys.

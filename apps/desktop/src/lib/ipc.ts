@@ -80,6 +80,12 @@ export interface SessionData {
 export interface ModelInfo {
   id: string;
   name: string;
+  /**
+   * Short descriptive subtitle shown under `name` (stage 0.8.x curation),
+   * `null` when there's nothing worth saying beyond the name itself
+   * (Parakeet, and every retired entry). Mirrors `ModelSpec::tagline`.
+   */
+  tagline: string | null;
   size_mb: number;
   downloaded: boolean;
   active: boolean;
@@ -97,6 +103,15 @@ export interface ModelInfo {
    * `size_mb`, which can differ from what a real extracted archive occupies.
    */
   size_on_disk_bytes: number | null;
+  /**
+   * Whether this model has been curated out of the offered lineup (stage
+   * 0.8.x): still visible and deletable if it's on disk, but never
+   * downloadable or selectable again. Mirrors `ModelSpec::retired`. A
+   * retired model only ever appears in `list_models`'s result while it's
+   * downloaded (see `models::list_models_at`'s docs), so the Settings
+   * dialog's retired row always renders size + delete only.
+   */
+  retired: boolean;
 }
 
 /** Mirrors `SessionErrorPayload` (apps/desktop/src-tauri/src/lib.rs), the `session-error` event payload. */

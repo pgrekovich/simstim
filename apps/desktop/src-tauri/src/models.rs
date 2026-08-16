@@ -70,6 +70,13 @@ impl ModelRole {
 pub struct ModelSpec {
     pub id: &'static str,
     pub name: &'static str,
+    /// Short descriptive subtitle shown under `name` in the Settings model
+    /// manager (stage 0.8.x curation), `None` when there's nothing worth
+    /// saying beyond the name itself (Parakeet, and every retired entry --
+    /// retired rows don't render a tagline at all, see `SettingsDialog`).
+    /// Deliberately plain, no quantization jargon: written for Pavel, not for
+    /// someone comparing GGUF variants.
+    pub tagline: Option<&'static str>,
     pub size_mb: u64,
     pub layout: ModelLayout,
     /// `(url, filename)` pairs downloaded straight into `models_dir` (not
@@ -77,6 +84,15 @@ pub struct ModelSpec {
     /// ASR backends. Independent of `layout`; either variant can have extras.
     pub extra_files: &'static [(&'static str, &'static str)],
     pub role: ModelRole,
+    /// Whether this entry is still offered for download/selection (stage
+    /// 0.8.x curation, owner's ruling: "для лайва parakeet оставляем, а для
+    /// транскрипта turbo + large v3 fp16 - и хватит"). A `true` entry stays
+    /// in the registry rather than being deleted outright -- `is_downloaded`/
+    /// `delete_model` still need to resolve it so an already-downloaded file
+    /// can be found and removed -- but `validate_not_retired` blocks it from
+    /// ever being downloaded or selected again, and `list_models` only
+    /// surfaces it while its files are actually still on disk.
+    pub retired: bool,
 }
 
 /// The model registry. Adding a model means adding an entry here; no IPC or
@@ -86,6 +102,7 @@ pub static REGISTRY: &[ModelSpec] = &[
     ModelSpec {
         id: "parakeet-tdt-0.6b-v3-int8",
         name: "Parakeet TDT 0.6B v3 (int8)",
+        tagline: None,
         size_mb: 487,
         layout: ModelLayout::Archive {
             archive_url: "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2",
@@ -97,14 +114,19 @@ pub static REGISTRY: &[ModelSpec] = &[
             "silero_vad.onnx",
         )],
         role: ModelRole::Live,
+        retired: false,
     },
     ModelSpec {
-        // GGUF from the whisper.cpp Hugging Face repo. URL and size
-        // (574041195 bytes, confirmed via HEAD request 2026-08-16) verified
-        // directly before hardcoding, per the stage-0.8 Global Constraints.
-        // Smallest/fastest of the four whisper entries.
+        // RETIRED (stage 0.8.x curation, owner's ruling): quantization
+        // differences within the turbo family are noise, and the owner
+        // already has the q8 file below on disk, so this smaller/faster q5
+        // variant isn't worth offering alongside it. Kept in the registry
+        // (not deleted) purely so a copy already on disk stays visible in
+        // `list_models` for deletion -- `validate_not_retired` blocks it from
+        // ever being downloaded or selected again.
         id: "whisper-large-v3-turbo-q5",
-        name: "Whisper large-v3-turbo (q5) - fastest, smallest",
+        name: "Whisper turbo (older version)",
+        tagline: None,
         size_mb: 574,
         layout: ModelLayout::File {
             url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin",
@@ -112,16 +134,16 @@ pub static REGISTRY: &[ModelSpec] = &[
         },
         extra_files: &[],
         role: ModelRole::Retranscribe,
+        retired: true,
     },
     ModelSpec {
-        // GGUF from the whisper.cpp Hugging Face repo. URL and size (874188075
-        // bytes, confirmed via HEAD request 2026-08-16) verified directly
-        // before hardcoding, per the stage-0.7 brief. Kept as the id/url/
-        // file_name the owner already has 874 MB downloaded under (stage-0.8
-        // Global Constraints): must not change, or the owner would be asked
-        // to re-download it.
+        // THE curated turbo entry (owner's ruling, stage 0.8.x): kept as the
+        // id/url/file_name the owner already has 874 MB downloaded under
+        // (stage-0.8 Global Constraints) -- must not change, or the owner
+        // would be asked to re-download it.
         id: "whisper-large-v3-turbo-q8",
-        name: "Whisper large-v3-turbo (q8) - faster",
+        name: "Whisper turbo",
+        tagline: Some("faster, slightly weaker on non-English"),
         size_mb: 874,
         layout: ModelLayout::File {
             url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q8_0.bin",
@@ -130,15 +152,18 @@ pub static REGISTRY: &[ModelSpec] = &[
         extra_files: &[],
         // Re-transcribe-only (Global Constraints): never the live pipeline.
         role: ModelRole::Retranscribe,
+        retired: false,
     },
     ModelSpec {
-        // GGUF from the whisper.cpp Hugging Face repo. URL and size
-        // (1081140203 bytes, confirmed via HEAD request 2026-08-16) verified
-        // directly before hardcoding, per the stage-0.8 Global Constraints.
-        // Non-turbo: usually reads non-English (e.g. Russian) better than
-        // the turbo family, at the cost of speed.
+        // RETIRED (stage 0.8.x curation, owner's ruling): superseded by the
+        // full-precision large-v3 entry below, which the owner kept instead
+        // as the one non-turbo option. Kept in the registry (not deleted)
+        // purely so a copy already on disk stays visible in `list_models` for
+        // deletion -- `validate_not_retired` blocks it from ever being
+        // downloaded or selected again.
         id: "whisper-large-v3-q5",
-        name: "Whisper large-v3 (q5) - slower, usually better on non-English",
+        name: "Whisper large-v3 (older version)",
+        tagline: None,
         size_mb: 1081,
         layout: ModelLayout::File {
             url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-q5_0.bin",
@@ -146,15 +171,15 @@ pub static REGISTRY: &[ModelSpec] = &[
         },
         extra_files: &[],
         role: ModelRole::Retranscribe,
+        retired: true,
     },
     ModelSpec {
-        // GGUF from the whisper.cpp Hugging Face repo. URL and size
-        // (3095033483 bytes, confirmed via HEAD request 2026-08-16) verified
-        // directly before hardcoding, per the stage-0.8 Global Constraints.
-        // Full (unquantized) non-turbo: largest and slowest, usually the
-        // best quality of the four, especially on non-English audio.
+        // THE curated large-v3 entry (owner's ruling, stage 0.8.x): the one
+        // non-turbo option kept -- best quality, slower, usually the
+        // strongest of the two on non-English audio.
         id: "whisper-large-v3",
-        name: "Whisper large-v3 (full) - slowest, usually best on non-English",
+        name: "Whisper large-v3",
+        tagline: Some("best quality, slower"),
         size_mb: 3095,
         layout: ModelLayout::File {
             url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin",
@@ -162,6 +187,7 @@ pub static REGISTRY: &[ModelSpec] = &[
         },
         extra_files: &[],
         role: ModelRole::Retranscribe,
+        retired: false,
     },
 ];
 
@@ -266,6 +292,9 @@ pub fn size_on_disk(spec: &ModelSpec, models_dir: &Path) -> Option<u64> {
 pub struct ModelInfo {
     pub id: String,
     pub name: String,
+    /// Mirrors `ModelSpec::tagline`; `None`/`null` when there's no subtitle
+    /// to show.
+    pub tagline: Option<String>,
     pub size_mb: u64,
     pub downloaded: bool,
     pub active: bool,
@@ -280,6 +309,10 @@ pub struct ModelInfo {
     /// rather than the advertised `size_mb`, which can differ from what a
     /// real extracted archive occupies.
     pub size_on_disk_bytes: Option<u64>,
+    /// Mirrors `ModelSpec::retired` (stage 0.8.x curation): the Settings UI
+    /// renders a retired row as size + delete only, no radio/Download, since
+    /// it can never be downloaded or selected again.
+    pub retired: bool,
 }
 
 /// Guards against downloading the same model id twice concurrently.
@@ -321,22 +354,50 @@ fn emit_progress(
     );
 }
 
-#[tauri::command]
-pub fn list_models() -> Vec<ModelInfo> {
-    let cfg = Config::load();
-    let models_dir = simstim_engine::models_dir();
+/// `Err` with a user-facing message unless `spec` is still offered
+/// (`retired == false`). Stage-0.8.x curation: shared by `download_model`
+/// below, `set_retranscribe_model` (lib.rs), and `retranscribe_session`
+/// (retranscribe.rs) so a retired model can never be downloaded or selected
+/// again, even though it stays in the registry -- and stays visible via
+/// `list_models` while its files are still on disk -- purely so it can still
+/// be deleted.
+pub fn validate_not_retired(spec: &ModelSpec) -> Result<(), String> {
+    if spec.retired {
+        Err(format!("{} is no longer offered; pick a model in Settings", spec.name))
+    } else {
+        Ok(())
+    }
+}
+
+/// `list_models`'s actual logic, parameterized over `models_dir` and `cfg`
+/// instead of reading the real global state directly, so it's testable
+/// against tempdir fixtures (mirrors `delete_model_at`'s / `set_output_dir_
+/// at`'s own splits for the same reason). Stage 0.8.x curation: a `retired`
+/// entry is included only when its files are actually on disk -- the owner
+/// needs to still see (and delete) an already-downloaded retired model to
+/// reclaim the space, but a never-downloaded retired entry must not
+/// resurface as if it were still offered.
+fn list_models_at(models_dir: &Path, cfg: &Config) -> Vec<ModelInfo> {
     REGISTRY
         .iter()
+        .filter(|spec| !spec.retired || is_downloaded(spec, models_dir))
         .map(|spec| ModelInfo {
             id: spec.id.to_string(),
             name: spec.name.to_string(),
+            tagline: spec.tagline.map(|t| t.to_string()),
             size_mb: spec.size_mb,
-            downloaded: is_downloaded(spec, &models_dir),
+            downloaded: is_downloaded(spec, models_dir),
             active: spec.id == cfg.active_model,
             role: spec.role.as_str().to_string(),
-            size_on_disk_bytes: size_on_disk(spec, &models_dir),
+            size_on_disk_bytes: size_on_disk(spec, models_dir),
+            retired: spec.retired,
         })
         .collect()
+}
+
+#[tauri::command]
+pub fn list_models() -> Vec<ModelInfo> {
+    list_models_at(&simstim_engine::models_dir(), &Config::load())
 }
 
 #[tauri::command]
@@ -346,6 +407,7 @@ pub async fn download_model(
     id: String,
 ) -> Result<(), String> {
     let spec = find(&id).ok_or_else(|| format!("unknown model id: {id}"))?;
+    validate_not_retired(spec)?;
 
     {
         let mut in_flight = state.0.lock().unwrap();
@@ -624,6 +686,7 @@ mod tests {
         ModelSpec {
             id: "test-model",
             name: "Test Model",
+            tagline: None,
             size_mb: 1,
             layout: ModelLayout::Archive {
                 archive_url: "https://example.invalid/archive.tar.bz2",
@@ -632,6 +695,7 @@ mod tests {
             },
             extra_files: &[("https://example.invalid/extra.onnx", "extra.onnx")],
             role: ModelRole::Live,
+            retired: false,
         }
     }
 
@@ -639,6 +703,7 @@ mod tests {
         ModelSpec {
             id: "test-file-model",
             name: "Test File Model",
+            tagline: None,
             size_mb: 1,
             layout: ModelLayout::File {
                 url: "https://example.invalid/model.bin",
@@ -646,6 +711,7 @@ mod tests {
             },
             extra_files: &[],
             role: ModelRole::Retranscribe,
+            retired: false,
         }
     }
 
@@ -667,9 +733,91 @@ mod tests {
     #[test]
     fn registry_has_exactly_five_entries() {
         // Stage 0.5 shipped Parakeet alone; stage 0.7 added one whisper
-        // re-transcribe model; stage 0.8 adds three more whisper entries
-        // (four total) so the owner can pick among them.
+        // re-transcribe model; stage 0.8 added three more whisper entries
+        // (four total). Stage 0.8.x curation retires two of those four
+        // rather than deleting them outright (an already-downloaded retired
+        // model must stay resolvable so it can be found and deleted), so the
+        // registry is still five entries total -- see
+        // `registry_has_exactly_three_non_retired_entries` for the curated,
+        // user-facing count.
         assert_eq!(REGISTRY.len(), 5);
+    }
+
+    #[test]
+    fn registry_has_exactly_three_non_retired_entries() {
+        // Stage 0.8.x curation, owner's ruling: Parakeet (live) plus exactly
+        // two whisper options (turbo, large-v3) -- the other two whisper
+        // entries are retired, not deleted.
+        let non_retired = REGISTRY.iter().filter(|spec| !spec.retired).count();
+        assert_eq!(non_retired, 3);
+    }
+
+    #[test]
+    fn retired_entries_are_exactly_the_two_curated_out_whisper_ids() {
+        let retired_ids: Vec<&str> = REGISTRY
+            .iter()
+            .filter(|spec| spec.retired)
+            .map(|spec| spec.id)
+            .collect();
+        assert_eq!(
+            retired_ids,
+            vec!["whisper-large-v3-turbo-q5", "whisper-large-v3-q5"]
+        );
+    }
+
+    #[test]
+    fn validate_not_retired_allows_a_currently_offered_model() {
+        assert!(validate_not_retired(find("whisper-large-v3-turbo-q8").unwrap()).is_ok());
+        assert!(validate_not_retired(find("whisper-large-v3").unwrap()).is_ok());
+        assert!(validate_not_retired(find("parakeet-tdt-0.6b-v3-int8").unwrap()).is_ok());
+    }
+
+    #[test]
+    fn validate_not_retired_rejects_a_retired_model() {
+        for id in ["whisper-large-v3-turbo-q5", "whisper-large-v3-q5"] {
+            let err = validate_not_retired(find(id).unwrap()).unwrap_err();
+            assert!(err.contains("no longer offered"), "{id}: {err}");
+        }
+    }
+
+    mod list_models_at_tests {
+        use super::*;
+
+        #[test]
+        fn hides_a_retired_model_thats_not_on_disk() {
+            let dir = tempfile::tempdir().unwrap();
+            let models = list_models_at(dir.path(), &Config::default());
+            assert!(!models.iter().any(|m| m.id == "whisper-large-v3-turbo-q5"));
+            assert!(!models.iter().any(|m| m.id == "whisper-large-v3-q5"));
+        }
+
+        #[test]
+        fn shows_a_retired_model_thats_on_disk() {
+            let dir = tempfile::tempdir().unwrap();
+            std::fs::write(dir.path().join("ggml-large-v3-q5_0.bin"), b"x").unwrap();
+            let models = list_models_at(dir.path(), &Config::default());
+            let m = models
+                .iter()
+                .find(|m| m.id == "whisper-large-v3-q5")
+                .expect("the retired model must be visible once its file is on disk");
+            assert!(m.downloaded);
+            assert!(m.retired);
+        }
+
+        #[test]
+        fn always_shows_non_retired_entries_regardless_of_disk_state() {
+            let dir = tempfile::tempdir().unwrap();
+            let models = list_models_at(dir.path(), &Config::default());
+            for id in [
+                "parakeet-tdt-0.6b-v3-int8",
+                "whisper-large-v3-turbo-q8",
+                "whisper-large-v3",
+            ] {
+                let m = models.iter().find(|m| m.id == id).expect(id);
+                assert!(!m.retired, "{id}");
+                assert!(!m.downloaded, "{id}");
+            }
+        }
     }
 
     #[test]

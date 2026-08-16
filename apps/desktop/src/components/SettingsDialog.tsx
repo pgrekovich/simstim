@@ -412,14 +412,17 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
 
   const liveModels = models.filter((m) => m.role === "live");
   const retranscribeModels = models.filter((m) => m.role === "retranscribe");
-  // True once a retranscribe model is configured but no longer downloaded
-  // (e.g. it was just deleted from this same screen): every radio in the
-  // group reflects `model.downloaded`, so this is the one case where none of
-  // them ends up checked and the group would otherwise look broken with no
-  // explanation.
+  // True once a retranscribe model is configured but no longer selectable:
+  // either it's not downloaded (e.g. it was just deleted from this same
+  // screen), or it's a retired entry that's still on disk (stage 0.8.x
+  // curation -- retired rows never render a radio, so a config pointing at
+  // one leaves the group with nothing checked too). Every radio in the group
+  // reflects `model.downloaded && !model.retired`, so this is the one case
+  // where none of them ends up checked and the group would otherwise look
+  // broken with no explanation.
   const retranscribeModelMissing =
     Boolean(config?.retranscribe_model) &&
-    !models.some((m) => m.id === config?.retranscribe_model && m.downloaded);
+    !models.some((m) => m.id === config?.retranscribe_model && m.downloaded && !m.retired);
 
   return (
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
@@ -570,9 +573,8 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                 </span>
               </div>
               <span className="text-xs text-muted-foreground">
-                Turbo models are faster (measured about 12x realtime for turbo q8 on this
-                machine). The non-turbo large-v3 models are slower but usually read
-                non-English audio better.
+                Turbo is faster (about 12x realtime measured for this file on this machine).
+                Large-v3 is slower but the strongest on non-English speech.
               </span>
               {retranscribeError && <span className="text-xs text-destructive">{retranscribeError}</span>}
               {retranscribeModelMissing && (
@@ -585,11 +587,19 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                   const p = progress[model.id];
                   const busy = busyIds.has(model.id);
                   const confirming = deleteConfirmId === model.id;
+                  // Retired (stage 0.8.x curation): this row only exists at
+                  // all because its files are still on disk (`list_models`
+                  // hides an absent retired entry outright, see
+                  // `models::list_models_at`'s docs) -- the owner needs to
+                  // see it so it can be deleted, but it can never be
+                  // downloaded or selected again. No radio, no tagline, no
+                  // Download button; just the name, size, a muted "no longer
+                  // offered" note, and delete.
                   return (
                     <li key={model.id} className="flex flex-col gap-1.5 rounded-md border p-3">
                       <div className="flex items-center justify-between gap-3">
                         <div className="flex min-w-0 items-center gap-2.5">
-                          {model.downloaded && (
+                          {model.downloaded && !model.retired && (
                             <input
                               type="radio"
                               name="retranscribe-model"
@@ -601,13 +611,26 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                             />
                           )}
                           <div className="flex min-w-0 flex-col">
-                            <span className="truncate text-sm font-medium">{model.name}</span>
+                            <span
+                              className={cn(
+                                "truncate text-sm font-medium",
+                                model.retired && "text-muted-foreground",
+                              )}
+                            >
+                              {model.name}
+                            </span>
+                            {model.tagline && !model.retired && (
+                              <span className="text-xs text-muted-foreground">{model.tagline}</span>
+                            )}
                             <span className="text-xs text-muted-foreground">{humanSizeMb(model.size_mb)}</span>
+                            {model.retired && (
+                              <span className="text-xs text-muted-foreground">(no longer offered)</span>
+                            )}
                           </div>
                         </div>
 
                         <div className="flex shrink-0 items-center gap-1.5">
-                          {!model.downloaded && (!p || p.phase === "error") && (
+                          {!model.downloaded && !model.retired && (!p || p.phase === "error") && (
                             <Button variant="outline" size="sm" onClick={() => handleDownload(model.id)}>
                               Download
                             </Button>

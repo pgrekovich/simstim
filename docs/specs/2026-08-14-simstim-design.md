@@ -141,7 +141,7 @@ Status (2026-08-15): stage 0.6 shipped: Anarlog-style shell (folder-backed sideb
 
 Status (2026-08-16): stage 0.7 shipped: call audio kept as a stereo FLAC next to the transcript (configurable, default on), whisper large-v3-turbo re-transcribe pass (12x realtime, replaces the transcript outright), click-to-seek audio playback on transcript lines.
 
-Status (2026-08-16): stage 0.8 shipped: model roles (live vs re-transcribe), four whisper options with in-app selection, model deletion with confirmation and real on-disk sizes.
+Status (2026-08-16): stage 0.8 shipped: model roles (live vs re-transcribe), a curated two-model re-transcribe lineup (Whisper turbo, Whisper large-v3) with in-app selection, model deletion with confirmation and real on-disk sizes. Two earlier whisper variants are retired (owner's ruling): kept resolvable only so an already-downloaded copy stays visible for deletion, never downloadable or selectable again.
 
 ## Stage 0.6: the shell (approved 2026-08-15)
 

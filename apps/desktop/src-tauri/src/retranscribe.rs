@@ -408,6 +408,23 @@ fn check_audio_present(audio_path: Option<&Path>) -> Result<(), String> {
     }
 }
 
+/// Whether the selected re-transcribe model is still offered at all (stage
+/// 0.8.x curation): rejects even a config that names a retired model (e.g. a
+/// config that predates the owner curating the offered lineup down to turbo +
+/// large-v3), with the same "no longer offered" message
+/// `set_retranscribe_model` (lib.rs) gives -- reusing `models::validate_not_
+/// retired` is what makes this "the same rejection path" rather than a
+/// second, possibly-diverging one. `spec` is `None` when the config names an
+/// id the registry doesn't recognize at all (not the retired case); that's
+/// left to `check_model_ready`'s own "isn't downloaded" rejection instead of
+/// being treated as retired.
+fn check_model_not_retired(spec: Option<&models::ModelSpec>) -> Result<(), String> {
+    match spec {
+        Some(spec) => models::validate_not_retired(spec),
+        None => Ok(()),
+    }
+}
+
 /// Whether the selected re-transcribe model is downloaded, given the path
 /// `whisper_model_path` resolved (`None` if the registry entry is somehow
 /// missing/misshapen). Stage 0.8: the rejection names `model_name` (the
@@ -544,7 +561,14 @@ pub async fn retranscribe_session(
     // the registry entry is somehow missing (mirrors `start_recording`'s own
     // fallback for `active_model` in lib.rs).
     let cfg = Config::load();
-    let model_name = models::find(&cfg.retranscribe_model)
+    let selected_spec = models::find(&cfg.retranscribe_model);
+    // Stage 0.8.x curation: reject before even checking download status --
+    // a retired model must never run again just because a stale config still
+    // names it (per the brief, the owner's current config already points at
+    // the still-valid `whisper-large-v3`, but this guards any config that
+    // doesn't).
+    check_model_not_retired(selected_spec)?;
+    let model_name = selected_spec
         .map(|spec| spec.name)
         .unwrap_or(cfg.retranscribe_model.as_str());
     let model_path = whisper_model_path(&cfg.retranscribe_model);
@@ -773,6 +797,31 @@ mod tests {
             let flac = dir.path().join("call.flac");
             std::fs::write(&flac, b"x").unwrap();
             assert!(check_audio_present(Some(&flac)).is_ok());
+        }
+
+        #[test]
+        fn check_model_not_retired_allows_a_currently_offered_model() {
+            assert!(check_model_not_retired(models::find("whisper-large-v3")).is_ok());
+        }
+
+        #[test]
+        fn check_model_not_retired_allows_an_unrecognized_id() {
+            // Not the retired case -- left to `check_model_ready`'s own
+            // "isn't downloaded" rejection instead.
+            assert!(check_model_not_retired(None).is_ok());
+        }
+
+        /// Stage-0.8.x curation: the core regression this task guards against
+        /// -- a config still pointing at one of the two curated-out whisper
+        /// entries must be rejected with a message telling the user to pick a
+        /// model in Settings, the same "no longer offered" message
+        /// `set_retranscribe_model` gives (this reuses `models::validate_
+        /// not_retired` directly, so it's provably the same rejection path).
+        #[test]
+        fn check_model_not_retired_rejects_a_retired_model_with_the_pick_in_settings_message() {
+            let err = check_model_not_retired(models::find("whisper-large-v3-q5")).unwrap_err();
+            assert!(err.contains("no longer offered"), "{err}");
+            assert!(err.contains("Settings"), "{err}");
         }
 
         #[test]

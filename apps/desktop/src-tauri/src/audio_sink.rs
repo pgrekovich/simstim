@@ -85,6 +85,16 @@
 //! from. Using a distinct working path removes the possibility entirely
 //! instead of depending on operation ordering.
 //!
+//! That same class of self-collision resurfaces one level up, though (wave
+//! 4): `retranscribe::resolve_audio_path`'s last-resort fallback (wave 3,
+//! see the crash-safety section above) can hand back
+//! [`recording_wav_path_for`] ITSELF as `existing_audio_path`, when a
+//! PREVIOUS continuation of this same session crashed before reaching a
+//! clean stop. `AudioSink::new_continuing` handles that specific case by
+//! moving the crashed file aside to a distinct recovery path before ever
+//! creating the new working file at that same name -- see its own doc
+//! comment for the full mechanics.
+//!
 //! The existing audio file is never touched by any of this except by
 //! [`AudioSink::finish`]'s own controlled rename/removal once the new
 //! recording is fully written: prefilling only reads it, writing into the
@@ -495,40 +505,99 @@ impl AudioSink {
     /// value as the new transcript lines' continuation offset too, so audio
     /// position and transcript timestamps stay on the same clock.
     ///
-    /// Returns `Err` (without ever touching whatever `existing_audio_path`
-    /// pointed at -- only reads from it) if the prefill itself fails, e.g. a
-    /// corrupt or unreadable old audio file; the partially-written working
-    /// file is removed before returning so it doesn't linger as a stray temp
-    /// file. Callers must treat this the same as an `AudioSink::new`
-    /// failure: report it and disable audio for the recording entirely, per
-    /// the Global Constraints (a sink problem must not kill the recording,
-    /// and per this task, must not silently continue with misaligned audio
-    /// either).
+    /// Returns `Err` (without ever destroying whatever `existing_audio_path`
+    /// pointed at -- only reads from it, or in the crashed-continuation case
+    /// below, moves it somewhere still recoverable) if the prefill itself
+    /// fails, e.g. a corrupt or unreadable old audio file; the
+    /// partially-written working file is removed before returning so it
+    /// doesn't linger as a stray temp file. Callers must treat this the same
+    /// as an `AudioSink::new` failure: report it and disable audio for the
+    /// recording entirely, per the Global Constraints (a sink problem must
+    /// not kill the recording, and per this task, must not silently
+    /// continue with misaligned audio either).
+    ///
+    /// **The working-path self-collision case** (Important fix-review
+    /// finding, wave 4): `existing_audio_path` can legitimately BE
+    /// [`recording_wav_path_for`] itself -- `retranscribe::resolve_audio_path`
+    /// falls back to it as a last resort (wave 3) when a PREVIOUS
+    /// continuation of this same session crashed before ever reaching a
+    /// clean `Stop`, and `session.rs` (the only production call site) passes
+    /// whatever that resolves to straight through. Below, `create_at`
+    /// truncates `recording_wav_path_for(base_path)` the instant it opens
+    /// it for THIS new recording -- reading `existing_audio_path` afterward
+    /// would silently prefill 0 frames from an already-emptied file,
+    /// discarding exactly the crashed audio this fallback exists to
+    /// recover (the wave-2 collision, reincarnated at this one specific
+    /// source). So before `create_at` ever runs, this case is detected and
+    /// the crashed file is renamed aside to a distinct recovery path
+    /// (`<base>.recovering.wav`) first; the prefill reads from THAT copy
+    /// instead. The recovery copy is deleted only once the prefill (and
+    /// silence pad, and flush) fully succeeds; if any of those fail, it's
+    /// left in place on disk, and the returned error names it explicitly so
+    /// nothing is silently lost even on a double failure (a crashed
+    /// recording whose own captured audio also turns out to be corrupt).
     pub fn new_continuing(
         base_path: &Path,
         existing_audio_path: Option<&Path>,
         last_offset_secs: f64,
     ) -> anyhow::Result<(AudioSink, f64)> {
-        let mut sink = Self::create_at(recording_wav_path_for(base_path), audio_path_for(base_path))?;
+        let working_path = recording_wav_path_for(base_path);
+        let recovery_path = base_path.with_extension("recovering.wav");
 
-        let prefill_result: anyhow::Result<usize> = match existing_audio_path {
-            Some(existing) => stream_prefill_audio(&mut sink.writer, existing),
-            None => Ok(0),
+        let (prefill_source, recovering) = match existing_audio_path {
+            Some(existing) if existing == working_path => {
+                std::fs::rename(&working_path, &recovery_path)?;
+                (Some(recovery_path.clone()), true)
+            }
+            other => (other.map(Path::to_path_buf), false),
         };
-        let prefilled_frames = match prefill_result {
-            Ok(frames) => frames,
+
+        let mut sink = Self::create_at(working_path, audio_path_for(base_path))?;
+
+        match Self::prefill_and_pad(&mut sink.writer, prefill_source.as_deref(), last_offset_secs) {
+            Ok(target_frames) => {
+                if recovering {
+                    // Safely absorbed into the new working file now --
+                    // the recovery copy is redundant.
+                    let _ = std::fs::remove_file(&recovery_path);
+                }
+                let target_base_secs = target_frames as f64 / SAMPLE_RATE as f64;
+                Ok((sink, target_base_secs))
+            }
             Err(e) => {
                 let _ = std::fs::remove_file(&sink.wav_path);
-                return Err(e);
+                Err(if recovering {
+                    anyhow::anyhow!(
+                        "{e}; the previous (crashed) recording's audio was moved to {} \
+                         and left there -- it was not deleted",
+                        recovery_path.display()
+                    )
+                } else {
+                    e
+                })
             }
+        }
+    }
+
+    /// The prefill + silence-pad + flush sequence shared by every
+    /// `new_continuing` case, returning the reconciled target frame count
+    /// (see [`target_base_frames`]) on success. Split out so
+    /// `new_continuing` only has to wrap ONE error site -- not three --
+    /// with the "the crashed audio was moved aside, not deleted" context
+    /// for its working-path self-collision case.
+    fn prefill_and_pad(
+        writer: &mut hound::WavWriter<BufWriter<File>>,
+        existing_path: Option<&Path>,
+        last_offset_secs: f64,
+    ) -> anyhow::Result<usize> {
+        let prefilled_frames = match existing_path {
+            Some(existing) => stream_prefill_audio(writer, existing)?,
+            None => 0,
         };
 
         let target_frames = target_base_frames(prefilled_frames, last_offset_secs);
         if target_frames > prefilled_frames {
-            if let Err(e) = write_silence_frames(&mut sink.writer, target_frames - prefilled_frames) {
-                let _ = std::fs::remove_file(&sink.wav_path);
-                return Err(e);
-            }
+            write_silence_frames(writer, target_frames - prefilled_frames)?;
         }
 
         // Flush right after prefilling, same crash-safety reasoning as
@@ -536,13 +605,9 @@ impl AudioSink {
         // prefilled prefix -- not just the tail since the last flush -- would
         // read back as 0 samples if the process died before the first
         // regular `push`-triggered flush.
-        if let Err(e) = sink.writer.flush() {
-            let _ = std::fs::remove_file(&sink.wav_path);
-            return Err(e.into());
-        }
+        writer.flush()?;
 
-        let target_base_secs = target_frames as f64 / SAMPLE_RATE as f64;
-        Ok((sink, target_base_secs))
+        Ok(target_frames)
     }
 
     /// Queues `samples` for `channel`, immediately writes whatever the sync
@@ -1081,6 +1146,137 @@ mod tests {
             let decoded: Vec<i32> = reader.samples().map(|s| s.unwrap()).collect();
             assert_eq!(decoded[0], f32_to_i16(0.5) as i32);
             assert_eq!(decoded[1], f32_to_i16(0.25) as i32);
+        }
+
+        /// Important fix-review finding, wave 4, the core regression guard:
+        /// `resolve_audio_path`'s last resort (wave 3) can hand back
+        /// `recording_wav_path_for` ITSELF as `existing_audio_path` -- the
+        /// "a previous continuation of this session crashed" scenario. Since
+        /// that's the exact path `create_at` is about to truncate for THIS
+        /// new recording, naively prefilling from it (as wave 3 left it)
+        /// would silently copy 0 frames from an already-emptied file,
+        /// discarding exactly the crashed audio the fallback exists to
+        /// save. Proves the fix recovers it: the resulting audio decodes to
+        /// the crashed (old) content followed by this recording's new
+        /// content, not just the new content alone.
+        #[test]
+        fn continuing_when_the_existing_source_is_the_working_path_itself_recovers_it() {
+            let dir = tempfile::tempdir().unwrap();
+            let md_path = dir.path().join("call.md");
+            let no_op = |_msg: String| {};
+
+            // Simulates a crashed prior continuation: real audio sitting at
+            // the dedicated working path, written directly (not through a
+            // live `AudioSink`, since that's exactly what a crash mid-write
+            // would leave -- an ordinary, readable wav file, just under the
+            // working name instead of the canonical one).
+            let crashed_me: Vec<f32> = (0..40).map(|i| (i as f32 / 100.0) - 0.2).collect();
+            let crashed_them: Vec<f32> = (0..40).map(|i| 0.2 - (i as f32 / 100.0)).collect();
+            let working_path = recording_wav_path_for(&md_path);
+            {
+                let spec = hound::WavSpec {
+                    channels: 2,
+                    sample_rate: SAMPLE_RATE,
+                    bits_per_sample: 16,
+                    sample_format: hound::SampleFormat::Int,
+                };
+                let mut writer = hound::WavWriter::create(&working_path, spec).unwrap();
+                for i in 0..crashed_me.len() {
+                    writer.write_sample(f32_to_i16(crashed_me[i])).unwrap();
+                    writer.write_sample(f32_to_i16(crashed_them[i])).unwrap();
+                }
+                writer.finalize().unwrap();
+            }
+            assert!(working_path.exists(), "expected the crashed continuation's audio to exist");
+
+            // The exact call shape `session.rs` uses: `resolve_audio_path`
+            // would have returned this same working path here.
+            let (mut sink, _target_base_secs) =
+                AudioSink::new_continuing(&md_path, Some(&working_path), 0.0).unwrap();
+
+            let new_me = [0.2f32, -0.4];
+            let new_them = [0.3f32, -0.6];
+            for i in 0..new_me.len() {
+                sink.push(Channel::Me, &new_me[i..i + 1], &no_op);
+                sink.push(Channel::Them, &new_them[i..i + 1], &no_op);
+            }
+            let final_path = sink.finish(&no_op).unwrap();
+
+            let mut reader = claxon::FlacReader::open(&final_path).unwrap();
+            let samples: Vec<i32> = reader.samples().map(|s| s.unwrap()).collect();
+            let decoded_me: Vec<i32> = samples.iter().step_by(2).copied().collect();
+            let decoded_them: Vec<i32> = samples.iter().skip(1).step_by(2).copied().collect();
+
+            let expected_crashed_me: Vec<i32> =
+                crashed_me.iter().map(|&s| f32_to_i16(s) as i32).collect();
+            let expected_crashed_them: Vec<i32> =
+                crashed_them.iter().map(|&s| f32_to_i16(s) as i32).collect();
+            assert!(
+                decoded_me.len() >= crashed_me.len() + new_me.len(),
+                "expected crashed(old)+new frames, got {} frames",
+                decoded_me.len()
+            );
+            assert_eq!(
+                &decoded_me[..crashed_me.len()],
+                &expected_crashed_me[..],
+                "the crashed continuation's audio must be recovered, not discarded"
+            );
+            assert_eq!(
+                &decoded_them[..crashed_them.len()],
+                &expected_crashed_them[..],
+                "the crashed continuation's audio must be recovered, not discarded"
+            );
+            let new_start = crashed_me.len();
+            assert_eq!(
+                decoded_me[new_start..new_start + new_me.len()],
+                new_me.iter().map(|&s| f32_to_i16(s) as i32).collect::<Vec<_>>()[..],
+                "new audio must be appended right after the recovered crashed audio"
+            );
+
+            // The recovery copy and the old working path itself must both be
+            // gone once absorbed into the final result -- nothing left
+            // dangling on a successful recovery.
+            assert!(!md_path.with_extension("recovering.wav").exists());
+            assert!(!recording_wav_path_for(&md_path).exists());
+        }
+
+        /// Companion to the recovery test above: if the prefill from the
+        /// recovered (moved-aside) file itself fails -- e.g. the crashed
+        /// recording's own captured audio also turns out to be corrupt, a
+        /// double failure -- the moved-aside copy must NOT be destroyed
+        /// (it's the only remaining copy of that audio), the error must name
+        /// where it ended up, and the caller must still get a plain `Err` to
+        /// disable audio for this recording without losing the file.
+        #[test]
+        fn continuing_when_recovering_the_working_path_and_the_prefill_then_fails_keeps_the_recovered_file(
+        ) {
+            let dir = tempfile::tempdir().unwrap();
+            let md_path = dir.path().join("call.md");
+            let working_path = recording_wav_path_for(&md_path);
+            let corrupt_bytes = b"not a real wav file, definitely corrupt";
+            std::fs::write(&working_path, corrupt_bytes).unwrap();
+
+            let result = AudioSink::new_continuing(&md_path, Some(&working_path), 0.0);
+            let err = result.err().expect("a corrupt existing audio file must fail the prefill");
+            let recovery_path = md_path.with_extension("recovering.wav");
+            assert!(
+                format!("{err}").contains("recovering.wav"),
+                "the error must name the recovery path where the file ended up: {err}"
+            );
+
+            assert!(
+                recovery_path.exists(),
+                "the moved-aside (recovered) file must survive a failed prefill, not be deleted"
+            );
+            let after = std::fs::read(&recovery_path).unwrap();
+            assert_eq!(
+                after, corrupt_bytes,
+                "the recovered file's bytes must be intact, byte-exact"
+            );
+            assert!(
+                !working_path.exists(),
+                "the working path was already renamed aside before the prefill ran"
+            );
         }
 
         /// Critical fix-review finding, the core regression guard: a corrupt

@@ -897,6 +897,87 @@ mod continuing_audio {
         );
     }
 
+    /// Important fix-review finding, wave 4: `resolve_audio_path`'s
+    /// last-resort fallback (wave 3) to a session's `.recording.wav` can
+    /// hand `session.rs` back the EXACT path `AudioSink::new_continuing`
+    /// is about to create (and truncate) as this new recording's own
+    /// working file -- the working-path self-collision `AudioSink` now
+    /// detects and works around by moving the crashed file aside first.
+    /// Exercises this through the real production path (`Session::start`,
+    /// which resolves the audio via `resolve_audio_path` internally), not
+    /// just the `AudioSink` unit tests that call `new_continuing` directly.
+    #[test]
+    fn continuing_after_a_crashed_prior_continuation_recovers_its_audio() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("call.md");
+        std::fs::write(&out, existing_md("duration: 1m\n")).unwrap();
+
+        // Simulate a crash mid-continuation: no `.flac`, no `.wav` -- only
+        // the dedicated working file a continued recording writes to while
+        // it's live, containing real (crashed) audio.
+        let crashed_frame_count = 3 * 16_000;
+        let recording_wav_path = out.with_extension("recording.wav");
+        {
+            let spec = hound::WavSpec {
+                channels: 2,
+                sample_rate: 16_000,
+                bits_per_sample: 16,
+                sample_format: hound::SampleFormat::Int,
+            };
+            let mut writer = hound::WavWriter::create(&recording_wav_path, spec).unwrap();
+            for _ in 0..crashed_frame_count {
+                writer.write_sample(2500i16).unwrap();
+                writer.write_sample(2500i16).unwrap();
+            }
+            writer.finalize().unwrap();
+        }
+        assert!(recording_wav_path.exists(), "expected the crashed continuation's audio to exist");
+        assert!(!desktop_lib::audio_sink::audio_path_for(&out).exists());
+        assert!(!out.with_extension("wav").exists());
+
+        let seed = desktop_lib::session::load_continue_from(&out).unwrap();
+        let samples = load_wav_16k_mono(&test_wav_path());
+        let (tx, rx) = channel();
+        let session = desktop_lib::session::Session::start(
+            rx,
+            out.clone(),
+            Some(seed),
+            no_pending_edits(),
+            true,
+            |_| {},
+            |_, _| {},
+            |_| {},
+        );
+        for chunk in samples.chunks(1600) {
+            tx.send(Chunk {
+                channel: Channel::Them,
+                samples: chunk.to_vec(),
+            })
+            .unwrap();
+        }
+        drop(tx);
+        let path = session.stop().unwrap();
+
+        let final_flac = desktop_lib::audio_sink::audio_path_for(&path);
+        assert!(final_flac.exists(), "expected a clean flac encode for this recording");
+        let mut reader = claxon::FlacReader::open(&final_flac).unwrap();
+        let decoded: Vec<i32> = reader.samples().map(|s| s.unwrap()).collect();
+        let total_frames = decoded.len() / 2;
+        assert!(
+            total_frames > crashed_frame_count,
+            "expected crashed(old)+new audio, got only {total_frames} frames \
+             (the crashed audio alone was {crashed_frame_count})"
+        );
+        assert!(
+            decoded[..crashed_frame_count * 2].iter().all(|&s| s == 2500),
+            "the crashed continuation's audio must be recovered byte-exact, not discarded"
+        );
+
+        // Nothing left dangling once recovered into the final flac.
+        assert!(!recording_wav_path.exists());
+        assert!(!out.with_extension("recovering.wav").exists());
+    }
+
     /// Regression guard for the fix's error-handling requirement: a corrupt
     /// old audio file must not be silently skipped (which would leave the
     /// new recording's audio misaligned with its transcript's continued

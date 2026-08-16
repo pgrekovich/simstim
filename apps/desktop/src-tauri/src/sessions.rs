@@ -201,6 +201,9 @@ fn rewrite_session(path: &Path, title: &str, notes: &str) -> Result<()> {
     if let Some(duration_secs) = meta.duration_secs {
         transcript.set_duration_secs(duration_secs);
     }
+    if let Some(audio_from_secs) = meta.audio_from_secs {
+        transcript.set_audio_from_secs(audio_from_secs);
+    }
     transcript.set_raw_transcript(existing.transcript.clone());
     transcript.save(path)
 }
@@ -214,10 +217,24 @@ fn rewrite_session(path: &Path, title: &str, notes: &str) -> Result<()> {
 /// the transcript and asr.
 ///
 /// Used by the stage-0.7 re-transcribe pipeline (`retranscribe.rs`): per the
-/// Global Constraints, re-transcribing REPLACES the transcript section
-/// outright rather than merging with what was there (the owner's ruling:
-/// the app never edits transcripts, so the previous pass's text is not kept
-/// once a new one lands).
+/// Global Constraints, re-transcribing REPLACES the transcript section with
+/// `new_transcript` -- normally outright (the owner's ruling: the app never
+/// edits transcripts, so the previous pass's text is not kept once a new one
+/// lands) -- EXCEPT when `meta.audio_from_secs` is set (Critical fix-review
+/// finding, stage 0.9): that field means the underlying audio file's first
+/// `audio_from_secs` seconds are synthetic silence, not a recording of that
+/// portion of the call (see `simstim_transcript::Transcript::
+/// set_audio_from_secs`'s docs -- this happens when a session is continued
+/// after its audio was deleted). Whisper's pass over that file, which
+/// produced `new_transcript`, can only ever have real content for the
+/// portion AFTER `audio_from_secs`, so in that case this keeps whatever of
+/// the EXISTING transcript predates `audio_from_secs`
+/// (`simstim_transcript::split_transcript_at`) and appends `new_transcript`
+/// after it, rather than blowing away the earlier call's only copy of its
+/// text. If that split can't be safely computed (an existing transcript with
+/// no parseable timestamp at all -- see `split_transcript_at`'s docs), this
+/// returns `Err` WITHOUT writing anything: never guess and risk losing text
+/// on an unknown shape.
 ///
 /// Note: see `save_session_at`'s doc comment for the same last-writer-wins
 /// millisecond window against this function specifically -- not corrupting
@@ -229,6 +246,26 @@ pub fn rewrite_transcript_at(path: &Path, new_transcript: &str, asr_id: &str) ->
         .map(|dt| dt.with_timezone(&Local))
         .unwrap_or_else(|_| Local::now());
 
+    let final_transcript = match meta.audio_from_secs {
+        Some(audio_from_secs) if audio_from_secs > 0 => {
+            let kept =
+                simstim_transcript::split_transcript_at(&existing.transcript, audio_from_secs as f64)
+                    .ok_or_else(|| {
+                        anyhow!(
+                            "this session's earlier transcript couldn't be safely separated \
+                             from its continued recording -- re-transcribe was not run, to \
+                             avoid losing text"
+                        )
+                    })?;
+            if kept.is_empty() {
+                new_transcript.to_string()
+            } else {
+                format!("{kept}\n{new_transcript}")
+            }
+        }
+        _ => new_transcript.to_string(),
+    };
+
     let mut transcript = Transcript::new(started_at);
     transcript.set_raw_date(existing.date.clone());
     transcript.set_title(existing.title.clone());
@@ -236,8 +273,11 @@ pub fn rewrite_transcript_at(path: &Path, new_transcript: &str, asr_id: &str) ->
     if let Some(duration_secs) = meta.duration_secs {
         transcript.set_duration_secs(duration_secs);
     }
+    if let Some(audio_from_secs) = meta.audio_from_secs {
+        transcript.set_audio_from_secs(audio_from_secs);
+    }
     transcript.set_asr(asr_id);
-    transcript.set_raw_transcript(new_transcript.to_string());
+    transcript.set_raw_transcript(final_transcript);
     transcript.save(path)
 }
 
@@ -684,5 +724,89 @@ mod tests {
         );
         assert!(after.contains("[00:00:01] Me: hi"));
         assert!(after.contains("[00:00:04] Them: hey"));
+    }
+
+    /// Critical fix-review finding, stage 0.9: continuing a session whose
+    /// audio was deleted, then re-transcribing, must keep the earlier call's
+    /// text (everything before `audio_from`) and only replace the rest with
+    /// whisper's new output -- not blow away the whole transcript the way a
+    /// plain `audio_from`-less rewrite always has.
+    mod audio_from_aware_rewrite {
+        use super::*;
+
+        #[test]
+        fn continuation_after_deleted_audio_keeps_the_earlier_lines_and_appends_the_new_ones() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("call.md");
+            let mut tr = Transcript::new(t(10, 0, 0));
+            tr.set_title("Weekly sync".into());
+            tr.add(Speaker::Me, 3.0, "the first call's text".into());
+            tr.add(Speaker::Them, 15.0, "still the first call".into());
+            // Continuing after the audio was deleted: the new recording's
+            // audio only covers the timeline from 15s onward (silence
+            // prefilled up to there) -- see `Transcript::set_audio_from_secs`.
+            tr.set_audio_from_secs(15);
+            tr.save(&path).unwrap();
+
+            rewrite_transcript_at(
+                &path,
+                "[00:00:20] Me: brand new text from the continued call",
+                "whisper-large-v3-turbo-q8",
+            )
+            .unwrap();
+
+            let after = std::fs::read_to_string(&path).unwrap();
+            assert!(
+                after.contains("[00:00:03] Me: the first call's text"),
+                "the earlier (pre-audio_from) line must survive: {after}"
+            );
+            assert!(
+                after.contains("[00:00:20] Me: brand new text from the continued call"),
+                "the new whisper output must be appended: {after}"
+            );
+            // The line exactly AT audio_from (15) is the documented boundary
+            // case (split_transcript_at keeps strictly < audio_from only):
+            // it's dropped, not duplicated alongside the new content.
+            assert!(!after.contains("still the first call"));
+            assert!(after.contains("audio_from: 15"), "audio_from must be preserved: {after}");
+        }
+
+        #[test]
+        fn a_normal_session_with_no_audio_from_still_replaces_everything() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("call.md");
+            let mut tr = Transcript::new(t(10, 0, 0));
+            tr.add(Speaker::Me, 3.0, "old parakeet text".into());
+            tr.save(&path).unwrap();
+
+            rewrite_transcript_at(&path, "[00:00:05] Me: new whisper text", "whisper-large-v3-turbo-q8")
+                .unwrap();
+
+            let after = std::fs::read_to_string(&path).unwrap();
+            assert!(after.contains("[00:00:05] Me: new whisper text"));
+            assert!(!after.contains("old parakeet text"));
+            assert!(!after.contains("audio_from:"));
+        }
+
+        #[test]
+        fn refuses_and_leaves_the_file_byte_identical_when_the_existing_transcript_cannot_be_split() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("call.md");
+            // A hand-edited transcript with no parseable timestamp at all,
+            // paired with a positive audio_from: split_transcript_at can't
+            // tell what predates the cutoff, so this must refuse rather than
+            // guess.
+            let content = "---\ndate: 2026-06-01T09:00:00+02:00\ntitle: Weird\nasr: parakeet-tdt-0.6b-v3\naudio_from: 15\n---\n\n## Transcript\n\njust some hand-written prose, no timestamps\n";
+            std::fs::write(&path, content).unwrap();
+            let before = std::fs::read_to_string(&path).unwrap();
+
+            let err =
+                rewrite_transcript_at(&path, "[00:00:20] Me: new text", "whisper-large-v3-turbo-q8")
+                    .unwrap_err();
+            assert!(err.to_string().contains("couldn't be safely separated"), "{err}");
+
+            let after = std::fs::read_to_string(&path).unwrap();
+            assert_eq!(after, before, "the file must be left byte-identical on refusal");
+        }
     }
 }

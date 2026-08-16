@@ -278,22 +278,28 @@ impl RetranscribeState {
     }
 }
 
-/// Claims or queues `path` on `app`'s [`RetranscribeState`]. A thin lock-and-
-/// delegate wrapper around [`RetranscribeQueue::enqueue`] so callers (the
-/// command and the auto-trigger) don't each reach into the `Mutex`
-/// themselves.
-fn try_enqueue<R: tauri::Runtime>(app: &AppHandle<R>, path: &str) -> EnqueueOutcome {
+/// Claims or queues `path` on `app`'s [`RetranscribeState`], storing `job`'s
+/// data atomically with the enqueue decision, under ONE lock acquisition
+/// (Important fix-review finding, stage 0.9). The previous version was two
+/// SEPARATE lock acquisitions -- `try_enqueue` decided `Queued`, then a
+/// second call, `store_pending_job`, stored the data -- leaving a gap in
+/// between where the currently-running job could finish: `advance_queue`
+/// would promote this path out of `pending` and into `running`, find no
+/// entry in `jobs` yet (since `store_pending_job` hadn't run), and simply
+/// return -- wedging the queue with `running` permanently claimed by a path
+/// nothing would ever actually start, and every later job queueing behind
+/// it forever. `job` is only actually stored when the outcome is `Queued`;
+/// for every other outcome (`StartNow`, `AlreadyRunning`, `AlreadyQueued`)
+/// it's simply dropped -- the caller already has everything it needs for
+/// those cases from its own locals (see the two call sites below).
+fn try_enqueue<R: tauri::Runtime>(app: &AppHandle<R>, path: &str, job: QueuedJob) -> EnqueueOutcome {
     let jobs_state = app.state::<RetranscribeState>();
     let mut inner = jobs_state.0.lock().unwrap();
-    inner.queue.enqueue(path)
-}
-
-/// Stores `job`'s data for a path that [`try_enqueue`] just reported as
-/// `Queued`, so whichever job eventually dequeues it (`advance_queue`) has
-/// what it needs to actually run it.
-fn store_pending_job<R: tauri::Runtime>(app: &AppHandle<R>, path: String, job: QueuedJob) {
-    let jobs_state = app.state::<RetranscribeState>();
-    jobs_state.0.lock().unwrap().jobs.insert(path, job);
+    let outcome = inner.queue.enqueue(path);
+    if outcome == EnqueueOutcome::Queued {
+        inner.jobs.insert(path.to_string(), job);
+    }
+    outcome
 }
 
 /// Called at the tail of every job, success or failure (mirrors the
@@ -309,33 +315,38 @@ fn store_pending_job<R: tauri::Runtime>(app: &AppHandle<R>, path: String, job: Q
 /// directly-awaited one: the caller (`run_job`) must not block its own
 /// return on however long the ENTIRE rest of the queue takes to drain.
 fn advance_queue<R: tauri::Runtime>(app: AppHandle<R>) {
-    let jobs_state = app.state::<RetranscribeState>();
-    let next_path = {
-        let mut inner = jobs_state.0.lock().unwrap();
-        inner.queue.finish_and_advance()
-    };
-    let Some(next_path) = next_path else {
+    loop {
+        let jobs_state = app.state::<RetranscribeState>();
+        let next_path = {
+            let mut inner = jobs_state.0.lock().unwrap();
+            inner.queue.finish_and_advance()
+        };
+        let Some(next_path) = next_path else {
+            return;
+        };
+        let job = {
+            let mut inner = jobs_state.0.lock().unwrap();
+            inner.jobs.remove(&next_path)
+        };
+        let Some(job) = job else {
+            // Belt-and-suspenders (Important fix-review finding, stage
+            // 0.9): should never happen now that `try_enqueue` stores the
+            // job atomically with the enqueue decision, but if a promoted
+            // path still somehow has no data for it, there is nothing
+            // sensible to run it with. Treat it as already finished (it
+            // never actually ran) and advance again, rather than returning
+            // and leaving it wedged as `running` forever -- the exact
+            // failure mode this whole fix exists to close.
+            continue;
+        };
+        tauri::async_runtime::spawn(async move {
+            let result = run_job(app, next_path, job.md_path, job.asr_id, job.delete_audio_after).await;
+            if let Some(waiter) = job.waiter {
+                let _ = waiter.send(result);
+            }
+        });
         return;
-    };
-    let job = {
-        let mut inner = jobs_state.0.lock().unwrap();
-        inner.jobs.remove(&next_path)
-    };
-    // Should never happen: every `Queued` outcome always stores a
-    // `QueuedJob` for that exact path before the slot could ever be handed
-    // to it (`try_enqueue` and `store_pending_job` are always called
-    // together, in that order, by every caller below). Nothing sensible to
-    // do with a path but no data for it, so just stop rather than run
-    // something with fields that don't exist.
-    let Some(job) = job else {
-        return;
-    };
-    tauri::async_runtime::spawn(async move {
-        let result = run_job(app, next_path, job.md_path, job.asr_id, job.delete_audio_after).await;
-        if let Some(waiter) = job.waiter {
-            let _ = waiter.send(result);
-        }
-    });
+    }
 }
 
 /// Re-validates a job immediately before it actually starts running --
@@ -384,6 +395,19 @@ fn revalidate_before_run(
     let audio_path = resolve_audio_path(md_path);
     check_audio_present(audio_path.as_deref())?;
     let audio_path = audio_path.expect("checked present by check_audio_present");
+
+    // Critical fix-review finding, stage 0.9: re-check the transcript is
+    // still splittable, freshly, immediately before this job runs -- same
+    // reasoning as every other check in this function (a job can sit queued
+    // for a while; a snapshot from accept time can go stale). The
+    // AUTHORITATIVE check (and the one that actually combines kept + new
+    // text) is `sessions::rewrite_transcript_at`'s own, re-read again right
+    // before the final write; this is the same early-exit courtesy the other
+    // checks here already give (don't run the whole whisper pass only to
+    // refuse at the very end).
+    let existing = simstim_transcript::parse_session(md_path).map_err(|e| e.to_string())?;
+    let meta = simstim_transcript::parse_meta(md_path).map_err(|e| e.to_string())?;
+    check_transcript_splittable(&existing.transcript, meta.audio_from_secs)?;
 
     let selected_spec = models::find(asr_id);
     check_model_not_retired(selected_spec)?;
@@ -512,7 +536,19 @@ pub(crate) fn maybe_auto_retranscribe<R: tauri::Runtime>(app: AppHandle<R>, path
             let asr_id = cfg.retranscribe_model.clone();
             let delete_audio_after = cfg.delete_audio_after_retranscribe;
 
-            match try_enqueue(&app, &path) {
+            // Important fix-review finding, stage 0.9: `job` is built BEFORE
+            // calling `try_enqueue` so enqueue+store happen atomically, under
+            // one lock (see `try_enqueue`'s own doc comment) -- `md_path`/
+            // `asr_id` are cloned here so the originals remain available for
+            // the `StartNow` branch below, which needs them regardless of
+            // whether `job` (moved into `try_enqueue`) actually got stored.
+            let job = QueuedJob {
+                md_path: md_path.clone(),
+                asr_id: asr_id.clone(),
+                delete_audio_after,
+                waiter: None,
+            };
+            match try_enqueue(&app, &path, job) {
                 EnqueueOutcome::AlreadyRunning | EnqueueOutcome::AlreadyQueued => {
                     // Already running or queued -- e.g. the owner manually
                     // clicked re-transcribe on this exact session right as
@@ -523,16 +559,8 @@ pub(crate) fn maybe_auto_retranscribe<R: tauri::Runtime>(app: AppHandle<R>, path
                     tauri::async_runtime::spawn(run_job(app, path, md_path, asr_id, delete_audio_after));
                 }
                 EnqueueOutcome::Queued => {
-                    store_pending_job(
-                        &app,
-                        path,
-                        QueuedJob {
-                            md_path,
-                            asr_id,
-                            delete_audio_after,
-                            waiter: None,
-                        },
-                    );
+                    // Already stored by `try_enqueue` itself -- nothing left
+                    // to do.
                 }
             }
         }
@@ -786,6 +814,34 @@ fn check_not_active(
         Err("this call is still being saved, try again in a moment".to_string())
     } else {
         Ok(())
+    }
+}
+
+/// Whether re-transcribing `md_path` (given its EXISTING transcript text and
+/// `audio_from_secs` field, both already read) can safely combine that text
+/// with whisper's fresh output rather than blowing it away (Critical
+/// fix-review finding, stage 0.9 -- see `simstim_transcript::Transcript::
+/// set_audio_from_secs`'s docs and `sessions::rewrite_transcript_at`, which
+/// does the actual combining at write time). `None`/`Some(0)` always pass --
+/// nothing to split, a full replace is exactly today's behavior. A cheap
+/// up-front peek mirroring `check_audio_present`/`check_model_ready`: the
+/// authoritative check is `rewrite_transcript_at`'s own (re-read fresh right
+/// before the write, since a whisper pass can take minutes), but rejecting
+/// here first avoids running that whole pass only to refuse at the very end.
+fn check_transcript_splittable(existing_transcript: &str, audio_from_secs: Option<u64>) -> Result<(), String> {
+    let Some(audio_from_secs) = audio_from_secs else {
+        return Ok(());
+    };
+    if audio_from_secs == 0 {
+        return Ok(());
+    }
+    match simstim_transcript::split_transcript_at(existing_transcript, audio_from_secs as f64) {
+        Some(_) => Ok(()),
+        None => Err(
+            "this session's earlier transcript couldn't be safely separated from its \
+             continued recording -- re-transcribe was not run, to avoid losing text"
+                .to_string(),
+        ),
     }
 }
 
@@ -1093,6 +1149,17 @@ pub async fn retranscribe_session(
     let audio_path = resolve_audio_path(&md_path);
     check_audio_present(audio_path.as_deref())?;
 
+    // Critical fix-review finding, stage 0.9: reject up front if this
+    // session's existing transcript can't be safely split against its
+    // `audio_from` marker (see `check_transcript_splittable`'s docs) --
+    // manual and auto behave identically here, since both eventually flow
+    // through `revalidate_before_run`'s own (authoritative) copy of this
+    // same check; this is just the same early-exit courtesy every other
+    // check here already gives.
+    let existing = simstim_transcript::parse_session(&md_path).map_err(|e| e.to_string())?;
+    let meta = simstim_transcript::parse_meta(&md_path).map_err(|e| e.to_string())?;
+    check_transcript_splittable(&existing.transcript, meta.audio_from_secs)?;
+
     // Stage 0.8: the model to use is whichever the owner has selected, not a
     // fixed constant. Falls back to the raw id for the rejection message if
     // the registry entry is somehow missing (mirrors `start_recording`'s own
@@ -1121,7 +1188,20 @@ pub async fn retranscribe_session(
     // docs) -- a second call no longer bounces off "another session is
     // already being re-transcribed"; it queues, and this call simply awaits
     // its OWN job's result once its turn comes.
-    match try_enqueue(&app, &path) {
+    // Important fix-review finding, stage 0.9: `job` (with its `waiter`
+    // channel already wired up) is built BEFORE calling `try_enqueue` so
+    // enqueue+store happen atomically, under one lock -- see that function's
+    // own doc comment for the wedged-queue race this closes. `md_path`/
+    // `asr_id` are cloned so the originals stay available for the `StartNow`
+    // branch, which needs them regardless of whether `job` got stored.
+    let (tx, rx) = oneshot::channel();
+    let job = QueuedJob {
+        md_path: md_path.clone(),
+        asr_id: asr_id.clone(),
+        delete_audio_after,
+        waiter: Some(tx),
+    };
+    match try_enqueue(&app, &path, job) {
         EnqueueOutcome::AlreadyRunning => {
             Err("this session is already being re-transcribed".to_string())
         }
@@ -1129,21 +1209,9 @@ pub async fn retranscribe_session(
             Err("this session is already queued for re-transcribe".to_string())
         }
         EnqueueOutcome::StartNow => run_job(app, path, md_path, asr_id, delete_audio_after).await,
-        EnqueueOutcome::Queued => {
-            let (tx, rx) = oneshot::channel();
-            store_pending_job(
-                &app,
-                path,
-                QueuedJob {
-                    md_path,
-                    asr_id,
-                    delete_audio_after,
-                    waiter: Some(tx),
-                },
-            );
-            rx.await
-                .unwrap_or_else(|_| Err("the re-transcribe queue was dropped before this job ran".to_string()))
-        }
+        EnqueueOutcome::Queued => rx
+            .await
+            .unwrap_or_else(|_| Err("the re-transcribe queue was dropped before this job ran".to_string())),
     }
 }
 
@@ -1481,6 +1549,13 @@ mod tests {
         use super::*;
         use crate::config::DEFAULT_RETRANSCRIBE_MODEL;
 
+        /// A minimal, valid (no `audio_from`) session fixture: `revalidate_
+        /// before_run` now reads the file at `md_path` itself too (Critical
+        /// fix-review finding, stage 0.9: the splittable-transcript check),
+        /// so every test exercising the checks past `check_audio_present`
+        /// needs a real, parseable file there, not just an untouched path.
+        const VALID_SESSION_FIXTURE: &str = "---\ndate: 2026-06-01T09:00:00+02:00\ntitle: Keep me\nasr: parakeet-tdt-0.6b-v3\n---\n\n## Transcript\n\n[00:00:01] Me: hi\n";
+
         /// The Critical fix-review scenario itself: a job that was queued
         /// (or even one about to start) must be rejected if its target
         /// session has since become active again -- e.g. the owner
@@ -1525,6 +1600,7 @@ mod tests {
         fn rejects_when_the_model_is_no_longer_ready() {
             let dir = tempfile::tempdir().unwrap();
             let md_path = dir.path().join("call.md");
+            std::fs::write(&md_path, VALID_SESSION_FIXTURE).unwrap();
             std::fs::write(dir.path().join("call.flac"), b"x").unwrap();
 
             let err = revalidate_before_run(&md_path, None, None, "no-such-model").unwrap_err();
@@ -1535,6 +1611,7 @@ mod tests {
         fn succeeds_and_resolves_fresh_paths_when_everything_still_checks_out() {
             let dir = tempfile::tempdir().unwrap();
             let md_path = dir.path().join("call.md");
+            std::fs::write(&md_path, VALID_SESSION_FIXTURE).unwrap();
             let flac = dir.path().join("call.flac");
             std::fs::write(&flac, b"x").unwrap();
 
@@ -1542,6 +1619,36 @@ mod tests {
                 revalidate_before_run(&md_path, None, None, DEFAULT_RETRANSCRIBE_MODEL).unwrap();
             assert_eq!(audio_path, flac);
             assert!(model_path.ends_with("ggml-large-v3-turbo-q8_0.bin"), "{}", model_path.display());
+        }
+
+        /// Critical fix-review finding, stage 0.9: a session continued after
+        /// its audio was deleted (`audio_from` set) whose existing transcript
+        /// has no parseable timestamp at all must be REJECTED here -- before
+        /// the whisper pass ever runs -- rather than only failing much later
+        /// at the final write.
+        #[test]
+        fn rejects_when_the_existing_transcript_cannot_be_safely_split() {
+            let dir = tempfile::tempdir().unwrap();
+            let md_path = dir.path().join("call.md");
+            let unsplittable = "---\ndate: 2026-06-01T09:00:00+02:00\ntitle: Weird\nasr: parakeet-tdt-0.6b-v3\naudio_from: 15\n---\n\n## Transcript\n\nno timestamps here at all\n";
+            std::fs::write(&md_path, unsplittable).unwrap();
+            std::fs::write(dir.path().join("call.flac"), b"x").unwrap();
+
+            let err = revalidate_before_run(&md_path, None, None, DEFAULT_RETRANSCRIBE_MODEL).unwrap_err();
+            assert!(err.contains("couldn't be safely separated"), "{err}");
+        }
+
+        /// A session with `audio_from` set but a SPLITTABLE transcript must
+        /// still pass this check (and every other) cleanly.
+        #[test]
+        fn succeeds_when_audio_from_is_set_but_the_transcript_is_splittable() {
+            let dir = tempfile::tempdir().unwrap();
+            let md_path = dir.path().join("call.md");
+            let splittable = "---\ndate: 2026-06-01T09:00:00+02:00\ntitle: Continued\nasr: parakeet-tdt-0.6b-v3\naudio_from: 15\n---\n\n## Transcript\n\n[00:00:03] Me: before the gap\n";
+            std::fs::write(&md_path, splittable).unwrap();
+            std::fs::write(dir.path().join("call.flac"), b"x").unwrap();
+
+            assert!(revalidate_before_run(&md_path, None, None, DEFAULT_RETRANSCRIBE_MODEL).is_ok());
         }
     }
 
@@ -1551,6 +1658,137 @@ mod tests {
     /// `tauri::test::mock_app()` (a real `App<MockRuntime>`, not a hand
     /// stub) via `run_job`'s `R: tauri::Runtime` generic parameter --
     /// mirrors `lib.rs`'s own `asset_scope` tests for the same reason.
+    /// Important fix-review finding, stage 0.9: `try_enqueue` used to be two
+    /// separate lock acquisitions (enqueue-decide, then store), leaving a
+    /// gap where the running job could finish and `advance_queue` would
+    /// promote a path with no stored data yet -- wedging the queue with
+    /// `running` claimed forever. `try_enqueue` now takes the `QueuedJob` and
+    /// stores it atomically, under the SAME lock as the enqueue decision.
+    mod atomic_enqueue {
+        use super::*;
+
+        fn job(md_path: &str) -> QueuedJob {
+            QueuedJob {
+                md_path: PathBuf::from(md_path),
+                asr_id: "whisper-large-v3".to_string(),
+                delete_audio_after: false,
+                waiter: None,
+            }
+        }
+
+        #[test]
+        fn a_queued_outcome_has_its_job_data_stored_by_the_time_try_enqueue_returns() {
+            let app = tauri::test::mock_app();
+            app.manage(RetranscribeState::default());
+            let handle = app.handle().clone();
+
+            // Claim the running slot first so the next call queues instead
+            // of starting immediately.
+            assert_eq!(try_enqueue(&handle, "/tmp/a.md", job("/tmp/a.md")), EnqueueOutcome::StartNow);
+            assert_eq!(try_enqueue(&handle, "/tmp/b.md", job("/tmp/b.md")), EnqueueOutcome::Queued);
+
+            // The whole point of the fix: there is no separate store call
+            // left to make -- by the time `try_enqueue` returns `Queued`,
+            // the data is already there under the exact same lock, so a
+            // `finish_and_advance` landing right after can never find
+            // `pending` holding a path `jobs` doesn't know about yet.
+            let state = handle.state::<RetranscribeState>();
+            let inner = state.0.lock().unwrap();
+            assert!(
+                inner.jobs.contains_key("/tmp/b.md"),
+                "job data must already be stored once try_enqueue returns Queued"
+            );
+        }
+
+        #[test]
+        fn non_queued_outcomes_store_nothing() {
+            let app = tauri::test::mock_app();
+            app.manage(RetranscribeState::default());
+            let handle = app.handle().clone();
+
+            assert_eq!(try_enqueue(&handle, "/tmp/a.md", job("/tmp/a.md")), EnqueueOutcome::StartNow);
+            // Duplicate of the running path: AlreadyRunning, not Queued.
+            assert_eq!(try_enqueue(&handle, "/tmp/a.md", job("/tmp/a.md")), EnqueueOutcome::AlreadyRunning);
+
+            let state = handle.state::<RetranscribeState>();
+            let inner = state.0.lock().unwrap();
+            assert!(
+                inner.jobs.is_empty(),
+                "StartNow/AlreadyRunning must never store job data -- the caller \
+                 already has what it needs from its own locals"
+            );
+        }
+    }
+
+    /// Important fix-review finding, stage 0.9: belt-and-suspenders on top of
+    /// the atomic-enqueue fix above -- even if a promoted path somehow still
+    /// has no stored `QueuedJob` (should never happen now, but this is the
+    /// exact failure mode the whole fix exists to close), `advance_queue`
+    /// must treat it as already finished and advance AGAIN, rather than
+    /// returning with `running` wedged on a path nothing will ever actually
+    /// start.
+    mod advance_queue_missing_job {
+        use super::*;
+        use crate::config::DEFAULT_RETRANSCRIBE_MODEL;
+
+        #[test]
+        fn skips_a_promoted_path_with_no_job_data_and_advances_to_the_next_one() {
+            let app = tauri::test::mock_app();
+            app.manage(AppState::default());
+            app.manage(RetranscribeState::default());
+            let handle = app.handle().clone();
+
+            let dir = tempfile::tempdir().unwrap();
+            let real_path = dir.path().join("real.md");
+            std::fs::write(
+                &real_path,
+                "---\ndate: 2026-06-01T09:00:00+02:00\nasr: parakeet-tdt-0.6b-v3\n---\n\n## Transcript\n\n[00:00:01] Me: hi\n",
+            )
+            .unwrap();
+
+            {
+                let jobs = handle.state::<RetranscribeState>();
+                let mut inner = jobs.0.lock().unwrap();
+                inner.queue.running = Some("/tmp/just-finished.md".to_string());
+                // Simulates the pre-fix race directly: a path sitting in
+                // `pending` with no matching entry in `jobs` at all -- the
+                // atomic-enqueue fix makes this unreachable in practice, but
+                // this belt-and-suspenders check must still recover from it
+                // if it somehow happens.
+                inner.queue.pending.push_back("/tmp/missing-data.md".to_string());
+                inner.queue.pending.push_back(real_path.display().to_string());
+                inner.jobs.insert(
+                    real_path.display().to_string(),
+                    QueuedJob {
+                        md_path: real_path.clone(),
+                        asr_id: DEFAULT_RETRANSCRIBE_MODEL.to_string(),
+                        delete_audio_after: false,
+                        waiter: None,
+                    },
+                );
+            }
+
+            advance_queue(handle.clone());
+
+            // The promotion/skip/re-promotion all happen synchronously
+            // inside `advance_queue`, before it ever returns -- the actual
+            // `run_job` it spawns for `real_path` hasn't necessarily run yet,
+            // but the queue state change is already visible here.
+            let state = handle.state::<RetranscribeState>();
+            let inner = state.0.lock().unwrap();
+            assert_eq!(
+                inner.queue.running.as_deref(),
+                Some(real_path.display().to_string().as_str()),
+                "the queue must skip the path with no job data and promote the \
+                 next real one instead of getting stuck on it"
+            );
+            assert!(
+                !inner.jobs.contains_key("/tmp/missing-data.md"),
+                "the missing-data path was never actually stored to begin with"
+            );
+        }
+    }
+
     mod dequeue_revalidation {
         use super::*;
         use crate::config::DEFAULT_RETRANSCRIBE_MODEL;

@@ -423,229 +423,235 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
 
   return (
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-xl">
-        <DialogHeader>
+      {/* The dialog outgrew a single screen once models arrived, so it is a
+          fixed-height column: a static header, then a scrolling body. Without
+          the max height the content simply overflowed the window and the top
+          and bottom were clipped with no way to reach them. */}
+      <DialogContent className="flex max-h-[85vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-xl">
+        <DialogHeader className="border-b px-6 py-4">
           <DialogTitle>Settings</DialogTitle>
         </DialogHeader>
 
-        <section className="flex flex-col gap-2">
-          <h3 className="text-sm font-semibold">Appearance</h3>
-          <div className="flex gap-1.5">
-            {THEME_OPTIONS.map((option) => (
-              <Button
-                key={option.value}
-                variant={config?.theme === option.value ? "default" : "outline"}
-                size="sm"
-                onClick={() => handleSetTheme(option.value)}
-              >
-                {option.label}
-              </Button>
-            ))}
-          </div>
-          {themeError && <span className="text-xs text-destructive">{themeError}</span>}
-        </section>
-
-        <section className="flex flex-col gap-2">
-          <h3 className="text-sm font-semibold">Output</h3>
-          <Label>Output folder</Label>
-          <div className="flex items-center gap-2">
-            <span
-              className="min-w-0 flex-1 truncate rounded-md border bg-input/30 px-2 py-1.5 font-mono text-sm"
-              style={{ direction: "rtl", textAlign: "left" }}
-              title={config?.output_dir ?? ""}
-            >
-              {config?.output_dir ?? "..."}
-            </span>
-            <Button variant="outline" size="sm" disabled={choosingDir} onClick={handleChooseFolder}>
-              Choose folder
-            </Button>
-          </div>
-          {folderError && <span className="text-xs text-destructive">{folderError}</span>}
-
-          <div className="flex items-start gap-2 pt-2">
-            <Checkbox
-              id="keep-audio"
-              checked={config?.keep_audio ?? false}
-              disabled={!config}
-              onCheckedChange={(checked) => handleSetKeepAudio(checked === true)}
-            />
-            <div className="flex flex-col gap-0.5">
-              <Label htmlFor="keep-audio">Keep call audio</Label>
-              <span className="text-xs text-muted-foreground">
-                Stores a stereo audio file next to each transcript. Re-transcribing needs it.
-              </span>
-            </div>
-          </div>
-          {keepAudioError && <span className="text-xs text-destructive">{keepAudioError}</span>}
-
-          <div className="flex flex-col gap-1.5 pt-1">
-            <Label>Audio format</Label>
+        <div className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto px-6 py-5">
+          <section className="flex flex-col gap-2">
+            <h3 className="text-sm font-semibold">Appearance</h3>
             <div className="flex gap-1.5">
-              {AUDIO_FORMAT_OPTIONS.map((option) => (
+              {THEME_OPTIONS.map((option) => (
                 <Button
                   key={option.value}
-                  variant={config?.audio_format === option.value ? "default" : "outline"}
+                  variant={config?.theme === option.value ? "default" : "outline"}
                   size="sm"
-                  disabled={!config || !config.keep_audio}
-                  onClick={() => handleSetAudioFormat(option.value)}
+                  onClick={() => handleSetTheme(option.value)}
                 >
                   {option.label}
                 </Button>
               ))}
             </div>
-            <span className="text-xs text-muted-foreground">
-              AAC: about 17 MB per hour, small quality loss (default). FLAC: lossless, about 137 MB per hour.
-            </span>
-            {audioFormatError && <span className="text-xs text-destructive">{audioFormatError}</span>}
-          </div>
-        </section>
+            {themeError && <span className="text-xs text-destructive">{themeError}</span>}
+          </section>
 
-        <section className="flex flex-col gap-3">
-          <h3 className="text-sm font-semibold">Models</h3>
-
-          {/* Recording group (stage 0.8): every `role === "live"` entry.
-              Parakeet is the only one today and stays the only one a future
-              entry could add to without this section changing -- it's
-              driven by `role`, not a hardcoded id. Live models never get a
-              delete control here (Global Constraints: deleting the model
-              that drives recording would break it). */}
-          <div className="flex flex-col gap-1.5">
-            <div className="flex items-baseline justify-between gap-2">
-              <h4 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
-                Recording
-              </h4>
-              <span className="text-xs text-muted-foreground">
-                Recording models: {humanBytes(totalDiskUsed(liveModels))} on disk
+          <section className="flex flex-col gap-2">
+            <h3 className="text-sm font-semibold">Output</h3>
+            <Label>Output folder</Label>
+            <div className="flex items-center gap-2">
+              <span
+                className="min-w-0 flex-1 truncate rounded-md border bg-input/30 px-2 py-1.5 font-mono text-sm"
+                style={{ direction: "rtl", textAlign: "left" }}
+                title={config?.output_dir ?? ""}
+              >
+                {config?.output_dir ?? "..."}
               </span>
+              <Button variant="outline" size="sm" disabled={choosingDir} onClick={handleChooseFolder}>
+                Choose folder
+              </Button>
             </div>
-            <ul className="flex flex-col gap-3">
-              {liveModels.map((model) => {
-                const p = progress[model.id];
-                const busy = busyIds.has(model.id);
-                return (
-                  <li key={model.id} className="flex flex-col gap-1.5 rounded-md border p-3">
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="flex flex-col">
-                        <span className="text-sm font-medium">{model.name}</span>
-                        <span className="text-xs text-muted-foreground">{humanSizeMb(model.size_mb)}</span>
-                      </div>
-                      {model.downloaded && model.active && (
-                        <span className="text-sm text-muted-foreground">Active</span>
-                      )}
-                      {model.downloaded && !model.active && (
-                        <Button variant="outline" size="sm" disabled={busy} onClick={() => handleUse(model.id)}>
-                          Use
-                        </Button>
-                      )}
-                      {!model.downloaded && (!p || p.phase === "error") && (
-                        <Button variant="outline" size="sm" onClick={() => handleDownload(model.id)}>
-                          Download
-                        </Button>
-                      )}
-                    </div>
-                    {!model.downloaded && <ModelProgress progress={p} />}
-                  </li>
-                );
-              })}
-            </ul>
-          </div>
+            {folderError && <span className="text-xs text-destructive">{folderError}</span>}
 
-          {/* Re-transcribe group (stage 0.8): every `role === "retranscribe"`
-              entry (the whisper family). Radio-style selection among
-              downloaded models only reflects `config.retranscribe_model`;
-              every downloaded row also gets a delete control to reclaim
-              disk. */}
-          <div className="flex flex-col gap-1.5">
-            <div className="flex items-baseline justify-between gap-2">
-              <h4 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
-                Re-transcribe
-              </h4>
-              <span className="text-xs text-muted-foreground">
-                Re-transcribe models: {humanBytes(totalDiskUsed(retranscribeModels))} on disk
-              </span>
+            <div className="flex items-start gap-2 pt-2">
+              <Checkbox
+                id="keep-audio"
+                checked={config?.keep_audio ?? false}
+                disabled={!config}
+                onCheckedChange={(checked) => handleSetKeepAudio(checked === true)}
+              />
+              <div className="flex flex-col gap-0.5">
+                <Label htmlFor="keep-audio">Keep call audio</Label>
+                <span className="text-xs text-muted-foreground">
+                  Stores a stereo audio file next to each transcript. Re-transcribing needs it.
+                </span>
+              </div>
             </div>
-            <span className="text-xs text-muted-foreground">
-              Turbo models are faster (measured about 12x realtime for turbo q8 on this
-              machine). The non-turbo large-v3 models are slower but usually read
-              non-English audio better.
-            </span>
-            {retranscribeError && <span className="text-xs text-destructive">{retranscribeError}</span>}
-            {retranscribeModelMissing && (
+            {keepAudioError && <span className="text-xs text-destructive">{keepAudioError}</span>}
+
+            <div className="flex flex-col gap-1.5 pt-1">
+              <Label>Audio format</Label>
+              <div className="flex gap-1.5">
+                {AUDIO_FORMAT_OPTIONS.map((option) => (
+                  <Button
+                    key={option.value}
+                    variant={config?.audio_format === option.value ? "default" : "outline"}
+                    size="sm"
+                    disabled={!config || !config.keep_audio}
+                    onClick={() => handleSetAudioFormat(option.value)}
+                  >
+                    {option.label}
+                  </Button>
+                ))}
+              </div>
               <span className="text-xs text-muted-foreground">
-                Selected model is not downloaded. Pick another or download it again.
+                AAC: about 17 MB per hour, small quality loss (default). FLAC: lossless, about 137 MB per hour.
               </span>
-            )}
-            <ul className="flex flex-col gap-3">
-              {retranscribeModels.map((model) => {
-                const p = progress[model.id];
-                const busy = busyIds.has(model.id);
-                const confirming = deleteConfirmId === model.id;
-                return (
-                  <li key={model.id} className="flex flex-col gap-1.5 rounded-md border p-3">
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="flex min-w-0 items-center gap-2.5">
-                        {model.downloaded && (
-                          <input
-                            type="radio"
-                            name="retranscribe-model"
-                            aria-label={model.name}
-                            checked={config?.retranscribe_model === model.id}
-                            disabled={busy}
-                            onChange={() => handleSetRetranscribeModel(model.id)}
-                            className="size-4 shrink-0 accent-primary"
-                          />
-                        )}
-                        <div className="flex min-w-0 flex-col">
-                          <span className="truncate text-sm font-medium">{model.name}</span>
+              {audioFormatError && <span className="text-xs text-destructive">{audioFormatError}</span>}
+            </div>
+          </section>
+
+          <section className="flex flex-col gap-3">
+            <h3 className="text-sm font-semibold">Models</h3>
+
+            {/* Recording group (stage 0.8): every `role === "live"` entry.
+                Parakeet is the only one today and stays the only one a future
+                entry could add to without this section changing -- it's
+                driven by `role`, not a hardcoded id. Live models never get a
+                delete control here (Global Constraints: deleting the model
+                that drives recording would break it). */}
+            <div className="flex flex-col gap-1.5">
+              <div className="flex items-baseline justify-between gap-2">
+                <h4 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+                  Recording
+                </h4>
+                <span className="text-xs text-muted-foreground">
+                  Recording models: {humanBytes(totalDiskUsed(liveModels))} on disk
+                </span>
+              </div>
+              <ul className="flex flex-col gap-3">
+                {liveModels.map((model) => {
+                  const p = progress[model.id];
+                  const busy = busyIds.has(model.id);
+                  return (
+                    <li key={model.id} className="flex flex-col gap-1.5 rounded-md border p-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex flex-col">
+                          <span className="text-sm font-medium">{model.name}</span>
                           <span className="text-xs text-muted-foreground">{humanSizeMb(model.size_mb)}</span>
                         </div>
-                      </div>
-
-                      <div className="flex shrink-0 items-center gap-1.5">
+                        {model.downloaded && model.active && (
+                          <span className="text-sm text-muted-foreground">Active</span>
+                        )}
+                        {model.downloaded && !model.active && (
+                          <Button variant="outline" size="sm" disabled={busy} onClick={() => handleUse(model.id)}>
+                            Use
+                          </Button>
+                        )}
                         {!model.downloaded && (!p || p.phase === "error") && (
                           <Button variant="outline" size="sm" onClick={() => handleDownload(model.id)}>
                             Download
                           </Button>
                         )}
-                        {model.downloaded && !confirming && (
-                          <Button
-                            variant="ghost"
-                            size="icon-sm"
-                            aria-label={`Delete ${model.name}`}
-                            disabled={busy}
-                            className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                            onClick={() => handleDeleteClick(model.id)}
-                          >
-                            <Trash2 />
-                          </Button>
-                        )}
-                        {model.downloaded && confirming && (
-                          <>
-                            <Button
-                              variant="destructive"
-                              size="sm"
-                              disabled={busy}
-                              onClick={() => handleConfirmDelete(model.id)}
-                            >
-                              Delete {humanBytes(freedBytes(model))}?
-                            </Button>
-                            <Button variant="ghost" size="sm" disabled={busy} onClick={handleCancelDelete}>
-                              Cancel
-                            </Button>
-                          </>
-                        )}
                       </div>
-                    </div>
-                    {!model.downloaded && <ModelProgress progress={p} />}
-                    {deleteErrors[model.id] && (
-                      <span className="text-xs text-destructive">{deleteErrors[model.id]}</span>
-                    )}
-                  </li>
-                );
-              })}
-            </ul>
-          </div>
-        </section>
+                      {!model.downloaded && <ModelProgress progress={p} />}
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+
+            {/* Re-transcribe group (stage 0.8): every `role === "retranscribe"`
+                entry (the whisper family). Radio-style selection among
+                downloaded models only reflects `config.retranscribe_model`;
+                every downloaded row also gets a delete control to reclaim
+                disk. */}
+            <div className="flex flex-col gap-1.5">
+              <div className="flex items-baseline justify-between gap-2">
+                <h4 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+                  Re-transcribe
+                </h4>
+                <span className="text-xs text-muted-foreground">
+                  Re-transcribe models: {humanBytes(totalDiskUsed(retranscribeModels))} on disk
+                </span>
+              </div>
+              <span className="text-xs text-muted-foreground">
+                Turbo models are faster (measured about 12x realtime for turbo q8 on this
+                machine). The non-turbo large-v3 models are slower but usually read
+                non-English audio better.
+              </span>
+              {retranscribeError && <span className="text-xs text-destructive">{retranscribeError}</span>}
+              {retranscribeModelMissing && (
+                <span className="text-xs text-muted-foreground">
+                  Selected model is not downloaded. Pick another or download it again.
+                </span>
+              )}
+              <ul className="flex flex-col gap-3">
+                {retranscribeModels.map((model) => {
+                  const p = progress[model.id];
+                  const busy = busyIds.has(model.id);
+                  const confirming = deleteConfirmId === model.id;
+                  return (
+                    <li key={model.id} className="flex flex-col gap-1.5 rounded-md border p-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex min-w-0 items-center gap-2.5">
+                          {model.downloaded && (
+                            <input
+                              type="radio"
+                              name="retranscribe-model"
+                              aria-label={model.name}
+                              checked={config?.retranscribe_model === model.id}
+                              disabled={busy}
+                              onChange={() => handleSetRetranscribeModel(model.id)}
+                              className="size-4 shrink-0 accent-primary"
+                            />
+                          )}
+                          <div className="flex min-w-0 flex-col">
+                            <span className="truncate text-sm font-medium">{model.name}</span>
+                            <span className="text-xs text-muted-foreground">{humanSizeMb(model.size_mb)}</span>
+                          </div>
+                        </div>
+
+                        <div className="flex shrink-0 items-center gap-1.5">
+                          {!model.downloaded && (!p || p.phase === "error") && (
+                            <Button variant="outline" size="sm" onClick={() => handleDownload(model.id)}>
+                              Download
+                            </Button>
+                          )}
+                          {model.downloaded && !confirming && (
+                            <Button
+                              variant="ghost"
+                              size="icon-sm"
+                              aria-label={`Delete ${model.name}`}
+                              disabled={busy}
+                              className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                              onClick={() => handleDeleteClick(model.id)}
+                            >
+                              <Trash2 />
+                            </Button>
+                          )}
+                          {model.downloaded && confirming && (
+                            <>
+                              <Button
+                                variant="destructive"
+                                size="sm"
+                                disabled={busy}
+                                onClick={() => handleConfirmDelete(model.id)}
+                              >
+                                Delete {humanBytes(freedBytes(model))}?
+                              </Button>
+                              <Button variant="ghost" size="sm" disabled={busy} onClick={handleCancelDelete}>
+                                Cancel
+                              </Button>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                      {!model.downloaded && <ModelProgress progress={p} />}
+                      {deleteErrors[model.id] && (
+                        <span className="text-xs text-destructive">{deleteErrors[model.id]}</span>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          </section>
+        </div>
       </DialogContent>
     </Dialog>
   );

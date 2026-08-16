@@ -101,6 +101,21 @@ function App() {
   // See `RetranscribeJob`'s doc comment: survives a SessionView remount,
   // unlike a local boolean would.
   const [retranscribingJob, setRetranscribingJob] = useState<RetranscribeJob>(null);
+  // Paths with a MANUALLY-initiated re-transcribe currently in flight
+  // (review fix, Task 2): SessionView calls `handleManualRetranscribeStart`
+  // the instant its own click handler starts the job, before awaiting
+  // `retranscribeSession` -- see SessionView's `handleRetranscribe`. The
+  // `retranscribe-progress` listener below consults this on the terminal
+  // "error" phase to tell a manual failure (already surfaced inline by that
+  // SessionView instance's own `retranscribeError`, set from the rejected
+  // promise) apart from an AUTO-triggered job's failure, which has no other
+  // UI anywhere and must be reported through the header instead. A ref, not
+  // state: only ever read inside the listener's closure, and adding/removing
+  // a path shouldn't itself trigger a re-render.
+  const manualRetranscribePathsRef = useRef<Set<string>>(new Set());
+  function handleManualRetranscribeStart(path: string) {
+    manualRetranscribePathsRef.current.add(path);
+  }
   // Attached to WHICHEVER SessionView is currently mounted -- active or
   // inactive (see the JSX below, both branches carry this ref). handleStop
   // reads this to flush any pending title/notes edit through
@@ -238,16 +253,21 @@ function App() {
         // only signal they ever produce. Surface it through the header's
         // existing error status rather than a separate toast.
         //
-        // Only for a session the user ISN'T currently looking at
-        // (`path !== selectedPath`): a MANUAL click's failure already
-        // surfaces inline in the SessionView instance that made the call
-        // (its own `retranscribeError` state, set from the rejected
+        // `wasManual` tells a MANUAL click's failure apart from an
+        // AUTO-triggered one (second review round: `path !== selectedPath`
+        // was the wrong proxy for this -- right after a call stops,
+        // `selectedPath` IS that just-stopped session, which is exactly the
+        // session an auto job runs for, so that guard silenced precisely the
+        // common case this fix exists for). A manual click's own SessionView
+        // instance already shows the failure inline (its own
+        // `retranscribeError` state, set from the rejected
         // `retranscribeSession` promise -- see SessionView's
-        // `handleRetranscribe`), so reporting it again here too would show
-        // the same failure twice on screen. Skipping the currently-selected
-        // path covers that case without needing to know whether this
-        // particular event was manually or automatically triggered.
-        //
+        // `handleRetranscribe`, which calls `onRetranscribeStart` right
+        // before that awaits), so reporting it again here too would show the
+        // same failure twice on screen; every other path (any auto job,
+        // viewed or not) has no such inline display, so it's always reported
+        // here.
+        const wasManual = manualRetranscribePathsRef.current.delete(path);
         // Also skip while the header is showing a live recording: an auto
         // job only ever starts once ITS OWN recording has already stopped
         // (Global Constraints), so in practice this can't race a recording
@@ -256,7 +276,7 @@ function App() {
         // while a DIFFERENT recording is genuinely in progress is at least
         // theoretically possible, and clobbering "recording" with an
         // unrelated background failure would be worse than staying quiet.
-        if (phase === "error" && path !== selectedPath) {
+        if (phase === "error" && !wasManual) {
           setStatus((prev) =>
             prev.kind === "recording" ? prev : { kind: "error", message: message ?? "re-transcribe failed" }
           );
@@ -586,6 +606,7 @@ function App() {
               retranscribingJob={retranscribingJob}
               onTitleChange={refreshSessions}
               onSaveError={(message) => setStatus({ kind: "error", message })}
+              onRetranscribeStart={handleManualRetranscribeStart}
             />
           )}
         </div>

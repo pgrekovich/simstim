@@ -30,6 +30,7 @@ vi.mock("@/lib/ipc", () => ({
   setActiveModel: vi.fn().mockResolvedValue(undefined),
   setOutputDir: vi.fn().mockResolvedValue(undefined),
   setTheme: vi.fn().mockResolvedValue(undefined),
+  retranscribeSession: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("@tauri-apps/api/event", () => ({
@@ -38,6 +39,14 @@ vi.mock("@tauri-apps/api/event", () => ({
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({
   open: vi.fn(),
+}));
+
+// SessionView feeds a session's `<audio src>` through `convertFileSrc` when
+// `audio_path` is set (needed below to drive a real manual Re-transcribe
+// click through the UI): a real Tauri asset URL scheme is irrelevant here, a
+// stable, inspectable stand-in is all the test needs.
+vi.mock("@tauri-apps/api/core", () => ({
+  convertFileSrc: vi.fn((path: string) => `asset://localhost/${path}`),
 }));
 
 /**
@@ -67,6 +76,7 @@ beforeEach(() => {
   vi.mocked(ipc.listSessions).mockClear();
   vi.mocked(ipc.saveSession).mockClear();
   vi.mocked(ipc.updateActiveSession).mockClear();
+  vi.mocked(ipc.retranscribeSession).mockClear().mockResolvedValue(undefined);
   vi.mocked(listen).mockClear();
 });
 
@@ -366,7 +376,15 @@ describe("App: surfaces terminal re-transcribe errors from background jobs (stag
     await screen.findByText(/whisper model not downloaded/i);
   });
 
-  it("does not surface the error for the session currently being viewed (avoids double-reporting a manual click's own inline error)", async () => {
+  it("shows an AUTO job's failure in the header even for the session currently being viewed (the common case)", async () => {
+    // Second review round finding: an earlier version of this fix suppressed
+    // the header whenever `path === selectedPath`, on the theory that a
+    // manual click's own inline error would already cover it. But
+    // `selectedPath` stays pointed at whatever session just stopped
+    // recording (`handleStop` never changes it), which is exactly the
+    // session an auto job runs for -- so that guard silenced precisely the
+    // ordinary case this whole fix exists for. Nobody clicked anything here;
+    // the failure must still reach the header.
     const sessions: SessionMeta[] = [
       { path: "/tmp/viewed.md", title: "Viewed call", date: new Date().toISOString(), duration_secs: null },
     ];
@@ -384,6 +402,47 @@ describe("App: surfaces terminal re-transcribe errors from background jobs (stag
     const viewedRow = await screen.findByRole("button", { name: /viewed call/i });
     fireEvent.click(viewedRow);
     await waitFor(() => expect(document.body.textContent).toContain("hi"));
+
+    emit("retranscribe-progress", {
+      path: "/tmp/viewed.md",
+      phase: "error",
+      channel: null,
+      message: "whisper model not downloaded",
+    });
+
+    await screen.findByText(/whisper model not downloaded/i);
+  });
+
+  it("does not double-report in the header a MANUAL click's failure while that click is still in flight", async () => {
+    // Drives the manual click through the real UI (not a bare event) so the
+    // in-flight state App relies on (`manualRetranscribePathsRef`) is genuine:
+    // SessionView's `handleRetranscribe` calls `onRetranscribeStart` the
+    // instant the click fires, before `retranscribeSession` resolves.
+    const sessions: SessionMeta[] = [
+      { path: "/tmp/viewed.md", title: "Viewed call", date: new Date().toISOString(), duration_secs: null },
+    ];
+    vi.mocked(ipc.listSessions).mockResolvedValue(sessions);
+    vi.mocked(ipc.readSession).mockResolvedValue({
+      title: "Viewed call",
+      date: "",
+      notes: "",
+      transcript: "[00:00:01] Me: hi",
+      audio_path: "/tmp/viewed.flac",
+    });
+    // Never resolves: mirrors the real backend, where the promise only
+    // settles once the job's own terminal event has already been decided --
+    // the test emits that terminal event itself below, independently.
+    vi.mocked(ipc.retranscribeSession).mockImplementationOnce(() => new Promise(() => {}));
+
+    render(<App />);
+
+    const viewedRow = await screen.findByRole("button", { name: /viewed call/i });
+    fireEvent.click(viewedRow);
+    await waitFor(() => expect(document.body.textContent).toContain("hi"));
+
+    const retranscribeButton = await screen.findByRole("button", { name: /^re-transcribe$/i });
+    fireEvent.click(retranscribeButton);
+    await screen.findByRole("button", { name: /re-transcribing/i });
 
     emit("retranscribe-progress", {
       path: "/tmp/viewed.md",

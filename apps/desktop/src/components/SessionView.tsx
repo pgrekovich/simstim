@@ -53,6 +53,19 @@ interface SessionViewProps {
    * here is just as actionable to the user.
    */
   onSaveError?: (message: string) => void;
+  /**
+   * Fires the instant `handleRetranscribe` starts a MANUAL job for this
+   * `path`, before awaiting `retranscribeSession` (stage 0.9 Task 2 review
+   * fix). App tracks this so its `retranscribe-progress` listener can tell a
+   * manual click's failure (already shown inline here via
+   * `retranscribeError`, right below) apart from an auto-triggered job's
+   * failure, which has no inline display anywhere and needs the header
+   * instead -- see App's `manualRetranscribePathsRef` doc comment for the
+   * full rationale. Never called for the active session (the Re-transcribe
+   * button only ever renders when `initialData.audio_path` is set, which is
+   * never true while `isActive`).
+   */
+  onRetranscribeStart?: (path: string) => void;
 }
 
 /**
@@ -142,6 +155,7 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
     onTitleChange,
     onSaveError,
     onActiveEdit,
+    onRetranscribeStart,
   },
   ref
 ) {
@@ -309,11 +323,15 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
   // to pick it up. Progress text/"is running" in the meantime come from the
   // `retranscribingJob` prop (App's listener), not from local state -- see
   // the class doc comment above for why. `clicking` only covers the brief
-  // window before that prop updates.
+  // window before that prop updates. Calls `onRetranscribeStart` right
+  // before the await so App can record this as a MANUAL job -- see that
+  // prop's own doc comment for why (its `retranscribe-progress` listener
+  // needs to tell this apart from an auto-triggered job on failure).
   async function handleRetranscribe() {
     if (!initialData.audio_path || isActive || clicking || jobRunningHere) return;
     setClicking(true);
     setRetranscribeError(null);
+    onRetranscribeStart?.(path);
     try {
       await retranscribeSession(path);
       const data = await readSession(path);

@@ -10,9 +10,9 @@ use models::DownloadState;
 use serde::Serialize;
 use session::PendingEdits;
 use simstim_capture::Channel;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 /// `session-error` event payload (Global Constraints): worker-side errors
 /// (engine/VAD init, save failures) surfaced to the UI instead of only
@@ -198,11 +198,100 @@ fn get_config() -> Config {
     Config::load()
 }
 
-#[tauri::command]
-fn set_output_dir(path: String) -> Result<(), String> {
-    let mut cfg = Config::load();
+/// Grants the asset protocol's live scope read access to `dir` (and every
+/// file/subdirectory under it, recursively) so `convertFileSrc` can serve
+/// session audio from it without a restart.
+///
+/// `tauri.conf.json`'s static `assetProtocol.scope` is deliberately empty
+/// (see `run()`'s `.setup()` call and `set_output_dir` below, its only two
+/// callers): the output dir is user-configurable to anywhere on disk, so a
+/// static scope broad enough to cover any possible choice would have to be
+/// something like `$HOME/**` -- readable by the webview well beyond the one
+/// folder it actually needs (ssh keys, browser profiles, everything else
+/// under the home directory). `Manager::asset_protocol_scope()` (gated
+/// behind the `protocol-asset` Cargo feature, already enabled) instead
+/// returns a live, `Arc`-shared handle to the exact same `scope::fs::Scope`
+/// the `asset://` request handler reads on every request -- confirmed by
+/// reading the vendored tauri 2.11.5 source (`src/app.rs`'s `Scopes`
+/// construction, `src/manager/webview.rs`'s protocol registration, and
+/// `src/protocol/asset.rs`'s per-request `scope.is_allowed` check) rather
+/// than assumed from the crate's public docs alone. So calling
+/// `allow_directory` on it here takes effect immediately, in the already-
+/// running app, no restart needed.
+///
+/// Canonicalizes `dir` first: `Scope::is_allowed`'s query-side check
+/// (`try_resolve_symlink_and_canonicalize`, per that same source read) only
+/// canonicalizes an *existing* path, resolving every symlinked path
+/// component (e.g. macOS's `/var` -> `/private/var`) along the way, while
+/// `allow_directory` stores whatever it's given verbatim with no
+/// resolution at all. A `dir` that traverses a symlink (a real
+/// possibility -- some setups mount the home directory, or a user-picked
+/// folder, through one) would otherwise register a pattern that silently
+/// never matches the canonical form real requests get checked against.
+/// Falls back to the raw path if canonicalization fails (most likely: the
+/// directory doesn't exist yet) rather than erroring the whole call --
+/// `is_allowed` would just as reliably fail to serve anything under a
+/// nonexistent directory either way, so nothing is lost by not erroring
+/// here.
+///
+/// Generic over `R`/`impl Manager<R>` (rather than the concrete
+/// `AppHandle`/`Wry` runtime) purely so this is testable against
+/// `tauri::test::mock_app()`'s `MockRuntime`, per the review's ask for a
+/// scope-allow test; production call sites always instantiate it with the
+/// real `Wry` runtime via a plain `AppHandle`/`&App` argument.
+///
+/// Note this only ever ADDS to the scope -- Tauri's `Scope` has no "reset",
+/// only `allow_*`/`forbid_*` -- so a session recorded under a previously
+/// configured output dir stays playable even after the user points the app
+/// at a different folder later (see `set_output_dir`'s doc comment for what
+/// this means for what the webview can read, in aggregate, over the app's
+/// lifetime).
+fn allow_output_dir_in_asset_scope<R: tauri::Runtime>(
+    app: &impl Manager<R>,
+    dir: &Path,
+) -> Result<(), String> {
+    let dir = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+    app.asset_protocol_scope()
+        .allow_directory(&dir, true)
+        .map_err(|e| e.to_string())
+}
+
+/// `set_output_dir`'s actual logic, parameterized on an explicit
+/// `config_path` instead of the real, global `Config::load`/`Config::save`
+/// (which always resolve to `config::config_path()`) -- so a test can
+/// exercise "changing the output dir persists it AND grants it on the live
+/// asset scope" without touching the developer's own
+/// `~/Library/Application Support/simstim/config.json`. The command wrapper
+/// below is the only real (non-test) caller, and always passes the real
+/// `config::config_path()`.
+///
+/// Persists first, then grants the scope (matching the order the review
+/// asked for), though the two are independent enough that the order
+/// wouldn't itself change correctness: one writes JSON to disk, the other
+/// mutates an in-memory `Scope`.
+fn set_output_dir_at<R: tauri::Runtime>(
+    app: &impl Manager<R>,
+    config_path: &Path,
+    path: String,
+) -> Result<(), String> {
+    let mut cfg = Config::load_from(config_path);
     cfg.output_dir = PathBuf::from(path);
-    cfg.save().map_err(|e| e.to_string())
+    cfg.save_to(config_path).map_err(|e| e.to_string())?;
+    // Grants the new folder read access for playback immediately (Global
+    // Constraints, security review finding): without this, switching the
+    // output dir in Settings would leave newly recorded sessions'
+    // audio_path resolved but unplayable (asset protocol 403) until the app
+    // restarted and re-ran the `.setup()` grant for whatever the config
+    // says at that later launch. This only ever ADDS the new directory to
+    // the scope -- an older, previously configured output dir stays
+    // allowed too (see `allow_output_dir_in_asset_scope`'s docs), so a
+    // session recorded there remains playable after switching away from it.
+    allow_output_dir_in_asset_scope(app, &cfg.output_dir)
+}
+
+#[tauri::command]
+fn set_output_dir(path: String, app: AppHandle) -> Result<(), String> {
+    set_output_dir_at(&app, &config::config_path(), path)
 }
 
 #[tauri::command]
@@ -223,6 +312,19 @@ pub fn run() {
         .manage(AppState(Mutex::new(None)))
         .manage(DownloadState::default())
         .manage(retranscribe::RetranscribeState::default())
+        .setup(|app| {
+            // Security review finding (this task): the static
+            // `assetProtocol.scope` in tauri.conf.json is empty on purpose
+            // -- grant the CURRENTLY configured output dir here instead, at
+            // startup, rather than a static scope broad enough to cover any
+            // directory the user could ever pick. See
+            // `allow_output_dir_in_asset_scope`'s docs for the full
+            // rationale and `set_output_dir` for the runtime-switch case
+            // this alone doesn't cover.
+            let cfg = Config::load();
+            allow_output_dir_in_asset_scope(app, &cfg.output_dir)?;
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             start_recording,
             stop_recording,
@@ -281,5 +383,75 @@ mod tests {
             Some(Path::new("/tmp/call.md")),
             Some(Path::new("/tmp/call.md"))
         ));
+    }
+
+    mod asset_scope {
+        use super::*;
+
+        /// The scope-allow path itself, against `tauri::test::mock_app()`
+        /// (a real `App<MockRuntime>` built through the same
+        /// `Builder::build` that manages `Scopes` in production -- not a
+        /// hand-rolled stub). Proves `allow_output_dir_in_asset_scope`
+        /// actually grants access on the live `asset_protocol_scope()`
+        /// handle, the same one the real `asset://` request handler reads:
+        /// a file freshly created inside the just-allowed directory must be
+        /// `is_allowed`, and one in an unrelated, never-allowed directory
+        /// must not be.
+        #[test]
+        fn allow_output_dir_in_asset_scope_grants_access_to_files_under_that_dir_only() {
+            let app = tauri::test::mock_app();
+            let allowed_dir = tempfile::tempdir().unwrap();
+            let other_dir = tempfile::tempdir().unwrap();
+            let allowed_file = allowed_dir.path().join("2026-08-15 call.flac");
+            let other_file = other_dir.path().join("unrelated.flac");
+            std::fs::write(&allowed_file, b"x").unwrap();
+            std::fs::write(&other_file, b"x").unwrap();
+
+            allow_output_dir_in_asset_scope(&app, allowed_dir.path()).unwrap();
+
+            let scope = app.asset_protocol_scope();
+            assert!(
+                scope.is_allowed(&allowed_file),
+                "a file under the newly allowed dir must be readable"
+            );
+            assert!(
+                !scope.is_allowed(&other_file),
+                "a file under an unrelated, never-allowed dir must stay blocked"
+            );
+        }
+
+        /// `set_output_dir` is the review's minimum ask ("at least:
+        /// set_output_dir calls the scope-allow path"): after it runs, the
+        /// NEW directory must be allowed on the app's live asset scope, not
+        /// just persisted to config -- otherwise switching output folders
+        /// in Settings would leave newly recorded sessions unplayable
+        /// (asset protocol 403) until the app restarted. Exercises
+        /// `set_output_dir_at` (the command's actual logic) against a
+        /// tempdir config path rather than the real `set_output_dir`
+        /// command, which would otherwise clobber the developer's own
+        /// config.json (see `set_output_dir_at`'s doc comment).
+        #[test]
+        fn set_output_dir_allows_the_new_dir_on_the_live_asset_scope() {
+            let app = tauri::test::mock_app();
+            let config_dir = tempfile::tempdir().unwrap();
+            let config_path = config_dir.path().join("config.json");
+            let new_dir = tempfile::tempdir().unwrap();
+            let new_file = new_dir.path().join("2026-08-16 call.flac");
+            std::fs::write(&new_file, b"x").unwrap();
+
+            set_output_dir_at(&app, &config_path, new_dir.path().display().to_string()).unwrap();
+
+            assert!(
+                app.asset_protocol_scope().is_allowed(&new_file),
+                "set_output_dir must grant the new dir on the live scope, \
+                 not just persist it to config"
+            );
+            let saved = Config::load_from(&config_path);
+            assert_eq!(
+                saved.output_dir,
+                new_dir.path(),
+                "the new dir must also be persisted to config"
+            );
+        }
     }
 }

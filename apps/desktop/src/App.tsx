@@ -15,11 +15,13 @@ import {
   stopRecording,
   type AppConfig,
   type ModelInfo,
+  type RetranscribeProgress,
   type SessionData,
   type SessionErrorPayload,
   type SessionMeta,
   type TranscriptInterimPayload,
 } from "@/lib/ipc";
+import { describeRetranscribeProgress, type RetranscribeJob } from "@/lib/retranscribeStatus";
 import { initTheme } from "@/lib/theme";
 import { truncateMiddle } from "@/lib/utils";
 
@@ -90,6 +92,9 @@ function App() {
   const [activeNotes, setActiveNotes] = useState(ACTIVE_SESSION_PLACEHOLDER.notes);
   const [sessionData, setSessionData] = useState<SessionData | null>(null);
   const [sessionDataError, setSessionDataError] = useState<string | null>(null);
+  // See `RetranscribeJob`'s doc comment: survives a SessionView remount,
+  // unlike a local boolean would.
+  const [retranscribingJob, setRetranscribingJob] = useState<RetranscribeJob>(null);
   // Attached to WHICHEVER SessionView is currently mounted -- active or
   // inactive (see the JSX below, both branches carry this ref). handleStop
   // reads this to flush any pending title/notes edit through
@@ -206,6 +211,26 @@ function App() {
       unlisten.then((f) => f());
     };
   }, [refreshSessions]);
+
+  // Owns `retranscribingJob` (see its doc comment): the backend runs at
+  // most one re-transcribe job at a time across ALL sessions
+  // (`retranscribe.rs`'s `RetranscribeState`), so `path` alone identifies
+  // it. A non-terminal phase sets/updates the job for its `path`; "done" or
+  // "error" clears it, but only if it still matches (defensive -- in
+  // practice there's only ever one job, so a mismatch shouldn't happen).
+  useEffect(() => {
+    const unlisten = listen<RetranscribeProgress>("retranscribe-progress", (event) => {
+      const { path, phase } = event.payload;
+      if (phase === "done" || phase === "error") {
+        setRetranscribingJob((prev) => (prev?.path === path ? null : prev));
+        return;
+      }
+      setRetranscribingJob({ path, text: describeRetranscribeProgress(event.payload) });
+    });
+    return () => {
+      unlisten.then((f) => f());
+    };
+  }, []);
 
   // The sidebar's one-time refresh at `start_recording`'s resolution (in
   // handleStart below) fires before the session file necessarily exists on
@@ -465,6 +490,7 @@ function App() {
               liveLines={lines}
               interimMe={interimMe}
               interimThem={interimThem}
+              retranscribingJob={retranscribingJob}
               onTitleChange={refreshSessions}
               onSaveError={(message) => setStatus({ kind: "error", message })}
               onActiveEdit={(title, notes) => {
@@ -486,6 +512,7 @@ function App() {
               liveLines={lines}
               interimMe={interimMe}
               interimThem={interimThem}
+              retranscribingJob={retranscribingJob}
               onTitleChange={refreshSessions}
               onSaveError={(message) => setStatus({ kind: "error", message })}
             />

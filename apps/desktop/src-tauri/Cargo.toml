@@ -40,4 +40,11 @@ claxon = "0.4"
 
 [dev-dependencies]
 tempfile = "3"
+# Adds `tauri::test::mock_app()` (Cargo's feature unification only pulls
+# this extra "test" feature in for test/bench/example builds of this crate,
+# never for the normal lib/bin -- the same single `tauri` dependency
+# instance still also carries `protocol-asset` from [dependencies] above
+# during `cargo test`, which is what makes `mock_app().asset_protocol_scope()`
+# usable in `lib.rs`'s tests).
+tauri = { version = "2", features = ["test"] }
 

@@ -1,6 +1,5 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { Button } from "@/components/ui/button";
 import { TranscriptView } from "@/components/TranscriptView";
 import {
@@ -8,36 +7,9 @@ import {
   retranscribeSession,
   saveSession,
   updateActiveSession,
-  type RetranscribeProgress,
   type SessionData,
 } from "@/lib/ipc";
-
-/**
- * Renders a `retranscribe-progress` event's phase into the short status text
- * shown next to the re-transcribe button (Task 4). `"done"`/`"error"` never
- * actually reach the screen in practice -- `handleRetranscribe` below clears
- * the status text once the `retranscribe_session` promise itself settles,
- * which happens at essentially the same moment those two phases fire -- but
- * both are still handled so an event arriving in an unexpected order (or a
- * future phase reordering) never renders `undefined`.
- */
-function describeRetranscribeProgress(payload: RetranscribeProgress): string {
-  switch (payload.phase) {
-    case "loading-model":
-      return "loading model...";
-    case "transcribing": {
-      const who = payload.channel ? ` (${payload.channel})` : "";
-      const detail = payload.message ? ` ${payload.message}` : "";
-      return `transcribing${who}${detail}...`;
-    }
-    case "writing":
-      return "writing...";
-    case "done":
-      return "done";
-    case "error":
-      return payload.message ?? "re-transcribe failed";
-  }
-}
+import type { RetranscribeJob } from "@/lib/retranscribeStatus";
 
 /** Global Constraints (Task 6): notes save 500ms after the last keystroke. */
 const NOTES_DEBOUNCE_MS = 500;
@@ -52,6 +24,16 @@ interface SessionViewProps {
   /** Live interim drafts for the active session (ignored otherwise). */
   interimMe: string;
   interimThem: string;
+  /**
+   * Which session (if any) currently has a re-transcribe job running, owned
+   * by App instead of local state (security-review fix, Task 4): a job can
+   * outlive this component's mounted lifetime (switching sessions away and
+   * back remounts it under a fresh `key={path}`, per the class doc comment
+   * below), so "is a job running for MY path" has to be read from something
+   * that survives that remount rather than reset to `false` by it. See
+   * `RetranscribeJob`'s own doc comment for the full rationale.
+   */
+  retranscribingJob: RetranscribeJob;
   /** Notifies the caller after a title save resolves, so it can refresh the sidebar. */
   onTitleChange?: () => void;
   /**
@@ -138,8 +120,15 @@ export interface SessionViewHandle {
  * `TranscriptView`'s `onSeek`); the button runs `retranscribeSession` and,
  * once it resolves, re-reads the file so the rewritten transcript appears
  * without a full remount (`transcript` state, seeded once like title/notes
- * above). Progress text comes from `retranscribe-progress` events filtered
- * to this session's `path`.
+ * above).
+ *
+ * "Is a job running, and its progress text" is deliberately NOT local state
+ * here (security-review fix, Task 4): it's the `retranscribingJob` prop,
+ * owned by App. A local boolean would reset to `false` on exactly the kind
+ * of remount described above (switching away from this session and back
+ * mid-job), silently re-enabling the button while the backend job (global,
+ * one at a time, see `retranscribe.rs`) was still genuinely running. See
+ * `RetranscribeJob`'s doc comment for the full rationale.
  */
 export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(function SessionView(
   {
@@ -149,6 +138,7 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
     liveLines,
     interimMe,
     interimThem,
+    retranscribingJob,
     onTitleChange,
     onSaveError,
     onActiveEdit,
@@ -164,10 +154,18 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
   // and `asr:` change), so it's read directly from the prop rather than
   // mirrored into its own state.
   const [transcript, setTranscript] = useState(initialData.transcript);
-  const [retranscribing, setRetranscribing] = useState(false);
-  const [retranscribeText, setRetranscribeText] = useState<string | null>(null);
+  // Local-only optimistic flag: disables the button the instant it's
+  // clicked, before the backend's first `retranscribe-progress` event has
+  // had a chance to land and update `retranscribingJob` (a window of at
+  // most a few milliseconds -- the command validates and claims the job
+  // slot synchronously before any await). Safe to let this reset on a
+  // remount unlike the job state itself: `retranscribingJob` is what
+  // actually guarantees the button stays disabled across one, this is only
+  // ever read while the SAME click's promise is still in flight.
+  const [clicking, setClicking] = useState(false);
   const [retranscribeError, setRetranscribeError] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
+  const jobRunningHere = retranscribingJob?.path === path;
 
   // "Latest value" mirrors of the controlled state above, read from
   // callbacks (blur handlers, the debounce timeout, the unmount cleanup)
@@ -291,24 +289,6 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Listens for this session's own `retranscribe-progress` events (filtered
-  // by `path`, since the backend's job guard is global -- see
-  // `retranscribe.rs`'s module docs -- so a different session's job could in
-  // principle emit while this one is mounted). Kept live for the whole
-  // mounted lifetime of this instance rather than only while a job started
-  // from this instance is running, so progress is still visible if the user
-  // switches away and back to a session whose re-transcribe (started from
-  // elsewhere, or before a remount) is still in flight.
-  useEffect(() => {
-    const unlisten = listen<RetranscribeProgress>("retranscribe-progress", (event) => {
-      if (event.payload.path !== path) return;
-      setRetranscribeText(describeRetranscribeProgress(event.payload));
-    });
-    return () => {
-      unlisten.then((f) => f());
-    };
-  }, [path]);
-
   // Click-to-seek (Task 4): seeks the audio element to the clicked
   // transcript line's offset and starts playback. Only ever wired up by the
   // JSX below when `initialData.audio_path` is set, so `audioRef.current`
@@ -326,13 +306,14 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
   // updated `asr:`) show up without a full remount -- `retranscribeSession`
   // only rewrites the `## Transcript` section and frontmatter, it doesn't
   // push the new text back through an event, so a re-read is the only way
-  // to pick it up. Progress text in the meantime comes from the
-  // `retranscribe-progress` listener above, not from this function.
+  // to pick it up. Progress text/"is running" in the meantime come from the
+  // `retranscribingJob` prop (App's listener), not from local state -- see
+  // the class doc comment above for why. `clicking` only covers the brief
+  // window before that prop updates.
   async function handleRetranscribe() {
-    if (!initialData.audio_path || isActive || retranscribing) return;
-    setRetranscribing(true);
+    if (!initialData.audio_path || isActive || clicking || jobRunningHere) return;
+    setClicking(true);
     setRetranscribeError(null);
-    setRetranscribeText("starting...");
     try {
       await retranscribeSession(path);
       const data = await readSession(path);
@@ -341,8 +322,7 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
       console.error("failed to re-transcribe session", err);
       setRetranscribeError(String(err));
     } finally {
-      setRetranscribing(false);
-      setRetranscribeText(null);
+      setClicking(false);
     }
   }
 
@@ -379,6 +359,12 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
     ? liveLines
     : transcript.split("\n").filter((line) => line.length > 0);
   const audioPath = initialData.audio_path;
+  const retranscribeBusy = clicking || jobRunningHere;
+  const retranscribeStatusText = jobRunningHere
+    ? retranscribingJob!.text
+    : clicking
+      ? "starting..."
+      : null;
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-4">
@@ -398,10 +384,10 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
             variant="outline"
             size="sm"
             className="shrink-0"
-            disabled={isActive || retranscribing}
+            disabled={isActive || retranscribeBusy}
             onClick={handleRetranscribe}
           >
-            {retranscribing ? "Re-transcribing..." : "Re-transcribe"}
+            {retranscribeBusy ? "Re-transcribing..." : "Re-transcribe"}
           </Button>
         )}
       </div>
@@ -416,8 +402,8 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
         />
       )}
 
-      {retranscribeText && (
-        <p className="shrink-0 text-xs text-muted-foreground">{retranscribeText}</p>
+      {retranscribeStatusText && (
+        <p className="shrink-0 text-xs text-muted-foreground">{retranscribeStatusText}</p>
       )}
       {retranscribeError && (
         <p className="shrink-0 text-sm text-destructive">{retranscribeError}</p>

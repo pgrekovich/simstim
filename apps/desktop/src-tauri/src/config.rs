@@ -103,14 +103,21 @@ impl Config {
         self.save_to(&config_path())
     }
 
-    fn load_from(path: &Path) -> Self {
+    /// `pub(crate)` (Task 4, stage-0.7 security-review fix): `lib.rs`'s
+    /// `set_output_dir_at` reuses this to load/save against an explicit
+    /// path instead of the real, global `config_path()`, so a test can
+    /// exercise the actual `set_output_dir` logic (persist + grant the new
+    /// dir on the live asset scope) without clobbering the developer's own
+    /// `~/Library/Application Support/simstim/config.json`.
+    pub(crate) fn load_from(path: &Path) -> Self {
         std::fs::read_to_string(path)
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default()
     }
 
-    fn save_to(&self, path: &Path) -> Result<()> {
+    /// See `load_from`'s doc comment for why this is `pub(crate)`.
+    pub(crate) fn save_to(&self, path: &Path) -> Result<()> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }

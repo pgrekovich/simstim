@@ -1,6 +1,5 @@
 import { createRef } from "react";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { listen } from "@tauri-apps/api/event";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionView, type SessionViewHandle } from "@/components/SessionView";
 import * as ipc from "@/lib/ipc";
@@ -19,10 +18,6 @@ vi.mock("@/lib/ipc", () => ({
   retranscribeSession: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn(() => Promise.resolve(() => {})),
-}));
-
 // SessionView feeds `<audio src>` through `convertFileSrc`; a real Tauri
 // runtime isn't present under jsdom, so this stands in with something
 // visibly derived from the input path -- good enough to assert the player
@@ -39,22 +34,11 @@ const baseData: SessionData = {
   audio_path: null,
 };
 
-/** Invokes the handler SessionView registered via `listen(name, handler)`. */
-function emit(name: string, payload: unknown) {
-  const call = vi.mocked(listen).mock.calls.find(([eventName]) => eventName === name);
-  if (!call) throw new Error(`no listener registered for "${name}" -- was it ever mounted?`);
-  const handler = call[1] as (event: { payload: unknown }) => void;
-  act(() => {
-    handler({ payload });
-  });
-}
-
 beforeEach(() => {
   vi.mocked(ipc.saveSession).mockClear();
   vi.mocked(ipc.updateActiveSession).mockClear();
   vi.mocked(ipc.readSession).mockClear();
   vi.mocked(ipc.retranscribeSession).mockClear();
-  vi.mocked(listen).mockClear();
 });
 
 describe("SessionView: stop-transition flush (Task 6 review fix)", () => {
@@ -75,6 +59,7 @@ describe("SessionView: stop-transition flush (Task 6 review fix)", () => {
         liveLines={[]}
         interimMe=""
         interimThem=""
+        retranscribingJob={null}
       />
     );
 
@@ -100,6 +85,7 @@ describe("SessionView: stop-transition flush (Task 6 review fix)", () => {
         liveLines={[]}
         interimMe=""
         interimThem=""
+        retranscribingJob={null}
       />
     );
 
@@ -125,6 +111,7 @@ describe("SessionView: empty title normalization (Task 6 review fix)", () => {
         liveLines={[]}
         interimMe=""
         interimThem=""
+        retranscribingJob={null}
       />
     );
 
@@ -147,6 +134,7 @@ describe("SessionView: audio playback and re-transcribe (Task 4, stage-0.7)", ()
         liveLines={[]}
         interimMe=""
         interimThem=""
+        retranscribingJob={null}
       />
     );
 
@@ -163,6 +151,7 @@ describe("SessionView: audio playback and re-transcribe (Task 4, stage-0.7)", ()
         liveLines={[]}
         interimMe=""
         interimThem=""
+        retranscribingJob={null}
       />
     );
 
@@ -182,6 +171,7 @@ describe("SessionView: audio playback and re-transcribe (Task 4, stage-0.7)", ()
         liveLines={[]}
         interimMe=""
         interimThem=""
+        retranscribingJob={null}
       />
     );
 
@@ -201,6 +191,7 @@ describe("SessionView: audio playback and re-transcribe (Task 4, stage-0.7)", ()
         liveLines={[]}
         interimMe=""
         interimThem=""
+        retranscribingJob={null}
       />
     );
 
@@ -216,7 +207,7 @@ describe("SessionView: audio playback and re-transcribe (Task 4, stage-0.7)", ()
     expect(audio.play).toHaveBeenCalled();
   });
 
-  it("calls retranscribe_session and shows progress phase text from retranscribe-progress events", async () => {
+  it("calls retranscribe_session and shows starting text as soon as it's clicked", async () => {
     vi.mocked(ipc.retranscribeSession).mockImplementationOnce(() => new Promise(() => {}));
     render(
       <SessionView
@@ -226,24 +217,18 @@ describe("SessionView: audio playback and re-transcribe (Task 4, stage-0.7)", ()
         liveLines={[]}
         interimMe=""
         interimThem=""
+        retranscribingJob={null}
       />
     );
 
     fireEvent.click(screen.getByRole("button", { name: /re-transcribe/i }));
+
     await waitFor(() => expect(ipc.retranscribeSession).toHaveBeenCalledWith("/tmp/call.md"));
-
-    emit("retranscribe-progress", {
-      path: "/tmp/call.md",
-      phase: "transcribing",
-      channel: "me",
-      message: null,
-    });
-
-    expect(await screen.findByText(/transcribing \(me\)/i)).toBeInTheDocument();
+    expect(screen.getByText(/starting/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /re-transcribing/i })).toBeDisabled();
   });
 
-  it("ignores a retranscribe-progress event for a different session's path", async () => {
-    vi.mocked(ipc.retranscribeSession).mockImplementationOnce(() => new Promise(() => {}));
+  it("renders the lifted job's phase text (from App) when it names this session's path", () => {
     render(
       <SessionView
         path="/tmp/call.md"
@@ -252,20 +237,68 @@ describe("SessionView: audio playback and re-transcribe (Task 4, stage-0.7)", ()
         liveLines={[]}
         interimMe=""
         interimThem=""
+        retranscribingJob={{ path: "/tmp/call.md", text: "transcribing (me)..." }}
       />
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /re-transcribe/i }));
-    await waitFor(() => expect(ipc.retranscribeSession).toHaveBeenCalled());
+    expect(screen.getByText(/transcribing \(me\)/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /re-transcribing/i })).toBeDisabled();
+  });
 
-    emit("retranscribe-progress", {
-      path: "/tmp/other-call.md",
-      phase: "writing",
-      channel: null,
-      message: null,
-    });
+  it("ignores the lifted job when it names a different session's path", () => {
+    render(
+      <SessionView
+        path="/tmp/call.md"
+        isActive={false}
+        initialData={{ ...baseData, audio_path: "/tmp/call.flac" }}
+        liveLines={[]}
+        interimMe=""
+        interimThem=""
+        retranscribingJob={{ path: "/tmp/other-call.md", text: "writing..." }}
+      />
+    );
 
     expect(screen.queryByText(/writing/i)).toBeNull();
+    expect(screen.getByRole("button", { name: /^re-transcribe$/i })).not.toBeDisabled();
+  });
+
+  it("security-review fix: stays disabled across a remount while the job is still running for this path", () => {
+    // Reproduces the bug: a local `retranscribing` boolean reset to `false`
+    // on every mount, so switching away from this session mid-job (which
+    // unmounts this instance under React's `key={path}` remount, see the
+    // class doc comment) and back silently re-enabled the button even
+    // though the backend job (global, one at a time) was still running.
+    // `retranscribingJob` is owned by App instead, so a FRESH instance for
+    // the same path must come up already disabled if App still says a job
+    // is running for it -- no click, no prior render, in this test.
+    const initialData = { ...baseData, audio_path: "/tmp/call.flac" };
+    const { unmount } = render(
+      <SessionView
+        path="/tmp/call.md"
+        isActive={false}
+        initialData={initialData}
+        liveLines={[]}
+        interimMe=""
+        interimThem=""
+        retranscribingJob={{ path: "/tmp/call.md", text: "transcribing (them)..." }}
+      />
+    );
+    unmount();
+
+    render(
+      <SessionView
+        path="/tmp/call.md"
+        isActive={false}
+        initialData={initialData}
+        liveLines={[]}
+        interimMe=""
+        interimThem=""
+        retranscribingJob={{ path: "/tmp/call.md", text: "transcribing (them)..." }}
+      />
+    );
+
+    expect(screen.getByRole("button", { name: /re-transcribing/i })).toBeDisabled();
+    expect(screen.getByText(/transcribing \(them\)/i)).toBeInTheDocument();
   });
 
   it("shows the rejection message inline in a destructive-colored line on failure", async () => {
@@ -280,6 +313,7 @@ describe("SessionView: audio playback and re-transcribe (Task 4, stage-0.7)", ()
         liveLines={[]}
         interimMe=""
         interimThem=""
+        retranscribingJob={null}
       />
     );
 
@@ -310,6 +344,7 @@ describe("SessionView: audio playback and re-transcribe (Task 4, stage-0.7)", ()
         liveLines={[]}
         interimMe=""
         interimThem=""
+        retranscribingJob={null}
       />
     );
 

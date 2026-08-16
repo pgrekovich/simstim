@@ -139,6 +139,8 @@ Status (2026-08-15): stage 0.5 shipped: shadcn UI, settings dialog (output folde
 
 Status (2026-08-15): stage 0.6 shipped: Anarlog-style shell (folder-backed sidebar, session view with notes), interim decoding with 10s force-finalize backstop, light/dark themes, file format v2 with round-trip parser.
 
+Status (2026-08-16): stage 0.7 shipped: call audio kept as a stereo FLAC next to the transcript (configurable, default on), whisper large-v3-turbo re-transcribe pass (12x realtime, replaces the transcript outright), click-to-seek audio playback on transcript lines.
+
 ## Stage 0.6: the shell (approved 2026-08-15)
 
 Pivot from "process control panel" to "notes app where recording is a side

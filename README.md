@@ -48,6 +48,17 @@ again.
 Bundled `.app` builds carry their own Info.plist keys and prompt normally,
 so this only matters for `pnpm tauri dev`.
 
+## Re-transcribe
+
+Parakeet's live transcript can be rough, especially in Russian. To get a better pass:
+
+1. Settings > Models > download "Whisper large-v3-turbo (q8)" (about 874 MB, one-time).
+2. Open a session that has audio (recorded with "Keep call audio" on) and press Re-transcribe.
+3. Whisper runs at about 12x realtime, so a 30 minute call takes about 2.5 minutes. Progress shows in the session header.
+4. The old transcript is replaced outright, not merged or kept. Everything else (title, notes, date, duration) stays.
+
+The audio file lives right next to the `.md` (same basename, `.flac` extension) and macOS plays FLAC natively in QuickTime and Quick Look.
+
 ## Status
 
-stage 0.6 shipped: notes-app shell (sidebar of sessions read from the output folder, session view with editable title and notes), interim transcript drafts while speaking, light/dark themes following the system. Known gaps: Parakeet Russian quality (whisper re-transcribe planned as the next engine), no meeting detection yet.
+stage 0.7 shipped: call audio kept as a stereo FLAC next to the transcript (mic = left/Me, system = right/Them, configurable via Settings > Keep call audio), whisper large-v3-turbo re-transcribe pass for better quality (especially Russian), click-to-seek playback on transcript lines. Known gaps: no meeting detection yet, no menu bar/hotkeys.

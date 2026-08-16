@@ -92,6 +92,12 @@ function App() {
   const [activeNotes, setActiveNotes] = useState(ACTIVE_SESSION_PLACEHOLDER.notes);
   const [sessionData, setSessionData] = useState<SessionData | null>(null);
   const [sessionDataError, setSessionDataError] = useState<string | null>(null);
+  // Bumped when a re-transcribe job finishes for the currently selected,
+  // inactive session (see the `retranscribe-progress` listener below):
+  // included in that SessionView's `key` so it fully remounts and re-seeds
+  // from the fresh `sessionData`, since it otherwise only reads
+  // `initialData` once, on mount.
+  const [reloadTick, setReloadTick] = useState(0);
   // See `RetranscribeJob`'s doc comment: survives a SessionView remount,
   // unlike a local boolean would.
   const [retranscribingJob, setRetranscribingJob] = useState<RetranscribeJob>(null);
@@ -223,6 +229,26 @@ function App() {
       const { path, phase } = event.payload;
       if (phase === "done" || phase === "error") {
         setRetranscribingJob((prev) => (prev?.path === path ? null : prev));
+        // Minor fix-review finding: a SessionView only re-seeds its local
+        // `transcript` state from `initialData` on mount (see its class doc
+        // comment) -- the instance that actually clicked "Re-transcribe"
+        // handles its own re-read once the command's promise resolves, but
+        // a DIFFERENT SessionView instance for the same path (the user
+        // switched away mid-job and back, which unmounts/remounts it under
+        // the same `key={path}`) seeded from a stale on-disk read taken
+        // before this job finished, and has no code path of its own that
+        // would ever refresh it. Cover that case here: on "done" for the
+        // currently selected (and not actively-recording) session, refetch
+        // and bump `reloadTick` so the SessionView key changes and it
+        // remounts with the fresh transcript. Harmless if this happens to
+        // be the initiating instance too -- it just remounts with the same
+        // data it already fetched itself.
+        if (phase === "done" && path === selectedPath && path !== activePath) {
+          readSession(path)
+            .then((data) => setSessionData(data))
+            .catch((err) => setSessionDataError(String(err)));
+          setReloadTick((n) => n + 1);
+        }
         return;
       }
       setRetranscribingJob({ path, text: describeRetranscribeProgress(event.payload) });
@@ -230,7 +256,7 @@ function App() {
     return () => {
       unlisten.then((f) => f());
     };
-  }, []);
+  }, [selectedPath, activePath]);
 
   // The sidebar's one-time refresh at `start_recording`'s resolution (in
   // handleStart below) fires before the session file necessarily exists on
@@ -505,7 +531,7 @@ function App() {
           ) : (
             <SessionView
               ref={activeSessionViewRef}
-              key={selectedPath}
+              key={`${selectedPath}:${reloadTick}`}
               path={selectedPath}
               isActive={false}
               initialData={sessionData}

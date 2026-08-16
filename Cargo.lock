@@ -960,6 +960,7 @@ dependencies = [
  "flacenc",
  "futures-util",
  "hound",
+ "libc",
  "reqwest",
  "serde",
  "serde_json",

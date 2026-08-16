@@ -37,6 +37,11 @@ bzip2 = "0.4"
 hound = "3"
 flacenc = "0.5"
 claxon = "0.4"
+# Process-group kill in aac::run_with_timeout: killing only the direct child
+# leaves forked helpers holding our stdout/stderr pipes, which silently
+# defeats the watchdog (observed: a 200ms timeout blocking for the full 30s
+# of a grandchild's sleep).
+libc = "0.2"
 # Used at runtime (not just in tests) since stage-0.7's AAC format change:
 # decoding a `.m4a` (re-transcribe, continuation prefill) shells out to
 # `afconvert` into a scratch WAV first (see `aac.rs`), which needs a real

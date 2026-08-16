@@ -112,11 +112,26 @@ const AFINFO_TIMEOUT: Duration = Duration::from_secs(15);
 /// itself is unit-testable against a fake binary that sleeps, without
 /// depending on being able to make the real `afconvert`/`afinfo` hang.
 fn run_with_timeout(program: &Path, args: &[&OsStr], timeout: Duration) -> Result<Output> {
-    let mut child = Command::new(program)
-        .args(args)
+    let mut cmd = Command::new(program);
+    cmd.args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::piped());
+    // Put the child in its own process group so the timeout path can kill
+    // the WHOLE group, not just the direct child. Without this, a child
+    // that forked helpers (a shell wrapper, a wedged tool's subprocess)
+    // defeats the watchdog entirely: kill() reaps the direct child, but the
+    // orphaned grandchildren inherit our stdout/stderr pipes and keep them
+    // open, so the reader-thread joins below block until the grandchildren
+    // exit on their own. This was observed for real: the wedged-process
+    // test's `sh` script forked its `sleep`, and the "200ms" timeout took
+    // the full 30 seconds.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+    let mut child = cmd
         .spawn()
         .with_context(|| format!("spawning {}", program.display()))?;
 
@@ -139,11 +154,19 @@ fn run_with_timeout(program: &Path, args: &[&OsStr], timeout: Duration) -> Resul
             Some(status) => break status,
             None => {
                 if started.elapsed() >= timeout {
-                    // Best-effort: if kill() itself fails (process already
-                    // gone in a race, or a permissions oddity), there is
-                    // nothing more constructive to do than report the
-                    // timeout anyway -- the caller must not block forever
-                    // either way.
+                    // Kill the whole process group first (see the
+                    // process_group comment above: the direct child alone is
+                    // not enough when it forked helpers that hold our
+                    // pipes), then the direct child as a belt-and-suspenders
+                    // fallback. Best-effort throughout: if the kill itself
+                    // fails (process already gone in a race, or a
+                    // permissions oddity), there is nothing more
+                    // constructive to do than report the timeout anyway --
+                    // the caller must not block forever either way.
+                    #[cfg(unix)]
+                    unsafe {
+                        libc::kill(-(child.id() as i32), libc::SIGKILL);
+                    }
                     let _ = child.kill();
                     let _ = child.wait();
                     // The reader threads will observe EOF once the process
@@ -485,8 +508,8 @@ mod tests {
         /// `run_with_timeout` takes `program` as a parameter specifically so
         /// this doesn't need to make the REAL system binaries hang (which
         /// isn't practical to arrange) to prove the watchdog works.
-        fn write_sleep_script(path: &Path, sleep_secs: u64) {
-            std::fs::write(path, format!("#!/bin/sh\nsleep {sleep_secs}\n")).unwrap();
+        fn write_script(path: &Path, body: &str) {
+            std::fs::write(path, format!("#!/bin/sh\n{body}\n")).unwrap();
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
@@ -494,6 +517,10 @@ mod tests {
                 perms.set_mode(0o755);
                 std::fs::set_permissions(path, perms).unwrap();
             }
+        }
+
+        fn write_sleep_script(path: &Path, sleep_secs: u64) {
+            write_script(path, &format!("sleep {sleep_secs}"));
         }
 
         /// Regression test for the review finding: `Command::output()`
@@ -518,14 +545,41 @@ mod tests {
                 format!("{err}").contains("timed out"),
                 "expected a timeout error, got: {err}"
             );
-            // Generous bound on purpose: the assertion's point is "far less
-            // than the script's 30s sleep", not a latency guarantee. The
-            // original 5s bound flaked once under a heavily loaded test
-            // machine (parallel cargo test + a background build).
             assert!(
-                elapsed < Duration::from_secs(15),
+                elapsed < Duration::from_secs(5),
                 "expected the watchdog to return promptly after the {timeout:?} bound, \
                  took {elapsed:?} instead -- looks like it waited out the 30s sleep"
+            );
+        }
+
+        /// The failure mode that originally surfaced as a "flaky" test: the
+        /// wedged process FORKS a helper that inherits our stdout/stderr
+        /// pipes. Killing only the direct child reaps it, but the orphaned
+        /// grandchild keeps the pipes open, so the reader-thread joins block
+        /// until the grandchild exits on its own (observed: a 200ms timeout
+        /// taking the full 30 seconds). The process-group kill must take the
+        /// grandchild down too. The `&` + `wait` script makes the fork
+        /// deterministic instead of depending on whether the shell happens
+        /// to exec its last command.
+        #[test]
+        fn kills_a_wedged_process_tree_including_forked_grandchildren() {
+            let dir = tempfile::tempdir().unwrap();
+            let script = dir.path().join("wedged_tree.sh");
+            write_script(&script, "sleep 30 &\nwait");
+
+            let timeout = Duration::from_millis(200);
+            let started = Instant::now();
+            let err = run_with_timeout(&script, &[], timeout).unwrap_err();
+            let elapsed = started.elapsed();
+
+            assert!(
+                format!("{err}").contains("timed out"),
+                "expected a timeout error, got: {err}"
+            );
+            assert!(
+                elapsed < Duration::from_secs(5),
+                "expected the group kill to also reap the forked grandchild holding \
+                 the pipes; took {elapsed:?} -- looks like the join waited out its sleep"
             );
         }
 

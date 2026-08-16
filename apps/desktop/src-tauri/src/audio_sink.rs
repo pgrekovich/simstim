@@ -347,20 +347,49 @@ fn encode_flac(wav_path: &Path, flac_path: &Path) -> anyhow::Result<()> {
     // `encode_with_fixed_block_size` derives STREAMINFO's min_block_size
     // from whatever the last, possibly-partial block actually turns out to
     // be (`Stream::add_frame` takes the min over every frame's real size).
-    // A recording whose total sample count leaves a tiny remainder against
-    // `block_size` -- anywhere from 1 up to `flacenc::constant::MIN_BLOCK_SIZE
-    // - 1` frames, including a whole recording shorter than that -- would
-    // therefore produce a file most decoders (including claxon) reject as
-    // invalid FLAC (block size must be at least 16 per spec; flacenc's own
-    // encoder minimum is stricter, at `MIN_BLOCK_SIZE` = 32). Right-pad with
-    // digital silence so the trailing block is never in that too-small
-    // range: inaudible, and distinct from the sync rule's own silence
-    // padding above (a FLAC container constraint, not a channel-sync one).
+    // Any recording whose total sample count isn't an exact multiple of
+    // `block_size` -- i.e. essentially every real recording, since call
+    // lengths never land on a 4096-sample boundary -- leaves that last
+    // block shorter than `block_size`, so STREAMINFO ends up with
+    // min_block_size < max_block_size.
+    //
+    // Bug found via direct diagnosis (2026-08-16 FLAC-playback report): every
+    // frame `encode_fixed_size_frame` writes (flacenc 0.5.1's `coding.rs`) is
+    // header-coded as `FrameOffset::Frame` -- fixed-blocksize/frame-number
+    // style (FLAC's `blocking_strategy` bit = 0) -- regardless of whether the
+    // block sizes actually differ. A STREAMINFO with min != max block size is
+    // exactly the FLAC-spec signal for a *variable*-blocksize stream, whose
+    // frames are supposed to carry a sample-number header instead
+    // (`blocking_strategy` = 1). So whenever the last block is short,
+    // flacenc emits a file whose STREAMINFO and frame headers disagree about
+    // which encoding scheme is in use. libFLAC and ffmpeg tolerate the
+    // mismatch (libFLAC only warns: "sample or frame number does not
+    // increase correctly"); macOS's own Core Audio FLAC decoder does not --
+    // confirmed directly with `afconvert` against a minimal repro pair built
+    // with the same flacenc version: a stream padded to an exact block-size
+    // multiple (min == max) decodes fine (exit 0), while one left with a
+    // shorter final block (min != max, same as this function used to
+    // produce) fails with `ExtAudioFileSetProperty ('cfmt') failed`. WKWebView
+    // (what `<audio>` runs on in this Tauri app) uses that same decoder, and
+    // fails identically (`MEDIA_ERR_DECODE`) regardless of the asset
+    // protocol's announced Content-Type -- confirmed with a real WKWebView
+    // probe, ruling out a MIME-type cause. See the FLAC-playback report for
+    // the full evidence trail.
+    //
+    // The fix: always right-pad the trailing partial block up to a FULL
+    // `block_size`, not just up to flacenc's own encoder minimum -- so every
+    // frame this function ever writes is exactly `block_size` samples and
+    // STREAMINFO's min_block_size == max_block_size unconditionally,
+    // sidestepping the inconsistent encoding entirely rather than special-
+    // casing which decoders tolerate it. At most `block_size - 1` samples
+    // (under 256ms at 16kHz) of inaudible digital silence, distinct from the
+    // sync rule's own silence padding above (a FLAC container/decoder
+    // compatibility concern, not a channel-sync one).
     let total_frames = samples.len() / channels;
     if total_frames > 0 {
         let remainder = total_frames % block_size;
-        if remainder != 0 && remainder < flacenc::constant::MIN_BLOCK_SIZE {
-            let pad_frames = flacenc::constant::MIN_BLOCK_SIZE - remainder;
+        if remainder != 0 {
+            let pad_frames = block_size - remainder;
             samples.extend(std::iter::repeat_n(0i32, pad_frames * channels));
         }
     }
@@ -466,10 +495,10 @@ fn stream_prefill_m4a(
 /// one straight through.
 ///
 /// Note: if the old file's own trailing block needed [`encode_flac`]'s
-/// minimum-block-size silence padding (see that function's docs), this reads
-/// that padding back too and carries it into the new recording verbatim --
-/// at most `MIN_BLOCK_SIZE - 1` frames (well under 2ms at 16kHz), inaudible
-/// and already a documented property of these files, not something this
+/// full-block silence padding (see that function's docs), this reads that
+/// padding back too and carries it into the new recording verbatim -- at
+/// most `block_size - 1` frames (under 256ms at 16kHz), inaudible and
+/// already a documented property of these files, not something this
 /// prefill step introduces. Not worth stripping: doing so reliably would
 /// mean reverse-engineering flacenc's own block-boundary decisions from the
 /// decoded samples, real audio can legitimately end in near-silence too, and
@@ -1175,6 +1204,92 @@ mod tests {
         assert!(decoded_them[expected_them.len()..].iter().all(|&s| s == 0));
     }
 
+    /// Regression test for the 2026-08-16 FLAC-playback bug (see the
+    /// FLAC-playback report in `.superpowers/sdd/`): `encode_flac` used to
+    /// only pad the trailing block up to flacenc's own encoder minimum (32
+    /// samples), so any recording whose total sample count left a bigger
+    /// remainder against `block_size` (4096) -- i.e. essentially every real
+    /// recording -- produced a FLAC whose STREAMINFO reported
+    /// min_block_size < max_block_size. Diagnosis found that flacenc 0.5.1
+    /// always header-codes frames as fixed-blocksize/frame-number
+    /// (`FrameOffset::Frame`) regardless of that STREAMINFO signal, an
+    /// internal inconsistency libFLAC/ffmpeg tolerate but macOS's own Core
+    /// Audio FLAC decoder (what WKWebView's `<audio>` element uses) rejects
+    /// outright. The fix always pads the trailing block up to a FULL
+    /// `block_size`, so min_block_size == max_block_size unconditionally.
+    /// Exercises several sample counts that used to land on both sides of
+    /// the old, narrower threshold, plus an exact multiple (remainder == 0,
+    /// which was never broken) as a control.
+    #[test]
+    fn encoded_flac_has_a_uniform_block_size_regardless_of_recording_length() {
+        let dir = tempfile::tempdir().unwrap();
+        let no_op = |_msg: String| {};
+
+        // flacenc's default block size is 4096 (`DEFAULT_BLOCK_SIZE`); these
+        // frame counts cover: shorter than one block, just past flacenc's
+        // old MIN_BLOCK_SIZE (32) threshold, well past it (the common,
+        // previously-broken case), and an exact multiple (the one case that
+        // was never broken, kept here as a control).
+        for frame_count in [1usize, 40, 4096 * 3 + 123, 4096 * 2] {
+            let md_path = dir.path().join(format!("call-{frame_count}.md"));
+            let mut sink = AudioSink::new(&md_path, AudioFormat::Flac).unwrap();
+            let samples: Vec<f32> = (0..frame_count)
+                .map(|i| (i as f32 * 0.01).sin() * 0.2)
+                .collect();
+            sink.push(Channel::Me, &samples, &no_op);
+            sink.push(Channel::Them, &samples, &no_op);
+            let flac_path = sink.finish(&no_op).unwrap();
+
+            let reader = claxon::FlacReader::open(&flac_path).unwrap();
+            let info = reader.streaminfo();
+            assert_eq!(
+                info.min_block_size, info.max_block_size,
+                "frame_count={frame_count}: STREAMINFO min/max block size must \
+                 match -- a mismatch here is exactly what made macOS's FLAC \
+                 decoder reject the file even though libFLAC/ffmpeg accepted it"
+            );
+        }
+    }
+
+    /// Same regression as above, verified against the actual decoder in
+    /// question instead of just STREAMINFO's fields: shells out to
+    /// `/usr/bin/afconvert` (macOS's own Core Audio-based conversion tool --
+    /// the same decode stack WKWebView's `<audio>` element uses, and already
+    /// this codebase's convention for AAC in `aac.rs`) to decode the
+    /// produced FLAC. Before the fix, this failed with `ExtAudioFileSetProperty
+    /// ('cfmt') failed` for exactly the sample counts exercised here (see the
+    /// FLAC-playback report for the full repro).
+    #[test]
+    fn encoded_flac_is_actually_decodable_by_macos_core_audio() {
+        let dir = tempfile::tempdir().unwrap();
+        let no_op = |_msg: String| {};
+
+        for frame_count in [40usize, 4096 * 3 + 123] {
+            let md_path = dir.path().join(format!("call-{frame_count}.md"));
+            let mut sink = AudioSink::new(&md_path, AudioFormat::Flac).unwrap();
+            let samples: Vec<f32> = (0..frame_count)
+                .map(|i| (i as f32 * 0.01).sin() * 0.2)
+                .collect();
+            sink.push(Channel::Me, &samples, &no_op);
+            sink.push(Channel::Them, &samples, &no_op);
+            let flac_path = sink.finish(&no_op).unwrap();
+
+            let decoded_wav = dir.path().join(format!("decoded-{frame_count}.wav"));
+            let output = std::process::Command::new("/usr/bin/afconvert")
+                .args(["-f", "WAVE", "-d", "LEI16"])
+                .arg(&flac_path)
+                .arg(&decoded_wav)
+                .output()
+                .expect("afconvert must be present on macOS");
+            assert!(
+                output.status.success(),
+                "frame_count={frame_count}: afconvert failed to decode the encoded \
+                 flac -- stderr: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
+
     #[test]
     fn finish_with_no_pushes_still_produces_an_empty_valid_flac() {
         let dir = tempfile::tempdir().unwrap();
@@ -1275,19 +1390,17 @@ mod tests {
             let no_op = |_msg: String| {};
 
             // A "previous recording": known samples, cleanly finished to a
-            // real flac. At least `flacenc::constant::MIN_BLOCK_SIZE` (32)
-            // frames, so `encode_flac`'s own trailing-block silence padding
-            // (see its docs) never kicks in here -- keeping this test's
-            // byte-exact comparison meaningful instead of having to account
-            // for that unrelated, harmless padding.
-            let old_me: Vec<f32> = (0..40).map(|i| (i as f32 / 100.0) - 0.2).collect();
-            let old_them: Vec<f32> = (0..40).map(|i| 0.2 - (i as f32 / 100.0)).collect();
+            // real flac. Exactly one `block_size` (4096) worth of frames --
+            // `encode_flac` only right-pads the trailing block when the
+            // total isn't already a full-block multiple (see its docs), so
+            // this stays byte-exact with no extra silence, keeping the
+            // adjacency check between old and new content below meaningful.
+            let old_me: Vec<f32> = (0..4096).map(|i| ((i % 100) as f32 / 100.0) - 0.2).collect();
+            let old_them: Vec<f32> = (0..4096).map(|i| 0.2 - ((i % 100) as f32 / 100.0)).collect();
             {
                 let mut sink = AudioSink::new(&md_path, AudioFormat::Flac).unwrap();
-                for i in 0..old_me.len() {
-                    sink.push(Channel::Me, &old_me[i..i + 1], &no_op);
-                    sink.push(Channel::Them, &old_them[i..i + 1], &no_op);
-                }
+                sink.push(Channel::Me, &old_me, &no_op);
+                sink.push(Channel::Them, &old_them, &no_op);
                 sink.finish(&no_op).unwrap();
             }
             let flac_path = audio_path_for(&md_path);
@@ -1295,7 +1408,7 @@ mod tests {
 
             // last_offset_secs of 0.0 so the reconciliation in
             // `new_continuing` doesn't pad any silence past the old audio's
-            // own 40 frames -- this test is about the prefill/new-capture
+            // own 4096 frames -- this test is about the prefill/new-capture
             // seam, not the reconciliation itself (covered by `target_base`
             // and `wav_fallback_collision` above/below).
             let (mut sink, target_base_secs) =
@@ -1695,16 +1808,17 @@ mod tests {
             let no_op = |_msg: String| {};
 
             // Old flac: real content, encoded normally (not through a
-            // forced-failure path) -- at least MIN_BLOCK_SIZE frames so no
-            // trailing-block padding muddies the byte-exact checks below.
-            let old_me: Vec<f32> = (0..40).map(|i| (i as f32 / 100.0) - 0.2).collect();
-            let old_them: Vec<f32> = (0..40).map(|i| 0.2 - (i as f32 / 100.0)).collect();
+            // forced-failure path). Exactly one `block_size` (4096) worth of
+            // frames, so `encode_flac`'s trailing-block padding (see its
+            // docs) never kicks in here -- the check below indexes right
+            // after `old_me.len()`, which needs the old content to be
+            // byte-exact with no extra silence tacked on.
+            let old_me: Vec<f32> = (0..4096).map(|i| ((i % 100) as f32 / 100.0) - 0.2).collect();
+            let old_them: Vec<f32> = (0..4096).map(|i| 0.2 - ((i % 100) as f32 / 100.0)).collect();
             {
                 let mut sink = AudioSink::new(&md_path, AudioFormat::Flac).unwrap();
-                for i in 0..old_me.len() {
-                    sink.push(Channel::Me, &old_me[i..i + 1], &no_op);
-                    sink.push(Channel::Them, &old_them[i..i + 1], &no_op);
-                }
+                sink.push(Channel::Me, &old_me, &no_op);
+                sink.push(Channel::Them, &old_them, &no_op);
                 sink.finish(&no_op).unwrap();
             }
             let flac_path = audio_path_for(&md_path);
@@ -1846,8 +1960,12 @@ mod tests {
             let md_path = dir.path().join("call.md");
             let no_op = |_msg: String| {};
 
-            let old_me = tone(3200, 440.0, 0.4);
-            let old_them = tone(3200, 220.0, 0.3);
+            // Exactly one `block_size` (4096) worth of frames, so
+            // `encode_flac`'s trailing-block padding (see its docs) never
+            // kicks in for the OLD flac -- keeping the "exactly old+new
+            // frames" count assertion below meaningful.
+            let old_me = tone(4096, 440.0, 0.4);
+            let old_them = tone(4096, 220.0, 0.3);
             {
                 let mut sink = AudioSink::new(&md_path, AudioFormat::Flac).unwrap();
                 sink.push(Channel::Me, &old_me, &no_op);

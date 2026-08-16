@@ -149,13 +149,12 @@ pub fn save_session_at(
 /// title/notes save touch only the frontmatter and `## Notes`, never the
 /// transcript body.
 ///
-/// The `asr` field itself isn't read back from the file at all: `Transcript`
-/// always renders the single asr id this codebase currently supports
-/// (`simstim_transcript::ASR_MODEL_ID`), so re-rendering reproduces it
-/// exactly. If a future stage supports multiple ASR backends and mixes their
-/// output files, this will need to carry the original `asr` value through
-/// explicitly instead of relying on the constant -- noted here rather than
-/// solved speculatively now.
+/// The `asr` field is carried through byte-exact from the existing file
+/// (`meta.asr`, via `Transcript::set_asr`) rather than left to `Transcript`'s
+/// own default: since stage 0.7, a file's `asr` can be the whisper
+/// re-transcribe model's id (see `rewrite_transcript_at` below) instead of
+/// always the Parakeet default, and a plain title/notes edit through this
+/// function must not silently reset that back.
 fn rewrite_session(path: &Path, title: &str, notes: &str) -> Result<()> {
     let existing = parse_session(path)?;
     let meta = parse_meta(path)?;
@@ -167,10 +166,43 @@ fn rewrite_session(path: &Path, title: &str, notes: &str) -> Result<()> {
     transcript.set_raw_date(existing.date.clone());
     transcript.set_title(title.to_string());
     transcript.set_notes(notes.to_string());
+    transcript.set_asr(meta.asr.clone());
     if let Some(duration_secs) = meta.duration_secs {
         transcript.set_duration_secs(duration_secs);
     }
     transcript.set_raw_transcript(existing.transcript.clone());
+    transcript.save(path)
+}
+
+/// Rewrites `path`'s `## Transcript` section with `new_transcript` (already
+/// formatted, one `[hh:mm:ss] Who: text` line per entry, no leading/trailing
+/// blank lines) and sets `asr` to `asr_id`, while preserving title, notes,
+/// date and duration exactly. A sibling to `rewrite_session` above with the
+/// opposite split: that one preserves the transcript and asr and replaces
+/// title/notes; this one preserves title/notes/date/duration and replaces
+/// the transcript and asr.
+///
+/// Used by the stage-0.7 re-transcribe pipeline (`retranscribe.rs`): per the
+/// Global Constraints, re-transcribing REPLACES the transcript section
+/// outright rather than merging with what was there (the owner's ruling:
+/// the app never edits transcripts, so the previous pass's text is not kept
+/// once a new one lands).
+pub fn rewrite_transcript_at(path: &Path, new_transcript: &str, asr_id: &str) -> Result<()> {
+    let existing = parse_session(path)?;
+    let meta = parse_meta(path)?;
+    let started_at = DateTime::parse_from_rfc3339(&existing.date)
+        .map(|dt| dt.with_timezone(&Local))
+        .unwrap_or_else(|_| Local::now());
+
+    let mut transcript = Transcript::new(started_at);
+    transcript.set_raw_date(existing.date.clone());
+    transcript.set_title(existing.title.clone());
+    transcript.set_notes(existing.notes.clone());
+    if let Some(duration_secs) = meta.duration_secs {
+        transcript.set_duration_secs(duration_secs);
+    }
+    transcript.set_asr(asr_id);
+    transcript.set_raw_transcript(new_transcript.to_string());
     transcript.save(path)
 }
 
@@ -443,6 +475,64 @@ mod tests {
             data.title, "Do not touch",
             "the pre-existing file must survive untouched"
         );
+    }
+
+    #[test]
+    fn rewrite_session_preserves_a_non_default_asr_value() {
+        // Regression guard: before `rewrite_session` carried `meta.asr`
+        // through, a title/notes save on a file already re-transcribed by
+        // whisper would silently reset its `asr:` back to the Parakeet
+        // default, since `Transcript` always rendered its own default unless
+        // told otherwise.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("call.md");
+        let content = "---\ndate: 2026-06-01T09:00:00+02:00\ntitle: Old title\nasr: whisper-large-v3-turbo-q8\n---\n\n## Notes\n\nOld notes\n\n## Transcript\n\n[00:00:01] Me: hi\n";
+        std::fs::write(&path, content).unwrap();
+
+        save_session_at(&path, "New title", "New notes", None).unwrap();
+
+        let after = std::fs::read_to_string(&path).unwrap();
+        assert!(after.contains("asr: whisper-large-v3-turbo-q8"));
+        assert!(after.contains("title: New title"));
+    }
+
+    #[test]
+    fn rewrite_transcript_at_replaces_transcript_and_asr_preserving_the_rest() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("call.md");
+        let mut tr = Transcript::new(t(10, 0, 0));
+        tr.set_title("Weekly sync".into());
+        tr.set_notes("Some notes".into());
+        tr.set_duration_secs(600);
+        tr.add(Speaker::Me, 3.0, "hi everyone (parakeet)".into());
+        tr.save(&path).unwrap();
+        let before = std::fs::read_to_string(&path).unwrap();
+        let date_line_before = before.lines().find(|l| l.starts_with("date:")).unwrap();
+
+        rewrite_transcript_at(
+            &path,
+            "[00:00:03] Me: hi everyone (whisper)\n[00:00:15] Them: hello pavel",
+            "whisper-large-v3-turbo-q8",
+        )
+        .unwrap();
+
+        let after = std::fs::read_to_string(&path).unwrap();
+        assert!(after.contains("title: Weekly sync"), "title must be preserved: {after}");
+        assert!(after.contains("Some notes"), "notes must be preserved: {after}");
+        assert!(after.contains("duration: 10m"), "duration must be preserved: {after}");
+        assert!(
+            after.contains("asr: whisper-large-v3-turbo-q8"),
+            "asr must be updated to the new model: {after}"
+        );
+        assert!(after.contains("[00:00:03] Me: hi everyone (whisper)"));
+        assert!(after.contains("[00:00:15] Them: hello pavel"));
+        assert!(
+            !after.contains("parakeet"),
+            "the previous transcript text must not survive: {after}"
+        );
+
+        let date_line_after = after.lines().find(|l| l.starts_with("date:")).unwrap();
+        assert_eq!(date_line_before, date_line_after, "date must be preserved verbatim");
     }
 
     #[test]

@@ -36,8 +36,8 @@ tar = "0.4"
 bzip2 = "0.4"
 hound = "3"
 flacenc = "0.5"
+claxon = "0.4"
 
 [dev-dependencies]
 tempfile = "3"
-claxon = "0.4"
 

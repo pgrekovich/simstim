@@ -1,6 +1,7 @@
 pub mod audio_sink;
 pub mod config;
 pub mod models;
+pub mod retranscribe;
 pub mod session;
 pub mod sessions;
 
@@ -221,6 +222,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState(Mutex::new(None)))
         .manage(DownloadState::default())
+        .manage(retranscribe::RetranscribeState::default())
         .invoke_handler(tauri::generate_handler![
             start_recording,
             stop_recording,
@@ -235,7 +237,8 @@ pub fn run() {
             sessions::list_sessions,
             sessions::read_session,
             sessions::save_session,
-            sessions::create_session
+            sessions::create_session,
+            retranscribe::retranscribe_session
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

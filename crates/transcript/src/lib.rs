@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 /// without duplicating the literal.
 pub const ASR_MODEL_ID: &str = "parakeet-tdt-0.6b-v3";
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Speaker {
     Me,
     Them,
@@ -33,6 +33,12 @@ pub struct Transcript {
     date_override: Option<String>,
     title: String,
     notes: String,
+    /// The ASR backend id rendered into the `asr:` frontmatter line. Defaults
+    /// to [`ASR_MODEL_ID`] (the live Parakeet pipeline); [`Self::set_asr`]
+    /// overrides it, for the stage-0.7 re-transcribe pass writing
+    /// `whisper-large-v3-turbo-q8` instead, or for `sessions::rewrite_session`
+    /// carrying an existing file's asr value through unchanged.
+    asr: String,
     duration_secs: Option<u64>,
     lines: Vec<Line>,
     /// When set, overrides the rendered `## Transcript` section body with
@@ -52,6 +58,7 @@ impl Transcript {
             date_override: None,
             title: "Untitled".to_string(),
             notes: String::new(),
+            asr: ASR_MODEL_ID.to_string(),
             duration_secs: None,
             lines: Vec::new(),
             transcript_override: None,
@@ -65,6 +72,17 @@ impl Transcript {
 
     pub fn set_notes(&mut self, notes: String) {
         self.notes = notes;
+    }
+
+    /// Overrides the rendered `asr:` frontmatter value, which model produced
+    /// the CURRENT transcript text. Defaults to [`ASR_MODEL_ID`] (Parakeet,
+    /// the live pipeline); the stage-0.7 re-transcribe pass calls this with
+    /// the whisper model id after replacing the transcript section, and
+    /// `sessions::rewrite_session` calls it with whatever value an existing
+    /// file already had, so a plain title/notes edit doesn't silently reset
+    /// a whisper-produced file's `asr:` back to the Parakeet default.
+    pub fn set_asr(&mut self, asr: impl Into<String>) {
+        self.asr = asr.into();
     }
 
     /// Overrides the rendered `date:` frontmatter line with this exact
@@ -167,7 +185,7 @@ impl Transcript {
         });
         let mut out = format!(
             "---\ndate: {}\ntitle: {}\nasr: {}\n",
-            date, self.title, ASR_MODEL_ID
+            date, self.title, self.asr
         );
         if let Some(secs) = self.duration_secs {
             out.push_str(&format!("duration: {}m\n", secs / 60));
@@ -267,6 +285,14 @@ pub struct SessionData {
     pub date: String,
     pub notes: String,
     pub transcript: String,
+    /// The `asr:` frontmatter value, defaulting to [`ASR_MODEL_ID`] for a
+    /// file that has none (shouldn't happen for a real file, but mirrors
+    /// `title`'s "Untitled" fallback rather than erroring). Carried through
+    /// so a rewrite that doesn't explicitly change it (`sessions::
+    /// rewrite_session`'s title/notes edits) can reproduce it via
+    /// [`Transcript::set_asr`] instead of silently resetting it to the
+    /// default.
+    pub asr: String,
 }
 
 /// Frontmatter-only view of a session file, for the sidebar's session list.
@@ -275,6 +301,8 @@ pub struct SessionMetaRaw {
     pub title: String,
     pub date: String,
     pub duration_secs: Option<u64>,
+    /// See [`SessionData::asr`]'s docs; same fallback and purpose.
+    pub asr: String,
 }
 
 /// Full parse: frontmatter + `## Notes` + `## Transcript` sections. Accepts
@@ -304,6 +332,10 @@ pub fn parse_session(path: &Path) -> Result<SessionData> {
         .get("title")
         .cloned()
         .unwrap_or_else(|| "Untitled".to_string());
+    let asr = fields
+        .get("asr")
+        .cloned()
+        .unwrap_or_else(|| ASR_MODEL_ID.to_string());
 
     let (transcript_line_start, transcript_content_start) =
         find_last_exact_line(body, "## Transcript")
@@ -323,6 +355,7 @@ pub fn parse_session(path: &Path) -> Result<SessionData> {
         date,
         notes,
         transcript,
+        asr,
     })
 }
 
@@ -360,12 +393,14 @@ pub fn parse_meta(path: &Path) -> Result<SessionMetaRaw> {
         .remove("date")
         .ok_or_else(|| anyhow!("missing date field"))?;
     let title = fields.remove("title").unwrap_or_else(|| "Untitled".to_string());
+    let asr = fields.remove("asr").unwrap_or_else(|| ASR_MODEL_ID.to_string());
     let duration_secs = fields.remove("duration").and_then(|d| parse_duration_field(&d));
 
     Ok(SessionMetaRaw {
         title,
         date,
         duration_secs,
+        asr,
     })
 }
 
@@ -513,6 +548,56 @@ mod tests {
             !md.contains("hi everyone"),
             "lines added via add() must not leak in once the raw override is set"
         );
+    }
+
+    #[test]
+    fn set_asr_overrides_the_rendered_asr_line() {
+        let mut t = Transcript::new(t0());
+        t.set_asr("whisper-large-v3-turbo-q8");
+        let md = t.render();
+        assert!(md.contains("asr: whisper-large-v3-turbo-q8"));
+        assert!(!md.contains("asr: parakeet-tdt-0.6b-v3"));
+    }
+
+    #[test]
+    fn parse_session_carries_the_asr_value_through() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("call.md");
+        let mut t = Transcript::new(t0());
+        t.set_asr("whisper-large-v3-turbo-q8");
+        t.save(&path).unwrap();
+
+        let session = parse_session(&path).unwrap();
+        assert_eq!(session.asr, "whisper-large-v3-turbo-q8");
+    }
+
+    #[test]
+    fn parse_meta_carries_the_asr_value_through() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("call.md");
+        let mut t = Transcript::new(t0());
+        t.set_asr("whisper-large-v3-turbo-q8");
+        t.save(&path).unwrap();
+
+        let meta = parse_meta(&path).unwrap();
+        assert_eq!(meta.asr, "whisper-large-v3-turbo-q8");
+    }
+
+    #[test]
+    fn parse_session_and_parse_meta_default_asr_when_field_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("call.md");
+        // A frontmatter block with no asr field at all -- shouldn't happen
+        // for a real file (render() always writes one), but the fallback
+        // mirrors title's "Untitled" default rather than erroring.
+        std::fs::write(
+            &path,
+            "---\ndate: 2026-06-01T09:00:00+02:00\n---\n\n## Transcript\n\n[00:00:01] Me: hi\n",
+        )
+        .unwrap();
+
+        assert_eq!(parse_session(&path).unwrap().asr, ASR_MODEL_ID);
+        assert_eq!(parse_meta(&path).unwrap().asr, ASR_MODEL_ID);
     }
 
     #[test]

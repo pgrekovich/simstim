@@ -77,6 +77,22 @@ export interface TranscriptInterimPayload {
 
 export type DownloadPhase = "download" | "extract" | "done" | "error";
 
+export type RetranscribePhase = "loading-model" | "transcribing" | "writing" | "done" | "error";
+
+/**
+ * Mirrors `retranscribe::RetranscribeProgressPayload`
+ * (apps/desktop/src-tauri/src/retranscribe.rs), the `retranscribe-progress`
+ * event payload. Unlike `DownloadProgress.message`, `channel` and `message`
+ * are always present (as explicit `null`, not a missing key) since the Rust
+ * side never uses `skip_serializing_if` for this payload.
+ */
+export interface RetranscribeProgress {
+  path: string;
+  phase: RetranscribePhase;
+  channel: "me" | "them" | null;
+  message: string | null;
+}
+
 /**
  * Mirrors `models::ProgressPayload`, the `model-download-progress` event
  * payload. `message` is only present when `phase === "error"`.
@@ -170,4 +186,18 @@ export function saveSession(path: string, title: string, notes: string): Promise
  */
 export function updateActiveSession(title?: string, notes?: string): Promise<void> {
   return invoke("update_active_session", { title, notes });
+}
+
+/**
+ * Starts an offline re-transcription of `path` using the whisper
+ * large-v3-turbo model, replacing its `## Transcript` section outright once
+ * done (title/notes/date/duration preserved, `asr:` updated). Mirrors
+ * `retranscribe::retranscribe_session`
+ * (apps/desktop/src-tauri/src/retranscribe.rs). Resolves once the job
+ * finishes (or rejects immediately if the session is recording, its audio
+ * is missing, the model isn't downloaded, or another job is already
+ * running); progress in between arrives via `retranscribe-progress` events.
+ */
+export function retranscribeSession(path: string): Promise<void> {
+  return invoke("retranscribe_session", { path });
 }

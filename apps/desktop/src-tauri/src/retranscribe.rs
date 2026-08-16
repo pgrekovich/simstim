@@ -1,0 +1,763 @@
+//! On-demand higher-quality re-transcription of a session's saved audio,
+//! using the offline whisper large-v3-turbo pass (`simstim_engine::WhisperEngine`,
+//! a sibling to the live Parakeet pipeline, see that module's docs).
+//!
+//! ## What a re-transcribe does
+//!
+//! Per the stage-0.7 Global Constraints: decode the session's `.flac`
+//! sibling (left channel = Me, right = Them), transcribe each channel with
+//! whisper, merge the two channels' segments into one list sorted by start
+//! time, format them exactly like the live pipeline's own
+//! `[hh:mm:ss] Who: text` lines, and REWRITE the `## Transcript` section
+//! with that text -- replacing it outright, never merging with what was
+//! there before (the owner's ruling: the app never edits transcripts, so a
+//! re-transcribe is a wholesale replacement or nothing). Title, notes, date
+//! and duration are preserved exactly (`sessions::rewrite_transcript_at`),
+//! and `asr:` is updated to the whisper model's id.
+//!
+//! ## Rejections
+//!
+//! Four cases refuse to start, each with a message meant to be read
+//! directly by the user (no internal command/IPC names leaking through, per
+//! the brief): the session is the one currently recording (single-writer
+//! rule); no audio was saved for it (missing file, or `keep_audio` was off
+//! when it was recorded); the whisper model isn't downloaded yet; another
+//! re-transcribe job is already running. Each check is its own small, pure
+//! function (`check_not_active`, `check_audio_present`, `check_model_ready`,
+//! `try_start_job`) so they're unit-testable without a live Tauri app,
+//! mirroring `lib.rs`'s own `rejects_recording_into_active_path` and
+//! `config.rs`'s `validate_theme`.
+//!
+//! The in-flight guard ([`RetranscribeState`]) is global (one job at a time
+//! across ALL sessions), not per-path like `models::DownloadState`'s
+//! per-model-id guard: whisper's Metal/GPU context is a real resource two
+//! concurrent runs would contend over, and re-transcribing is an occasional,
+//! deliberate action -- there's no user-facing reason to need two at once.
+//!
+//! ## Off the main thread, with progress events
+//!
+//! The whole pipeline (model load, both channels' transcription, and the
+//! final write) runs inside `tauri::async_runtime::spawn_blocking`, the same
+//! pattern `models::run_download`'s archive-extract step already uses for
+//! blocking work inside an async command. `retranscribe-progress` events
+//! (`{ path, phase, channel, message }`) fire throughout, ending in `"done"`
+//! on success or `"error"` (emitted by the command wrapper, not the pipeline
+//! itself) on failure.
+//!
+//! ## Single-writer discipline
+//!
+//! The active-recording check above guards the common case, but a job can
+//! run for tens of seconds (model load + two full-channel transcriptions):
+//! nothing stops a NEW recording starting into this same path in the
+//! meantime (continuing an existing session is a supported, ordinary
+//! action, see `session.rs`'s "continuing a session" docs). `before_write`
+//! (built from a fresh `AppState` lookup) re-checks immediately before the
+//! final write and aborts rather than clobbering whatever the recording
+//! worker has since written.
+
+use anyhow::{anyhow, Context, Result};
+use serde::Serialize;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use tauri::{AppHandle, Emitter, Manager, State};
+
+use simstim_engine::{WhisperEngine, WhisperSegment};
+use simstim_transcript::Speaker;
+
+use crate::audio_sink::audio_path_for;
+use crate::models::{self, ModelLayout};
+use crate::sessions;
+use crate::AppState;
+
+/// The registry id of the model this pipeline always uses (see
+/// `models::REGISTRY`). Re-derived from the registry rather than assumed
+/// identical to it everywhere: `whisper_model_path` looks the spec up by
+/// this id, so a mismatch would fail loudly (`check_model_ready` rejecting
+/// with "not downloaded") rather than silently using the wrong file.
+const WHISPER_MODEL_ID: &str = "whisper-large-v3-turbo-q8";
+
+/// `retranscribe-progress` event payload (Global Constraints). `channel` and
+/// `message` serialize as explicit JSON `null` when absent (not omitted, per
+/// the IPC contract), unlike `models::ProgressPayload`'s `message` which
+/// skips instead -- this event's TS side declares both as `| null`, not
+/// optional.
+#[derive(Clone, Serialize)]
+struct RetranscribeProgressPayload {
+    path: String,
+    phase: &'static str,
+    channel: Option<&'static str>,
+    message: Option<String>,
+}
+
+fn emit_progress(
+    app: &AppHandle,
+    path: &str,
+    phase: &'static str,
+    channel: Option<&'static str>,
+    message: Option<String>,
+) {
+    let _ = app.emit(
+        "retranscribe-progress",
+        RetranscribeProgressPayload {
+            path: path.to_string(),
+            phase,
+            channel,
+            message,
+        },
+    );
+}
+
+/// Guards against two re-transcribe jobs running concurrently (see module
+/// docs for why this is global rather than per-path). `Some(path)` names the
+/// session currently being re-transcribed.
+pub struct RetranscribeState(Mutex<Option<String>>);
+
+impl Default for RetranscribeState {
+    fn default() -> Self {
+        Self(Mutex::new(None))
+    }
+}
+
+/// One transcribed span tagged with which channel it came from. The merge
+/// step's input/output shape: kept separate from `WhisperSegment` so the
+/// speaker tag lives on the type once merging has happened, rather than
+/// threaded through as a side channel.
+#[derive(Debug, Clone, PartialEq)]
+struct TaggedSegment {
+    speaker: Speaker,
+    start_secs: f64,
+    text: String,
+}
+
+/// Merges `me`'s and `them`'s already-transcribed segments into one list
+/// sorted by `start_secs` ascending (Global Constraints: absolute offsets
+/// from the start of the file, merged across channels by timestamp). Ties
+/// (equal `start_secs`) are broken by `me` first -- arbitrary, but
+/// deterministic via `sort_by`'s stability plus `me`'s segments being
+/// chained ahead of `them`'s -- since real whisper timestamps essentially
+/// never collide exactly, this only matters for the synthetic tie test
+/// below.
+fn merge_segments(me: Vec<WhisperSegment>, them: Vec<WhisperSegment>) -> Vec<TaggedSegment> {
+    let mut merged: Vec<TaggedSegment> = me
+        .into_iter()
+        .map(|s| TaggedSegment {
+            speaker: Speaker::Me,
+            start_secs: s.start_secs,
+            text: s.text,
+        })
+        .chain(them.into_iter().map(|s| TaggedSegment {
+            speaker: Speaker::Them,
+            start_secs: s.start_secs,
+            text: s.text,
+        }))
+        .collect();
+    merged.sort_by(|a, b| {
+        a.start_secs
+            .partial_cmp(&b.start_secs)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    merged
+}
+
+/// Formats one offset (truncated to whole seconds, matching
+/// `simstim_transcript::Transcript::render`'s own line format exactly) as
+/// `[hh:mm:ss]`.
+fn format_timestamp(offset_secs: f64) -> String {
+    let s = offset_secs as u64;
+    format!("[{:02}:{:02}:{:02}]", s / 3600, (s % 3600) / 60, s % 60)
+}
+
+/// Formats one merged, tagged segment as a `[hh:mm:ss] Who: text` line, with
+/// no trailing newline (joining is `render_transcript_body`'s job).
+fn format_line(seg: &TaggedSegment) -> String {
+    let who = match seg.speaker {
+        Speaker::Me => "Me",
+        Speaker::Them => "Them",
+    };
+    format!("{} {}: {}", format_timestamp(seg.start_secs), who, seg.text)
+}
+
+/// Renders the merged, sorted segments as the full `## Transcript` section
+/// body (one line per segment, newline-joined, no leading/trailing blank
+/// line) -- exactly the shape `sessions::rewrite_transcript_at`'s
+/// `new_transcript` parameter expects (it hands this straight to
+/// `Transcript::set_raw_transcript`, which itself adds the single trailing
+/// newline `render()` needs). Empty input renders as an empty string.
+fn render_transcript_body(segments: &[TaggedSegment]) -> String {
+    segments.iter().map(format_line).collect::<Vec<_>>().join("\n")
+}
+
+/// The `.flac`'s two channels as independent f32 mono streams (left = Me,
+/// right = Them, Global Constraints), scaled from the encoded 16-bit PCM by
+/// 1/32768 to land back in the roughly `[-1.0, 1.0]` range the rest of the
+/// pipeline (and whisper) expects -- the inverse of `audio_sink::f32_to_i16`
+/// (which scales by `i16::MAX` = 32767 going the other way; the 32768
+/// asymmetry is standard PCM<->float convention and immaterial at 16-bit
+/// resolution).
+fn decode_flac_stereo(path: &Path) -> Result<(Vec<f32>, Vec<f32>)> {
+    let mut reader = claxon::FlacReader::open(path)
+        .with_context(|| format!("opening audio at {}", path.display()))?;
+    let channels = reader.streaminfo().channels;
+    if channels != 2 {
+        return Err(anyhow!(
+            "expected stereo audio in {}, found {channels} channel(s)",
+            path.display()
+        ));
+    }
+    let mut me = Vec::new();
+    let mut them = Vec::new();
+    for (i, sample) in reader.samples().enumerate() {
+        let sample =
+            sample.with_context(|| format!("decoding audio at {}", path.display()))?;
+        let f = sample as f32 / 32768.0;
+        if i % 2 == 0 {
+            me.push(f);
+        } else {
+            them.push(f);
+        }
+    }
+    Ok((me, them))
+}
+
+/// The whisper model's path on disk if the registry knows about it and it's
+/// a `File` layout (it always is, currently -- see `models::REGISTRY`).
+/// Doesn't check existence; callers pair this with `Path::is_file` (see
+/// `check_model_ready`).
+fn whisper_model_path() -> Option<PathBuf> {
+    let spec = models::find(WHISPER_MODEL_ID)?;
+    match &spec.layout {
+        ModelLayout::File { file_name, .. } => Some(simstim_engine::models_dir().join(file_name)),
+        ModelLayout::Archive { .. } => None,
+    }
+}
+
+/// Whether re-transcribing `md_path` should be rejected because it's the
+/// session currently recording (single-writer rule). Pure and testable
+/// without a live `AppState`, mirroring `lib.rs`'s
+/// `rejects_recording_into_active_path`.
+fn check_not_active(md_path: &Path, active: Option<&Path>) -> Result<(), String> {
+    if active == Some(md_path) {
+        Err("this session is currently recording; stop it before re-transcribing".to_string())
+    } else {
+        Ok(())
+    }
+}
+
+/// Whether `flac_path` exists. Covers both "no audio was ever recorded"
+/// (`keep_audio` was off) and "audio retention failed" (see
+/// `audio_sink`'s module docs on sink errors) with one user-facing message,
+/// since from the re-transcribe action's point of view they're the same
+/// situation: there's nothing to transcribe.
+fn check_audio_present(flac_path: &Path) -> Result<(), String> {
+    if flac_path.is_file() {
+        Ok(())
+    } else {
+        Err(
+            "no audio was saved for this call (it may have been recorded with audio retention turned off)"
+                .to_string(),
+        )
+    }
+}
+
+/// Whether the whisper model is downloaded, given the path `whisper_model_path`
+/// resolved (`None` if the registry entry is somehow missing/misshapen).
+fn check_model_ready(model_path: Option<&Path>) -> Result<(), String> {
+    match model_path {
+        Some(p) if p.is_file() => Ok(()),
+        _ => Err(
+            "the improved transcription model isn't downloaded yet -- download it from Settings first"
+                .to_string(),
+        ),
+    }
+}
+
+/// Claims the single global re-transcribe job slot for `path`, or reports
+/// that one is already running. `current` is the state behind the
+/// `Mutex` in [`RetranscribeState`]; split out as a plain function over an
+/// owned `&mut Option<String>` so it's testable without a `Mutex` or a live
+/// Tauri app.
+fn try_start_job(current: &mut Option<String>, path: &str) -> Result<(), String> {
+    if current.is_some() {
+        Err("another session is already being re-transcribed; try again once it finishes".to_string())
+    } else {
+        *current = Some(path.to_string());
+        Ok(())
+    }
+}
+
+/// The re-transcribe pipeline itself: decode `flac_path`, transcribe each
+/// channel with a freshly-loaded whisper model at `model_path`, merge, and
+/// rewrite `md_path`'s transcript section (via
+/// `sessions::rewrite_transcript_at`), setting `asr` to `asr_id`.
+/// Deliberately free of any Tauri type (`AppHandle`/`State`) so it can run
+/// against a plain fixture directly -- including the brief's manual,
+/// non-automated end-to-end check with a real model and a synthetic flac.
+///
+/// `before_write` runs immediately before the final write (single-writer
+/// discipline, see the module docs): return `Err` from it to abort without
+/// touching the file. `on_progress` receives `(phase, channel, message)`,
+/// the same fields as the `retranscribe-progress` event; it must be `Fn +
+/// Clone + Send + 'static` because `WhisperEngine::transcribe`'s own
+/// progress callback requires `'static` (see that module's docs) -- it's
+/// cloned once per channel to feed each transcription's own callback.
+fn run_retranscribe_pipeline(
+    md_path: &Path,
+    flac_path: &Path,
+    model_path: &Path,
+    asr_id: &str,
+    before_write: impl FnOnce() -> Result<()>,
+    on_progress: impl Fn(&'static str, Option<&'static str>, Option<String>) + Clone + Send + 'static,
+) -> Result<()> {
+    on_progress("loading-model", None, None);
+    let mut engine = WhisperEngine::new(model_path)
+        .with_context(|| format!("loading whisper model at {}", model_path.display()))?;
+
+    let (me_samples, them_samples) = decode_flac_stereo(flac_path)?;
+
+    on_progress("transcribing", Some("me"), None);
+    let cb = on_progress.clone();
+    let me_segments = engine
+        .transcribe(&me_samples, move |pct| {
+            cb("transcribing", Some("me"), Some(format!("{:.0}%", pct * 100.0)));
+        })
+        .context("transcribing the Me channel")?;
+
+    on_progress("transcribing", Some("them"), None);
+    let cb = on_progress.clone();
+    let them_segments = engine
+        .transcribe(&them_samples, move |pct| {
+            cb("transcribing", Some("them"), Some(format!("{:.0}%", pct * 100.0)));
+        })
+        .context("transcribing the Them channel")?;
+
+    let merged = merge_segments(me_segments, them_segments);
+    let body = render_transcript_body(&merged);
+
+    on_progress("writing", None, None);
+    before_write()?;
+    sessions::rewrite_transcript_at(md_path, &body, asr_id)?;
+
+    on_progress("done", None, None);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn retranscribe_session(
+    app: AppHandle,
+    path: String,
+    state: State<'_, AppState>,
+    jobs: State<'_, RetranscribeState>,
+) -> Result<(), String> {
+    let md_path = PathBuf::from(&path);
+    check_not_active(&md_path, state.active_output_path().as_deref())?;
+
+    let flac_path = audio_path_for(&md_path);
+    check_audio_present(&flac_path)?;
+
+    let model_path = whisper_model_path();
+    check_model_ready(model_path.as_deref())?;
+    let model_path = model_path.expect("checked present by check_model_ready");
+
+    try_start_job(&mut jobs.0.lock().unwrap(), &path)?;
+
+    let app_for_job = app.clone();
+    let path_for_job = path.clone();
+    let md_path_for_check = md_path.clone();
+
+    let join_result = tauri::async_runtime::spawn_blocking(move || {
+        let progress_app = app_for_job.clone();
+        let progress_path = path_for_job.clone();
+        let on_progress = move |phase, channel, message| {
+            emit_progress(&progress_app, &progress_path, phase, channel, message);
+        };
+
+        // Re-check the single-writer rule right before the final write
+        // (module docs): a recording could have started into this same path
+        // while the (possibly slow) transcription above was running.
+        let check_app = app_for_job;
+        let before_write = move || -> Result<()> {
+            let active = check_app.state::<AppState>().active_output_path();
+            if active.as_deref() == Some(md_path_for_check.as_path()) {
+                return Err(anyhow!(
+                    "recording started on this session while re-transcribing; the file was left unchanged"
+                ));
+            }
+            Ok(())
+        };
+
+        run_retranscribe_pipeline(
+            &md_path,
+            &flac_path,
+            &model_path,
+            WHISPER_MODEL_ID,
+            before_write,
+            on_progress,
+        )
+    })
+    .await;
+
+    // Always release the job slot, even if the blocking task panicked --
+    // otherwise a panic would leave `RetranscribeState` permanently claimed,
+    // locking out every future re-transcribe until the app restarts.
+    *jobs.0.lock().unwrap() = None;
+
+    let result = join_result.map_err(|e| e.to_string())?;
+    if let Err(e) = &result {
+        emit_progress(&app, &path, "error", None, Some(e.to_string()));
+    }
+    result.map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::audio_sink::AudioSink;
+    use simstim_capture::Channel;
+
+    fn seg(start: f64, text: &str) -> WhisperSegment {
+        WhisperSegment {
+            start_secs: start,
+            end_secs: start + 1.0,
+            text: text.to_string(),
+        }
+    }
+
+    mod merge {
+        use super::*;
+
+        #[test]
+        fn interleaves_two_channels_sorted_by_start_time() {
+            let me = vec![seg(0.0, "a"), seg(4.0, "d")];
+            let them = vec![seg(1.0, "b"), seg(2.0, "c")];
+            let merged = merge_segments(me, them);
+            let texts: Vec<&str> = merged.iter().map(|s| s.text.as_str()).collect();
+            assert_eq!(texts, vec!["a", "b", "c", "d"]);
+            assert_eq!(merged[0].speaker, Speaker::Me);
+            assert_eq!(merged[1].speaker, Speaker::Them);
+        }
+
+        #[test]
+        fn one_channel_empty_returns_just_the_other() {
+            let me = vec![seg(0.0, "hi"), seg(5.0, "bye")];
+            let merged = merge_segments(me, Vec::new());
+            assert_eq!(merged.len(), 2);
+            assert!(merged.iter().all(|s| s.speaker == Speaker::Me));
+        }
+
+        #[test]
+        fn both_channels_empty_returns_empty() {
+            assert!(merge_segments(Vec::new(), Vec::new()).is_empty());
+        }
+
+        #[test]
+        fn equal_starts_break_ties_with_me_first() {
+            let me = vec![seg(3.0, "me-line")];
+            let them = vec![seg(3.0, "them-line")];
+            let merged = merge_segments(me, them);
+            assert_eq!(merged[0].speaker, Speaker::Me);
+            assert_eq!(merged[1].speaker, Speaker::Them);
+        }
+
+        #[test]
+        fn overlapping_segments_both_survive_sorted_by_start_only() {
+            // `them`'s segment starts inside `me`'s span (0..5) -- overlap in
+            // time doesn't affect the merge, which only orders by start_secs.
+            let me = vec![seg(0.0, "long me segment")];
+            let them = vec![seg(2.0, "overlapping them segment")];
+            let merged = merge_segments(me, them);
+            assert_eq!(merged.len(), 2);
+            assert_eq!(merged[0].text, "long me segment");
+            assert_eq!(merged[1].text, "overlapping them segment");
+        }
+    }
+
+    mod formatting {
+        use super::*;
+
+        #[test]
+        fn format_timestamp_zero_pads_hh_mm_ss() {
+            assert_eq!(format_timestamp(0.0), "[00:00:00]");
+            assert_eq!(format_timestamp(5.0), "[00:00:05]");
+            assert_eq!(format_timestamp(65.0), "[00:01:05]");
+            assert_eq!(format_timestamp(3661.9), "[01:01:01]", "truncates, not rounds");
+        }
+
+        #[test]
+        fn format_line_renders_who_and_text() {
+            let line = format_line(&TaggedSegment {
+                speaker: Speaker::Them,
+                start_secs: 15.2,
+                text: "hello pavel".to_string(),
+            });
+            assert_eq!(line, "[00:00:15] Them: hello pavel");
+        }
+
+        #[test]
+        fn render_transcript_body_joins_lines_with_no_trailing_newline() {
+            let segments = vec![
+                TaggedSegment { speaker: Speaker::Me, start_secs: 3.0, text: "hi".into() },
+                TaggedSegment { speaker: Speaker::Them, start_secs: 15.0, text: "hey".into() },
+            ];
+            let body = render_transcript_body(&segments);
+            assert_eq!(body, "[00:00:03] Me: hi\n[00:00:15] Them: hey");
+        }
+
+        #[test]
+        fn render_transcript_body_empty_for_no_segments() {
+            assert_eq!(render_transcript_body(&[]), "");
+        }
+    }
+
+    mod rejections {
+        use super::*;
+
+        #[test]
+        fn check_not_active_rejects_the_recording_session() {
+            let p = Path::new("/tmp/call.md");
+            assert!(check_not_active(p, Some(p)).is_err());
+        }
+
+        #[test]
+        fn check_not_active_allows_a_different_or_no_active_session() {
+            let p = Path::new("/tmp/call.md");
+            assert!(check_not_active(p, None).is_ok());
+            assert!(check_not_active(p, Some(Path::new("/tmp/other.md"))).is_ok());
+        }
+
+        #[test]
+        fn check_audio_present_rejects_a_missing_file() {
+            let dir = tempfile::tempdir().unwrap();
+            let err = check_audio_present(&dir.path().join("call.flac")).unwrap_err();
+            assert!(err.contains("no audio"), "{err}");
+        }
+
+        #[test]
+        fn check_audio_present_allows_an_existing_file() {
+            let dir = tempfile::tempdir().unwrap();
+            let flac = dir.path().join("call.flac");
+            std::fs::write(&flac, b"x").unwrap();
+            assert!(check_audio_present(&flac).is_ok());
+        }
+
+        #[test]
+        fn check_model_ready_rejects_none() {
+            assert!(check_model_ready(None).is_err());
+        }
+
+        #[test]
+        fn check_model_ready_rejects_a_path_that_does_not_exist() {
+            let err = check_model_ready(Some(Path::new("/no/such/model.bin"))).unwrap_err();
+            assert!(err.contains("downloaded"), "{err}");
+        }
+
+        #[test]
+        fn check_model_ready_allows_an_existing_file() {
+            let dir = tempfile::tempdir().unwrap();
+            let model = dir.path().join("model.bin");
+            std::fs::write(&model, b"x").unwrap();
+            assert!(check_model_ready(Some(&model)).is_ok());
+        }
+
+        #[test]
+        fn try_start_job_claims_an_empty_slot() {
+            let mut current = None;
+            assert!(try_start_job(&mut current, "/tmp/call.md").is_ok());
+            assert_eq!(current.as_deref(), Some("/tmp/call.md"));
+        }
+
+        #[test]
+        fn try_start_job_rejects_when_a_job_is_already_running() {
+            let mut current = Some("/tmp/other.md".to_string());
+            let err = try_start_job(&mut current, "/tmp/call.md").unwrap_err();
+            assert!(err.contains("already being re-transcribed"), "{err}");
+            assert_eq!(
+                current.as_deref(),
+                Some("/tmp/other.md"),
+                "the in-flight job must not be clobbered by a rejected second attempt"
+            );
+        }
+    }
+
+    #[test]
+    fn whisper_model_path_resolves_to_the_registry_file_name() {
+        let path = whisper_model_path().unwrap();
+        assert!(path.ends_with("ggml-large-v3-turbo-q8_0.bin"), "{}", path.display());
+    }
+
+    /// Round-trips a small stereo FLAC through `AudioSink` (the encoder) and
+    /// this module's `decode_flac_stereo` (the decoder), proving the two
+    /// sides agree on channel layout and scaling without needing whisper or
+    /// a real recording.
+    #[test]
+    fn decode_flac_stereo_round_trips_known_samples() {
+        let dir = tempfile::tempdir().unwrap();
+        let md_path = dir.path().join("call.md");
+        let mut sink = AudioSink::new(&md_path).unwrap();
+        let no_op = |_msg: String| {};
+
+        let me_samples = [0.5f32, -0.25, 0.1];
+        let them_samples = [-0.5f32, 0.25, -0.1];
+        for i in 0..me_samples.len() {
+            sink.push(Channel::Me, &me_samples[i..i + 1], &no_op);
+            sink.push(Channel::Them, &them_samples[i..i + 1], &no_op);
+        }
+        let flac_path = sink.finish(&no_op).unwrap();
+
+        let (decoded_me, decoded_them) = decode_flac_stereo(&flac_path).unwrap();
+
+        // f32_to_i16 quantizes to 16-bit, so an exact float round trip isn't
+        // expected -- within one quantization step (1/32768) is.
+        for (expected, actual) in me_samples.iter().zip(decoded_me.iter()) {
+            assert!((expected - actual).abs() < 0.001, "{expected} vs {actual}");
+        }
+        for (expected, actual) in them_samples.iter().zip(decoded_them.iter()) {
+            assert!((expected - actual).abs() < 0.001, "{expected} vs {actual}");
+        }
+    }
+
+    #[test]
+    fn decode_flac_stereo_rejects_a_mono_file() {
+        // A mono FLAC (e.g. hand-crafted or from some other source) must be
+        // rejected with a clear error rather than silently misreading every
+        // other sample as the wrong channel.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mono.flac");
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 16_000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let wav_path = dir.path().join("mono.wav");
+        {
+            let mut writer = hound::WavWriter::create(&wav_path, spec).unwrap();
+            // At least flacenc's minimum block size (32 frames, see
+            // audio_sink's `encode_flac` docs) or the encode itself produces
+            // an invalid stream regardless of channel count.
+            for i in 0..64i16 {
+                writer.write_sample(i * 10).unwrap();
+            }
+            writer.finalize().unwrap();
+        }
+        // Re-encode that mono wav to flac directly via flacenc, mirroring
+        // audio_sink's own encode step closely enough for this test's needs.
+        use flacenc::component::BitRepr;
+        use flacenc::error::Verify;
+        let mut reader = hound::WavReader::open(&wav_path).unwrap();
+        let samples: Vec<i32> = reader.samples::<i16>().map(|s| s.unwrap() as i32).collect();
+        let config = flacenc::config::Encoder::default().into_verified().unwrap();
+        let source = flacenc::source::MemSource::from_samples(&samples, 1, 16, 16_000);
+        let stream =
+            flacenc::encode_with_fixed_block_size(&config, source, config.block_size).unwrap();
+        let mut sink = flacenc::bitsink::ByteSink::new();
+        stream.write(&mut sink).unwrap();
+        std::fs::write(&path, sink.as_slice()).unwrap();
+
+        let err = decode_flac_stereo(&path).unwrap_err();
+        assert!(format!("{err:#}").contains("stereo"), "{err:#}");
+    }
+
+    /// Loads a wav and resamples it to 16kHz mono if it isn't already
+    /// (Parakeet's bundled test clips are 24kHz). Simple linear
+    /// interpolation is plenty for the manual check below, which only needs
+    /// real speech-shaped audio, not pristine fidelity.
+    fn load_wav_16k_mono(path: &Path) -> Vec<f32> {
+        let mut r = hound::WavReader::open(path).unwrap();
+        let rate = r.spec().sample_rate;
+        let samples: Vec<f32> = r.samples::<i16>().map(|s| s.unwrap() as f32 / 32768.0).collect();
+        if rate == 16_000 {
+            return samples;
+        }
+        let ratio = rate as f64 / 16_000.0;
+        let out_len = ((samples.len() as f64) / ratio).round() as usize;
+        (0..out_len)
+            .map(|i| {
+                let src_pos = i as f64 * ratio;
+                let idx = src_pos.floor() as usize;
+                let frac = src_pos - idx as f64;
+                let a = samples[idx.min(samples.len() - 1)] as f64;
+                let b = samples[(idx + 1).min(samples.len() - 1)] as f64;
+                (a + (b - a) * frac) as f32
+            })
+            .collect()
+    }
+
+    /// Manual end-to-end check (brief's requirement): NOT run in the normal
+    /// suite (`#[ignore]`, and it needs the real ~874MB whisper model on
+    /// disk, which automated tests must not depend on). Copies a real
+    /// session `.md` from `~/Desktop` into a tempdir (proving title/notes/
+    /// date/duration survive a real rewrite), synthesizes a small stereo
+    /// FLAC next to it from Parakeet's own bundled test clips (real speech
+    /// audio, just not this session's actual call -- no real audio file
+    /// existed for any session on this machine yet when this task landed,
+    /// per the brief's fallback), and runs the actual pipeline function
+    /// against the real whisper model. Run manually with:
+    /// `cargo test -p desktop --lib -- --ignored manual_e2e_retranscribe --nocapture`
+    #[test]
+    #[ignore = "needs the real whisper model on disk; run manually, see doc comment"]
+    fn manual_e2e_retranscribe_with_real_whisper() {
+        let models = simstim_engine::models_dir();
+        let model_path = models.join("ggml-large-v3-turbo-q8_0.bin");
+        assert!(
+            model_path.is_file(),
+            "whisper model not downloaded at {}",
+            model_path.display()
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        let md_path = dir.path().join("2026-08-15 18-45-16 call.md");
+        std::fs::copy(
+            "/Users/pgrekovich/Desktop/2026-08-15 18-45-16 call.md",
+            &md_path,
+        )
+        .unwrap();
+        let before = std::fs::read_to_string(&md_path).unwrap();
+
+        // Me = Parakeet's own bundled English test clip, Them = its French
+        // one -- real speech audio (whisper auto-detects language per
+        // channel-independent segment, so the mixed languages are fine),
+        // just not this particular session's real call audio.
+        let me_clip = load_wav_16k_mono(&models.join("parakeet-tdt-0.6b-v3-int8/test_wavs/en.wav"));
+        let them_clip = load_wav_16k_mono(&models.join("parakeet-tdt-0.6b-v3-int8/test_wavs/fr.wav"));
+
+        let mut sink = AudioSink::new(&md_path).unwrap();
+        let no_op = |_msg: String| {};
+        const CHUNK: usize = 1600;
+        let max_len = me_clip.len().max(them_clip.len());
+        for start in (0..max_len).step_by(CHUNK) {
+            let me_end = (start + CHUNK).min(me_clip.len());
+            if start < me_clip.len() {
+                sink.push(Channel::Me, &me_clip[start..me_end], &no_op);
+            }
+            let them_end = (start + CHUNK).min(them_clip.len());
+            if start < them_clip.len() {
+                sink.push(Channel::Them, &them_clip[start..them_end], &no_op);
+            }
+        }
+        let flac_path = sink.finish(&no_op).unwrap();
+
+        let started = std::time::Instant::now();
+        run_retranscribe_pipeline(
+            &md_path,
+            &flac_path,
+            &model_path,
+            WHISPER_MODEL_ID,
+            || Ok(()),
+            |phase, channel, message| {
+                println!("[retranscribe] phase={phase} channel={channel:?} message={message:?}");
+            },
+        )
+        .unwrap();
+        let elapsed = started.elapsed();
+
+        let after = std::fs::read_to_string(&md_path).unwrap();
+        println!("=== elapsed: {elapsed:?} ===");
+        println!("=== BEFORE ===\n{before}");
+        println!("=== AFTER ===\n{after}");
+
+        assert!(after.contains("asr: whisper-large-v3-turbo-q8"));
+        assert!(after.contains("title: Hey-ho"), "title must be preserved");
+        assert!(after.contains("duration: 0m"), "duration must be preserved");
+        assert!(after.contains("lkfdsj afkdlsj fsd"), "notes must be preserved");
+    }
+}

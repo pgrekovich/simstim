@@ -27,16 +27,18 @@
 //!
 //! ## Rejections
 //!
-//! Four cases refuse to start, each with a message meant to be read
+//! Five cases refuse to start, each with a message meant to be read
 //! directly by the user (no internal command/IPC names leaking through, per
 //! the brief): the session is the one currently recording (single-writer
-//! rule); no audio was saved for it (missing file, or `keep_audio` was off
-//! when it was recorded); the whisper model isn't downloaded yet; another
-//! re-transcribe job is already running. Each check is its own small, pure
-//! function (`check_not_active`, `check_audio_present`, `check_model_ready`,
-//! `try_start_job`) so they're unit-testable without a live Tauri app,
-//! mirroring `lib.rs`'s own `rejects_recording_into_active_path` and
-//! `config.rs`'s `validate_theme`.
+//! rule); the session is currently finalizing (the stop-to-encode window --
+//! see `AppState`'s `finalizing` field doc comment); no audio was saved for
+//! it (missing file, or `keep_audio` was off when it was recorded); the
+//! whisper model isn't downloaded yet; another re-transcribe job is already
+//! running. Each check is its own small, pure function (`check_not_active`
+//! covers both the recording and finalizing cases, plus `check_audio_present`,
+//! `check_model_ready`, `try_start_job`) so they're unit-testable without a
+//! live Tauri app, mirroring `lib.rs`'s own `rejects_recording_into_active_path`
+//! and `config.rs`'s `validate_theme`.
 //!
 //! The in-flight guard ([`RetranscribeState`]) is global (one job at a time
 //! across ALL sessions), not per-path like `models::DownloadState`'s
@@ -306,13 +308,24 @@ fn whisper_model_path() -> Option<PathBuf> {
     }
 }
 
-/// Whether re-transcribing `md_path` should be rejected because it's the
-/// session currently recording (single-writer rule). Pure and testable
-/// without a live `AppState`, mirroring `lib.rs`'s
-/// `rejects_recording_into_active_path`.
-fn check_not_active(md_path: &Path, active: Option<&Path>) -> Result<(), String> {
+/// Whether re-transcribing `md_path` should be rejected because it's busy:
+/// either the session currently recording (single-writer rule), or the
+/// session currently finalizing (Important fix-review finding -- the window
+/// after `stop_recording` has removed it from `AppState`'s `recording` but
+/// before `session.stop()`'s final save + audio encode has actually
+/// returned; see `AppState`'s `finalizing` field doc comment). Each busy
+/// state gets its own user-facing message, since they call for different
+/// actions ("stop it" vs. "wait a moment"). Pure and testable without a live
+/// `AppState`, mirroring `lib.rs`'s `rejects_recording_into_active_path`.
+fn check_not_active(
+    md_path: &Path,
+    active: Option<&Path>,
+    finalizing: Option<&Path>,
+) -> Result<(), String> {
     if active == Some(md_path) {
         Err("this session is currently recording; stop it before re-transcribing".to_string())
+    } else if finalizing == Some(md_path) {
+        Err("this call is still being saved, try again in a moment".to_string())
     } else {
         Ok(())
     }
@@ -454,7 +467,11 @@ pub async fn retranscribe_session(
     jobs: State<'_, RetranscribeState>,
 ) -> Result<(), String> {
     let md_path = PathBuf::from(&path);
-    check_not_active(&md_path, state.active_output_path().as_deref())?;
+    check_not_active(
+        &md_path,
+        state.active_output_path().as_deref(),
+        state.finalizing_path().as_deref(),
+    )?;
 
     let audio_path = resolve_audio_path(&md_path);
     check_audio_present(audio_path.as_deref())?;
@@ -642,14 +659,33 @@ mod tests {
         #[test]
         fn check_not_active_rejects_the_recording_session() {
             let p = Path::new("/tmp/call.md");
-            assert!(check_not_active(p, Some(p)).is_err());
+            assert!(check_not_active(p, Some(p), None).is_err());
         }
 
         #[test]
         fn check_not_active_allows_a_different_or_no_active_session() {
             let p = Path::new("/tmp/call.md");
-            assert!(check_not_active(p, None).is_ok());
-            assert!(check_not_active(p, Some(Path::new("/tmp/other.md"))).is_ok());
+            assert!(check_not_active(p, None, None).is_ok());
+            assert!(check_not_active(p, Some(Path::new("/tmp/other.md")), None).is_ok());
+        }
+
+        /// Important fix-review finding regression test: a session in the
+        /// stop-to-encode window (`AppState.finalizing`) must also reject
+        /// re-transcribe, with a message distinct from the "currently
+        /// recording" one -- "stop it" doesn't apply since it's already
+        /// stopped, just not done saving yet.
+        #[test]
+        fn check_not_active_rejects_a_finalizing_session_with_a_distinct_message() {
+            let p = Path::new("/tmp/call.md");
+            let err = check_not_active(p, None, Some(p)).unwrap_err();
+            assert!(err.contains("still being saved"), "{err}");
+        }
+
+        #[test]
+        fn check_not_active_allows_a_different_or_no_finalizing_session() {
+            let p = Path::new("/tmp/call.md");
+            assert!(check_not_active(p, None, None).is_ok());
+            assert!(check_not_active(p, None, Some(Path::new("/tmp/other.md"))).is_ok());
         }
 
         #[test]

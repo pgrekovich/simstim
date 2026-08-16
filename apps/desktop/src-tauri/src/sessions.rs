@@ -95,10 +95,23 @@ fn parse_rfc3339(date: &str) -> Option<DateTime<FixedOffset>> {
 }
 
 /// Full read of one session file for the session view.
-pub fn read_session_at(path: &Path) -> Result<SessionDataOut> {
+///
+/// `finalizing` is the path of a session currently in the stop-to-encode
+/// window, if any (`AppState::finalizing_path`, see its doc comment):
+/// resolving `path`'s audio while it equals `finalizing` would risk handing
+/// back a `.wav` that `session.stop()` is still writing to (or is about to
+/// delete once the FLAC encode finishes) as if it were the session's
+/// finished audio. Reporting `None` for that one session until finalizing
+/// clears is simpler and safer than trying to resolve a file mid-write; the
+/// UI just shows no audio player for the brief window right after Stop
+/// instead of a broken/racy one.
+pub fn read_session_at(path: &Path, finalizing: Option<&Path>) -> Result<SessionDataOut> {
     let data = parse_session(path)?;
-    let audio_path = crate::retranscribe::resolve_audio_path(path)
-        .map(|p| p.display().to_string());
+    let audio_path = if finalizing == Some(path) {
+        None
+    } else {
+        crate::retranscribe::resolve_audio_path(path).map(|p| p.display().to_string())
+    };
     Ok(SessionDataOut {
         title: data.title,
         date: data.date,
@@ -112,6 +125,14 @@ pub fn read_session_at(path: &Path) -> Result<SessionDataOut> {
 /// `active_path` (the currently-recording session's output file): that file
 /// belongs exclusively to the session worker while recording is in
 /// progress, per the single-writer rule.
+///
+/// Note: this and `rewrite_transcript_at` (the re-transcribe pipeline's own
+/// writer) are not mutually exclusive once a session is neither recording
+/// nor finalizing -- a title/notes save and a re-transcribe's final write
+/// could in theory land within the same millisecond, and whichever's
+/// `Transcript::save` call renders last wins outright (each is an atomic
+/// whole-file write-then-rename, so the result is never a corrupt/partial
+/// file, just one save's content instead of a merge of both).
 pub fn save_session_at(
     path: &Path,
     title: &str,
@@ -197,6 +218,10 @@ fn rewrite_session(path: &Path, title: &str, notes: &str) -> Result<()> {
 /// outright rather than merging with what was there (the owner's ruling:
 /// the app never edits transcripts, so the previous pass's text is not kept
 /// once a new one lands).
+///
+/// Note: see `save_session_at`'s doc comment for the same last-writer-wins
+/// millisecond window against this function specifically -- not corrupting
+/// data either way, just an ordering race neither side locks against.
 pub fn rewrite_transcript_at(path: &Path, new_transcript: &str, asr_id: &str) -> Result<()> {
     let existing = parse_session(path)?;
     let meta = parse_meta(path)?;
@@ -261,8 +286,9 @@ pub fn create_session() -> Result<String, String> {
 }
 
 #[tauri::command]
-pub fn read_session(path: String) -> Result<SessionDataOut, String> {
-    read_session_at(Path::new(&path)).map_err(|e| e.to_string())
+pub fn read_session(path: String, state: State<AppState>) -> Result<SessionDataOut, String> {
+    let finalizing = state.finalizing_path();
+    read_session_at(Path::new(&path), finalizing.as_deref()).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -325,7 +351,7 @@ mod tests {
         tr.add(Speaker::Me, 3.0, "hi".into());
         tr.save(&path).unwrap();
 
-        let data = read_session_at(&path).unwrap();
+        let data = read_session_at(&path, None).unwrap();
         assert_eq!(data.title, "Weekly sync");
         assert_eq!(data.notes, "Some notes");
         assert!(data.transcript.contains("Me: hi"));
@@ -336,7 +362,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("notes.md");
         std::fs::write(&path, "not a transcript at all").unwrap();
-        assert!(read_session_at(&path).is_err());
+        assert!(read_session_at(&path, None).is_err());
     }
 
     #[test]
@@ -347,7 +373,7 @@ mod tests {
         let flac = dir.path().join("call.flac");
         std::fs::write(&flac, b"x").unwrap();
 
-        let data = read_session_at(&path).unwrap();
+        let data = read_session_at(&path, None).unwrap();
         assert_eq!(data.audio_path, Some(flac.display().to_string()));
     }
 
@@ -363,7 +389,7 @@ mod tests {
         let wav = dir.path().join("call.wav");
         std::fs::write(&wav, b"x").unwrap();
 
-        let data = read_session_at(&path).unwrap();
+        let data = read_session_at(&path, None).unwrap();
         assert_eq!(data.audio_path, Some(wav.display().to_string()));
     }
 
@@ -373,8 +399,35 @@ mod tests {
         let path = dir.path().join("call.md");
         Transcript::new(t(10, 0, 0)).save(&path).unwrap();
 
-        let data = read_session_at(&path).unwrap();
+        let data = read_session_at(&path, None).unwrap();
         assert_eq!(data.audio_path, None);
+    }
+
+    /// Important fix-review finding: while `path` is finalizing (the
+    /// stop-to-encode window, see `AppState`'s `finalizing` field doc
+    /// comment), `read_session_at` must not resolve its audio path even
+    /// though a `.flac`/`.wav` sibling exists on disk -- it may still be
+    /// mid-write by `session.stop()`. A different or absent finalizing path
+    /// must not affect the resolution.
+    #[test]
+    fn read_session_at_hides_the_audio_path_while_finalizing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("call.md");
+        Transcript::new(t(10, 0, 0)).save(&path).unwrap();
+        std::fs::write(dir.path().join("call.flac"), b"x").unwrap();
+
+        let data = read_session_at(&path, Some(&path)).unwrap();
+        assert_eq!(
+            data.audio_path, None,
+            "audio path must be hidden while this session is finalizing"
+        );
+
+        let data = read_session_at(&path, Some(Path::new("/tmp/other.md"))).unwrap();
+        assert_eq!(
+            data.audio_path,
+            Some(dir.path().join("call.flac").display().to_string()),
+            "a different finalizing session must not affect this one's audio path"
+        );
     }
 
     #[test]
@@ -493,7 +546,7 @@ mod tests {
         let path = create_session_in(dir.path()).unwrap();
 
         assert_eq!(path.parent().unwrap(), dir.path());
-        let data = read_session_at(&path).unwrap();
+        let data = read_session_at(&path, None).unwrap();
         assert_eq!(data.title, "Untitled");
         assert_eq!(data.notes, "");
         assert_eq!(data.transcript, "");
@@ -518,7 +571,7 @@ mod tests {
             err.to_string().contains("already exists"),
             "unexpected error: {err}"
         );
-        let data = read_session_at(&path).unwrap();
+        let data = read_session_at(&path, None).unwrap();
         assert_eq!(
             data.title, "Do not touch",
             "the pre-existing file must survive untouched"

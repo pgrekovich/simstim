@@ -64,13 +64,42 @@ struct Recording {
     pending_edits: Arc<Mutex<PendingEdits>>,
 }
 
-pub struct AppState(Mutex<Option<Recording>>);
+pub struct AppState {
+    recording: Mutex<Option<Recording>>,
+    /// The path of a session currently being finalized: `stop_recording` has
+    /// already removed it from `recording` (so `active_output_path` no
+    /// longer reports it) and is blocking on `session.stop()` -- the final
+    /// transcript save plus, for a call with audio, the FLAC encode, which
+    /// can take real wall-clock time for a long recording. Set right before
+    /// that blocking call and cleared right after, on every path including
+    /// an error return (Important fix-review finding: without this, a
+    /// re-transcribe or a `read_session` audio-path resolution started in
+    /// that window could see a stale/still-being-written `.wav` and either
+    /// decode a truncated file or hand it to the player as if it were
+    /// finished).
+    finalizing: Mutex<Option<PathBuf>>,
+}
+
+impl Default for AppState {
+    fn default() -> Self {
+        AppState {
+            recording: Mutex::new(None),
+            finalizing: Mutex::new(None),
+        }
+    }
+}
 
 impl AppState {
     /// The currently-recording session's output path, if any. Used by
     /// `sessions::save_session` to enforce the single-writer rule.
     fn active_output_path(&self) -> Option<PathBuf> {
-        self.0.lock().unwrap().as_ref().map(|r| r.path.clone())
+        self.recording.lock().unwrap().as_ref().map(|r| r.path.clone())
+    }
+
+    /// The path of a session currently being finalized (stop-to-encode
+    /// window), if any -- see the `finalizing` field's doc comment.
+    pub(crate) fn finalizing_path(&self) -> Option<PathBuf> {
+        self.finalizing.lock().unwrap().clone()
     }
 }
 
@@ -94,7 +123,7 @@ fn rejects_recording_into_active_path(path: Option<&std::path::Path>, active: Op
 #[tauri::command]
 fn start_recording(app: AppHandle, path: Option<String>, state: State<AppState>) -> Result<String, String> {
     let path = path.map(PathBuf::from);
-    let mut guard = state.0.lock().unwrap();
+    let mut guard = state.recording.lock().unwrap();
     let active_path = guard.as_ref().map(|r| r.path.as_path());
     if rejects_recording_into_active_path(path.as_deref(), active_path) {
         return Err("cannot record into a session that is already recording".into());
@@ -168,7 +197,7 @@ fn update_active_session(
     notes: Option<String>,
     state: State<AppState>,
 ) -> Result<(), String> {
-    let guard = state.0.lock().unwrap();
+    let guard = state.recording.lock().unwrap();
     let recording = guard.as_ref().ok_or("not recording")?;
     recording.pending_edits.lock().unwrap().update(title, notes);
     Ok(())
@@ -180,8 +209,21 @@ fn stop_recording(state: State<AppState>) -> Result<String, String> {
         session,
         mic,
         speaker,
+        path,
         ..
-    } = state.0.lock().unwrap().take().ok_or("not recording")?;
+    } = state.recording.lock().unwrap().take().ok_or("not recording")?;
+
+    // Important fix-review finding: `session.stop()` below blocks on the
+    // final transcript save and (for a call with audio) a FLAC encode --
+    // real wall-clock time for a long call. Once this session is removed
+    // from `recording` above, `active_output_path` no longer reports it, so
+    // without this, a re-transcribe or a `read_session` audio-path
+    // resolution started in that exact window could see a still-being-
+    // written `.wav` as if the recording were already fully saved. Mark it
+    // as finalizing here, before the blocking call, and clear it right
+    // after -- on every path, success or error, so it never gets stuck set.
+    *state.finalizing.lock().unwrap() = Some(path.clone());
+
     // Drop the capture handles before joining the session: this stops the
     // mic/speaker streams and drops their Sender<Chunk> halves, disconnecting
     // the channel so the worker thread notices immediately and drains, rather
@@ -189,7 +231,11 @@ fn stop_recording(state: State<AppState>) -> Result<String, String> {
     // produce. See the `Recording` doc comment for why ordering matters here.
     drop(mic);
     drop(speaker);
-    let path = session.stop().map_err(|e| e.to_string())?;
+    let result = session.stop();
+
+    *state.finalizing.lock().unwrap() = None;
+
+    let path = result.map_err(|e| e.to_string())?;
     Ok(path.display().to_string())
 }
 
@@ -323,7 +369,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .manage(AppState(Mutex::new(None)))
+        .manage(AppState::default())
         .manage(DownloadState::default())
         .manage(retranscribe::RetranscribeState::default())
         .setup(|app| {
@@ -364,6 +410,23 @@ pub fn run() {
 mod tests {
     use super::*;
     use std::path::Path;
+
+    /// Important fix-review finding: `AppState::finalizing_path` must
+    /// reflect exactly what `stop_recording` last set/cleared -- the
+    /// mechanism `check_not_active` (retranscribe.rs) and `read_session_at`
+    /// (sessions.rs) both key their stop-to-encode-window rejection off of.
+    #[test]
+    fn finalizing_path_reflects_the_last_value_set() {
+        let state = AppState::default();
+        assert_eq!(state.finalizing_path(), None);
+
+        let path = PathBuf::from("/tmp/call.md");
+        *state.finalizing.lock().unwrap() = Some(path.clone());
+        assert_eq!(state.finalizing_path(), Some(path));
+
+        *state.finalizing.lock().unwrap() = None;
+        assert_eq!(state.finalizing_path(), None);
+    }
 
     #[test]
     fn rejects_recording_into_active_path_is_false_when_nothing_is_active() {

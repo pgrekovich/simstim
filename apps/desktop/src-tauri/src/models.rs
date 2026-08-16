@@ -466,8 +466,10 @@ fn remove_model_files(spec: &ModelSpec, models_dir: &Path) -> Result<(), String>
 /// Global Constraints) unless `id` is deletable right now: it must be a
 /// registered `Retranscribe`-role model (`Live` models -- Parakeet -- are
 /// needed to record and can never be deleted), with no download of it in
-/// flight and no re-transcribe job currently running (global, not per-id --
-/// see `RetranscribeState`'s docs). Returns the resolved spec on success so
+/// flight and no re-transcribe job currently running OR QUEUED (stage 0.9
+/// Important fix-review finding: a job merely waiting its turn counts too,
+/// not just one actively running -- global, not per-id, see
+/// `RetranscribeState`'s docs). Returns the resolved spec on success so
 /// `delete_model_at` doesn't have to look it up twice. Parameterized over
 /// `downloading`/`retranscribing` instead of reading real `State` guards
 /// directly, so it's testable without a live Tauri app -- mirrors `lib.rs`'s
@@ -494,7 +496,7 @@ fn validate_delete(
     }
     if retranscribing {
         return Err(
-            "a re-transcribe is currently running; wait for it to finish before deleting a model"
+            "a re-transcribe is currently running or queued; wait for it to finish before deleting a model"
                 .to_string(),
         );
     }
@@ -532,11 +534,12 @@ fn remove_tmp_download_file(id: &str, models_dir: &Path) -> Result<(), String> {
 /// directly unit-testable with tempdir fixtures -- mirrors `lib.rs`'s
 /// `set_output_dir_at` and `retranscribe::RetranscribeQueue`'s own splits
 /// for the same reason. `downloading` mirrors `DownloadState`'s in-flight
-/// check for this specific id; `retranscribing` mirrors
-/// `RetranscribeState::is_running` (still global, not per-id: whichever
-/// session's job is actually RUNNING right now, not one merely queued --
-/// see `RetranscribeState::is_running`'s own doc comment). The command
-/// wrapper below is the only real (non-test) caller.
+/// check for this specific id; `retranscribing` mirrors `RetranscribeState::
+/// is_running() || RetranscribeState::has_queued_jobs()` (still global, not
+/// per-id: ANY job, running or merely queued, blocks every delete -- stage
+/// 0.9 Important fix-review finding, see `has_queued_jobs`'s own doc
+/// comment for why a queued job needs the same guard a running one already
+/// had). The command wrapper below is the only real (non-test) caller.
 fn delete_model_at(
     id: &str,
     models_dir: &Path,
@@ -555,7 +558,10 @@ pub fn delete_model(
     jobs: State<'_, RetranscribeState>,
 ) -> Result<(), String> {
     let downloading = downloads.0.lock().unwrap().contains(&id);
-    let retranscribing = jobs.is_running();
+    // Important fix-review finding, stage 0.9: a job merely QUEUED (not yet
+    // running) blocks a delete too, the same as one actively running --
+    // see `RetranscribeState::has_queued_jobs`'s doc comment.
+    let retranscribing = jobs.is_running() || jobs.has_queued_jobs();
     delete_model_at(&id, &simstim_engine::models_dir(), downloading, retranscribing)
 }
 

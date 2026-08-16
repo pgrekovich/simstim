@@ -545,9 +545,49 @@ mod continuing_audio {
     use std::sync::{Arc, Mutex};
 
     fn existing_md(duration_line: &str) -> String {
+        existing_md_with_last_line(duration_line, "[00:00:01] Me: hi\n")
+    }
+
+    fn existing_md_with_last_line(duration_line: &str, last_line: &str) -> String {
         format!(
-            "---\ndate: 2026-06-01T09:00:00+02:00\ntitle: Weekly sync\nasr: parakeet-tdt-0.6b-v3\n{duration_line}---\n\n## Transcript\n\n[00:00:01] Me: hi\n"
+            "---\ndate: 2026-06-01T09:00:00+02:00\ntitle: Weekly sync\nasr: parakeet-tdt-0.6b-v3\n{duration_line}---\n\n## Transcript\n\n{last_line}"
         )
+    }
+
+    /// Parses the FIRST line's `[hh:mm:ss]` offset out of a transcript
+    /// section that starts right after the existing content (i.e. the first
+    /// brand-new line this recording produced) -- same format `format_line`
+    /// renders, mirroring the parser other tests in this file already use.
+    fn parse_offset_secs(line: &str) -> Option<u64> {
+        let rest = line.strip_prefix('[')?;
+        let (ts, _) = rest.split_once(']')?;
+        let mut parts = ts.splitn(3, ':');
+        let h: u64 = parts.next()?.parse().ok()?;
+        let m: u64 = parts.next()?.parse().ok()?;
+        let s: u64 = parts.next()?.parse().ok()?;
+        Some(h * 3600 + m * 60 + s)
+    }
+
+    /// Writes a real flac at `out`'s audio sibling containing exactly
+    /// `frame_count` stereo frames of `sample_value` (repeated on both
+    /// channels) -- a real `AudioSink` round trip, not hand-crafted bytes,
+    /// so it exercises the exact encode this feature has to correctly
+    /// prefill from. `frame_count` should stay a comfortable margin above
+    /// `flacenc::constant::MIN_BLOCK_SIZE` (32) so `encode_flac`'s own
+    /// trailing-block silence padding (see its docs) never kicks in and
+    /// muddies frame-exact assertions.
+    fn write_old_flac(out: &std::path::Path, frame_count: usize, sample_value: f32) {
+        let mut sink = desktop_lib::audio_sink::AudioSink::new(out).unwrap();
+        let no_op = |_msg: String| {};
+        let chunk = vec![sample_value; 1600];
+        let mut remaining = frame_count;
+        while remaining > 0 {
+            let n = remaining.min(chunk.len());
+            sink.push(Channel::Me, &chunk[..n], &no_op);
+            sink.push(Channel::Them, &chunk[..n], &no_op);
+            remaining -= n;
+        }
+        sink.finish(&no_op).unwrap();
     }
 
     #[test]
@@ -573,15 +613,19 @@ mod continuing_audio {
         assert!(flac_path.exists(), "expected an existing flac before continuing");
 
         let seed = desktop_lib::session::load_continue_from(&out).unwrap();
+        assert_eq!(seed.base_offset_secs, 1.0, "the fixture's last line is at 00:00:01");
+        let base_offset_secs = seed.base_offset_secs;
         let samples = load_wav_16k_mono(&test_wav_path());
         let (tx, rx) = channel();
+        let lines: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let lines_for_worker = lines.clone();
         let session = desktop_lib::session::Session::start(
             rx,
             out.clone(),
             Some(seed),
             no_pending_edits(),
             true,
-            |_| {},
+            move |line| lines_for_worker.lock().unwrap().push(line),
             |_, _| {},
             |_| {},
         );
@@ -619,26 +663,52 @@ mod continuing_audio {
             "old audio must survive byte-exact at the start of the continued recording's audio"
         );
 
-        // New (real speech) audio must have been appended after the old
-        // prefill -- old+new, not just old or just new.
+        // Important fix-review finding, wave 2 (1b): the old audio (4
+        // frames) is far shorter than the previous transcript's own last
+        // line offset (1.0s = 16000 frames), so the reconciled target base
+        // must pad silence from the end of the old audio up to exactly that
+        // point -- frame-exact, not just "eventually more audio follows".
+        let target_frame = (base_offset_secs * 16_000.0).round() as usize;
         let old_frames = old_me.len();
-        let total_frames = decoded.len() / 2;
         assert!(
-            total_frames > old_frames,
-            "expected new audio appended after the {old_frames}-frame old prefill, got {total_frames} total frames"
+            decoded.len() / 2 > target_frame,
+            "expected the padded silence plus real new audio after it"
+        );
+        assert!(
+            decoded[old_frames * 2..target_frame * 2].iter().all(|&s| s == 0),
+            "the gap between the old audio's real end and the reconciled target base must be silence"
+        );
+
+        // ...and the first BRAND NEW transcript line (from the live speech
+        // pushed above) must report an offset at or after that same target
+        // base, not at the old, too-short audio's own 4-frame end and not at
+        // 0 -- proving the transcript and the audio agree on where new
+        // content starts.
+        let first_new_line = lines.lock().unwrap()[0].clone();
+        let new_line_offset = parse_offset_secs(&first_new_line)
+            .unwrap_or_else(|| panic!("line doesn't parse as timestamped: {first_new_line}"));
+        assert!(
+            new_line_offset >= base_offset_secs as u64,
+            "first new line's offset {new_line_offset}s should be at/after the reconciled \
+             target base {base_offset_secs}s, not the old audio's own (too-short) length"
         );
     }
 
     #[test]
-    fn continuing_with_no_audio_but_a_prior_duration_prefills_silence() {
+    fn continuing_with_no_audio_but_a_prior_last_line_offset_prefills_silence_to_match() {
         let dir = tempfile::tempdir().unwrap();
         let out = dir.path().join("call.md");
-        // `duration: 1m` but deliberately no audio file at all -- the
-        // "keep_audio was off, now on" scenario.
-        std::fs::write(&out, existing_md("duration: 1m\n")).unwrap();
+        // Deliberately no audio file at all -- the "keep_audio was off, now
+        // on" scenario -- with a last transcript line at 00:00:02 driving
+        // the silence-prefill length (Important fix-review finding, wave 2:
+        // this used to be driven by the unrelated `duration:` frontmatter
+        // instead, which could disagree with the transcript's own last line).
+        std::fs::write(&out, existing_md_with_last_line("duration: 1m\n", "[00:00:02] Me: hi\n"))
+            .unwrap();
 
         let seed = desktop_lib::session::load_continue_from(&out).unwrap();
-        assert_eq!(seed.previous_duration_secs, 60);
+        assert_eq!(seed.base_offset_secs, 2.0);
+        let base_offset_secs = seed.base_offset_secs;
 
         let samples = load_wav_16k_mono(&test_wav_path());
         let (tx, rx) = channel();
@@ -666,7 +736,7 @@ mod continuing_audio {
         let mut reader = claxon::FlacReader::open(&flac_path).unwrap();
         let decoded: Vec<i32> = reader.samples().map(|s| s.unwrap()).collect();
 
-        let expected_silence_frames = 60usize * 16_000;
+        let expected_silence_frames = (base_offset_secs * 16_000.0).round() as usize;
         let total_frames = decoded.len() / 2;
         assert!(
             total_frames > expected_silence_frames,
@@ -675,6 +745,155 @@ mod continuing_audio {
         assert!(
             decoded[..expected_silence_frames * 2].iter().all(|&s| s == 0),
             "the prefilled region must be silence"
+        );
+    }
+
+    /// Important fix-review finding, wave 2 (1b), the other half of the
+    /// reconciliation: when the existing audio is LONGER than the previous
+    /// transcript's own last line offset (real trailing silence/audio after
+    /// the last spoken line, before the previous Stop), the audio's own
+    /// length must win -- new lines must land after the audio ends, never
+    /// overlapping it.
+    #[test]
+    fn continuing_when_audio_is_longer_than_the_last_line_puts_new_lines_after_the_audio_end() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("call.md");
+        // Last line at 00:00:01, but (below) 3 real seconds of existing
+        // audio -- audio outlives what the transcript's last line alone
+        // would suggest.
+        std::fs::write(&out, existing_md_with_last_line("duration: 1m\n", "[00:00:01] Me: hi\n"))
+            .unwrap();
+
+        let old_frame_count = 3 * 16_000; // 3s, comfortably clear of encode_flac's own tiny trailing-block padding.
+        write_old_flac(&out, old_frame_count, 0.1);
+        let flac_path = desktop_lib::audio_sink::audio_path_for(&out);
+        assert!(flac_path.exists());
+
+        let seed = desktop_lib::session::load_continue_from(&out).unwrap();
+        assert_eq!(seed.base_offset_secs, 1.0);
+
+        let samples = load_wav_16k_mono(&test_wav_path());
+        let (tx, rx) = channel();
+        let lines: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let lines_for_worker = lines.clone();
+        let session = desktop_lib::session::Session::start(
+            rx,
+            out.clone(),
+            Some(seed),
+            no_pending_edits(),
+            true,
+            move |line| lines_for_worker.lock().unwrap().push(line),
+            |_, _| {},
+            |_| {},
+        );
+        for chunk in samples.chunks(1600) {
+            tx.send(Chunk {
+                channel: Channel::Them,
+                samples: chunk.to_vec(),
+            })
+            .unwrap();
+        }
+        drop(tx);
+        let path = session.stop().unwrap();
+
+        let new_flac_path = desktop_lib::audio_sink::audio_path_for(&path);
+        let mut reader = claxon::FlacReader::open(&new_flac_path).unwrap();
+        let decoded: Vec<i32> = reader.samples().map(|s| s.unwrap()).collect();
+        let total_frames = decoded.len() / 2;
+        assert!(
+            total_frames > old_frame_count,
+            "expected new audio appended after the {old_frame_count}-frame old audio, got {total_frames} total frames"
+        );
+
+        let first_new_line = lines.lock().unwrap()[0].clone();
+        let new_line_offset = parse_offset_secs(&first_new_line)
+            .unwrap_or_else(|| panic!("line doesn't parse as timestamped: {first_new_line}"));
+        let old_audio_secs = old_frame_count as u64 / 16_000;
+        assert!(
+            new_line_offset >= old_audio_secs,
+            "first new line's offset {new_line_offset}s must be at/after the {old_audio_secs}s-long \
+             existing audio, not the shorter (1s) last-line timestamp alone -- would otherwise overlap it"
+        );
+    }
+
+    /// Important fix-review finding, wave 2 (1a): when the ONLY existing
+    /// audio is the retained `.wav` fallback (a previous flac encode failed
+    /// and `AudioSink::finish` kept the wav under its canonical name),
+    /// continuing must not truncate that exact file while trying to prefill
+    /// from it. Exercises the bug through a real `Session::start`
+    /// continuation, not just the `AudioSink` unit test.
+    #[test]
+    fn continuing_from_a_retained_wav_fallback_appends_new_audio_after_the_old() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("call.md");
+        std::fs::write(&out, existing_md("duration: 1m\n")).unwrap();
+
+        // Simulate a previous recording whose flac encode failed: a real wav
+        // at the canonical `.wav` sibling, no `.flac` at all. `wav_path_for`
+        // itself is `pub(crate)` (not reachable from this external
+        // integration test crate), but it's a one-line `with_extension`, so
+        // this reproduces the exact same path directly.
+        let old_frame_count = 3 * 16_000;
+        let wav_path = out.with_extension("wav");
+        {
+            let spec = hound::WavSpec {
+                channels: 2,
+                sample_rate: 16_000,
+                bits_per_sample: 16,
+                sample_format: hound::SampleFormat::Int,
+            };
+            let mut writer = hound::WavWriter::create(&wav_path, spec).unwrap();
+            for _ in 0..old_frame_count {
+                writer.write_sample(3000i16).unwrap();
+                writer.write_sample(3000i16).unwrap();
+            }
+            writer.finalize().unwrap();
+        }
+        assert!(wav_path.exists(), "expected the retained wav fallback before continuing");
+        assert!(
+            !desktop_lib::audio_sink::audio_path_for(&out).exists(),
+            "this scenario has no flac -- only the retained wav"
+        );
+
+        let seed = desktop_lib::session::load_continue_from(&out).unwrap();
+        let samples = load_wav_16k_mono(&test_wav_path());
+        let (tx, rx) = channel();
+        let session = desktop_lib::session::Session::start(
+            rx,
+            out.clone(),
+            Some(seed),
+            no_pending_edits(),
+            true,
+            |_| {},
+            |_, _| {},
+            |_| {},
+        );
+        for chunk in samples.chunks(1600) {
+            tx.send(Chunk {
+                channel: Channel::Them,
+                samples: chunk.to_vec(),
+            })
+            .unwrap();
+        }
+        drop(tx);
+        let path = session.stop().unwrap();
+
+        // The old retained wav must not have been silently truncated to
+        // empty by the write target aliasing it -- the resulting audio
+        // (flac, since this recording's own encode should succeed) must
+        // contain the old samples followed by the new ones.
+        let final_flac = desktop_lib::audio_sink::audio_path_for(&path);
+        assert!(final_flac.exists(), "expected a clean flac encode for this recording");
+        let mut reader = claxon::FlacReader::open(&final_flac).unwrap();
+        let decoded: Vec<i32> = reader.samples().map(|s| s.unwrap()).collect();
+        let total_frames = decoded.len() / 2;
+        assert!(
+            total_frames > old_frame_count,
+            "expected old+new audio, got only {total_frames} frames (old alone was {old_frame_count})"
+        );
+        assert!(
+            decoded[..old_frame_count * 2].iter().all(|&s| s == 3000),
+            "the old retained-wav audio must survive byte-exact, not be silently emptied"
         );
     }
 

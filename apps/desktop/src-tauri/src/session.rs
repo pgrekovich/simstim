@@ -372,24 +372,38 @@ fn run_worker(
     // propagating an `Err` the way engine/VAD init failures above do. This
     // also covers the Critical fix-review finding for continuing a session:
     // when `continue_from` is `Some`, the sink must be prefilled with the
-    // existing audio (or silence, if there was a previous duration but no
-    // audio file) before any live capture lands, rather than starting a
-    // fresh WAV that would silently truncate/overwrite the old one on
+    // existing audio (or silence, padded up to the previous transcript's own
+    // last line offset) before any live capture lands, rather than starting
+    // a fresh WAV that would silently truncate/overwrite the old one on
     // finish (see `audio_sink`'s "continuing a session's audio" docs). If
     // that prefill itself fails (a corrupt or unreadable old file), audio is
     // disabled for this recording entirely rather than silently continuing
     // with misaligned timestamps -- the transcript still records normally,
     // and the old audio file is left untouched since prefilling only ever
     // reads it.
-    let mut audio_sink = if keep_audio {
-        let sink_result = match &continue_from {
+    //
+    // `continued_base_offset_secs` (Important fix-review finding, wave 2):
+    // when `AudioSink::new_continuing` succeeds, it returns the RECONCILED
+    // base offset (the longer of the audio it actually prefilled and the
+    // transcript's own last line timestamp -- see `target_base_frames`'s
+    // docs) rather than leaving the transcript to separately recompute its
+    // own continuation offset from `seed.base_offset_secs` alone. Using this
+    // single value for both is what keeps audio position and new transcript
+    // timestamps on the same clock; two independently-computed offsets could
+    // silently disagree whenever trailing silence preceded the previous
+    // Stop. Left `None` when there's no audio to reconcile against (audio
+    // off, or its prefill failed), in which case the transcript falls back
+    // to `seed.base_offset_secs` alone below, exactly as before this fix.
+    let mut continued_base_offset_secs: Option<f64> = None;
+    let mut audio_sink: Option<AudioSink> = if keep_audio {
+        let sink_result: anyhow::Result<AudioSink> = match &continue_from {
             Some(seed) => {
                 let existing_audio = crate::retranscribe::resolve_audio_path(&out_path);
-                AudioSink::new_continuing(
-                    &out_path,
-                    existing_audio.as_deref(),
-                    seed.previous_duration_secs,
-                )
+                AudioSink::new_continuing(&out_path, existing_audio.as_deref(), seed.base_offset_secs)
+                    .map(|(sink, target_base_secs)| {
+                        continued_base_offset_secs = Some(target_base_secs);
+                        sink
+                    })
             }
             None => AudioSink::new(&out_path),
         };
@@ -426,7 +440,15 @@ fn run_worker(
             // ever does renders at least the previous total; the final
             // save below still overwrites with the accumulated total.
             transcript.set_duration_secs(seed.previous_duration_secs);
-            let base_offset_secs = seed.base_offset_secs;
+            // Important fix-review finding, wave 2: prefer the reconciled
+            // offset `AudioSink::new_continuing` returned (see
+            // `continued_base_offset_secs`'s doc comment above) so the
+            // transcript's new-line offsets and the audio's actual length
+            // are computed from the exact same value, not two mechanisms
+            // that can silently disagree. Falls back to the transcript's
+            // own last-line offset when there's no audio to reconcile
+            // against.
+            let base_offset_secs = continued_base_offset_secs.unwrap_or(seed.base_offset_secs);
             (base_offset_secs * 16000.0).round() as usize
         }
         None => 0,

@@ -243,11 +243,24 @@ function App() {
         // remounts with the fresh transcript. Harmless if this happens to
         // be the initiating instance too -- it just remounts with the same
         // data it already fetched itself.
+        //
+        // Fix-review finding (wave 2): the fetch must resolve BEFORE
+        // `reloadTick` bumps, not just before this callback returns --
+        // `setSessionData` and `setReloadTick` used to fire in the same
+        // synchronous tick as separate promise continuations, so the remount
+        // (driven by `reloadTick`) could happen before `readSession`'s
+        // promise had actually resolved, seeding the fresh SessionView
+        // instance from whatever `sessionData` still held (possibly still
+        // the earlier, stale value) rather than the just-fetched one. Doing
+        // this as one async sequence -- await the read, THEN bump the tick
+        // -- guarantees the remount always sees the fresh data.
         if (phase === "done" && path === selectedPath && path !== activePath) {
           readSession(path)
-            .then((data) => setSessionData(data))
+            .then((data) => {
+              setSessionData(data);
+              setReloadTick((n) => n + 1);
+            })
             .catch((err) => setSessionDataError(String(err)));
-          setReloadTick((n) => n + 1);
         }
         return;
       }

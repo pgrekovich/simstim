@@ -40,9 +40,20 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
   open: vi.fn(),
 }));
 
-/** Invokes the handler App (or SettingsDialog) registered via `listen(name, handler)`. */
+/**
+ * Invokes the handler App (or SettingsDialog) registered via `listen(name,
+ * handler)`. Uses the LAST registration for `name`, not the first: some
+ * listener effects re-subscribe when their dependencies change (e.g. App's
+ * `retranscribe-progress` listener depends on `[selectedPath, activePath]`),
+ * so `listen` can be called more than once for the same event name over a
+ * test. The mock's own `unlisten` is a no-op, so nothing removes the stale
+ * `mock.calls` entry for an old subscription -- grabbing the first match
+ * would invoke a closure holding whatever state was current back when THAT
+ * subscription was created, not the current one.
+ */
 function emit(name: string, payload: unknown) {
-  const call = vi.mocked(listen).mock.calls.find(([eventName]) => eventName === name);
+  const calls = vi.mocked(listen).mock.calls.filter(([eventName]) => eventName === name);
+  const call = calls[calls.length - 1];
   if (!call) throw new Error(`no listener registered for "${name}" -- was it ever mounted?`);
   const handler = call[1] as (event: { payload: unknown }) => void;
   act(() => {
@@ -228,6 +239,91 @@ describe("App: record continues into the open note (behavior fix)", () => {
     const saveOrder = vi.mocked(ipc.saveSession).mock.invocationCallOrder[0];
     const startOrder = vi.mocked(ipc.startRecording).mock.invocationCallOrder[0];
     expect(saveOrder).toBeLessThan(startOrder);
+  });
+});
+
+describe("App: refreshes a re-transcribed session after a background done event (fix-review finding, wave 2)", () => {
+  it("remounts the currently selected SessionView with the fresh transcript once retranscribe-progress reports done", async () => {
+    // Reproduces the bug: a SessionView only re-seeds its local transcript
+    // state on mount. If a re-transcribe job finishes while the user is
+    // looking at a DIFFERENT SessionView instance for the same path (e.g.
+    // switched away mid-job and back, remounting it from a stale on-disk
+    // read taken before the job finished), nothing ever refreshed it. App's
+    // retranscribe-progress listener must itself refetch and force a remount
+    // for the currently selected (inactive) session on the "done" phase,
+    // regardless of which instance actually clicked "Re-transcribe".
+    const sessions: SessionMeta[] = [
+      { path: "/tmp/other.md", title: "Other call", date: new Date().toISOString(), duration_secs: null },
+    ];
+    vi.mocked(ipc.listSessions).mockResolvedValue(sessions);
+    vi.mocked(ipc.readSession).mockResolvedValueOnce({
+      title: "Other call",
+      date: "",
+      notes: "old notes",
+      transcript: "[00:00:01] Me: original parakeet text",
+      audio_path: null,
+    });
+
+    render(<App />);
+
+    const otherRow = await screen.findByRole("button", { name: /other call/i });
+    fireEvent.click(otherRow);
+    await waitFor(() => expect(document.body.textContent).toContain("original parakeet text"));
+
+    // The refetch App itself performs on "done" returns the rewritten
+    // transcript -- simulating the re-transcribe pipeline's actual effect on
+    // disk (title/notes/audio_path unchanged, only the transcript differs).
+    vi.mocked(ipc.readSession).mockResolvedValueOnce({
+      title: "Other call",
+      date: "",
+      notes: "old notes",
+      transcript: "[00:00:01] Me: rewritten by whisper",
+      audio_path: null,
+    });
+
+    emit("retranscribe-progress", {
+      path: "/tmp/other.md",
+      phase: "done",
+      channel: null,
+      message: null,
+    });
+
+    await waitFor(() => expect(document.body.textContent).toContain("rewritten by whisper"));
+    expect(document.body.textContent).not.toContain("original parakeet text");
+  });
+
+  it("does not refetch when the done event is for a session other than the one currently selected", async () => {
+    const sessions: SessionMeta[] = [
+      { path: "/tmp/other.md", title: "Other call", date: new Date().toISOString(), duration_secs: null },
+    ];
+    vi.mocked(ipc.listSessions).mockResolvedValue(sessions);
+    vi.mocked(ipc.readSession).mockResolvedValue({
+      title: "Other call",
+      date: "",
+      notes: "old notes",
+      transcript: "[00:00:01] Me: hi",
+      audio_path: null,
+    });
+
+    render(<App />);
+
+    const otherRow = await screen.findByRole("button", { name: /other call/i });
+    fireEvent.click(otherRow);
+    await waitFor(() => expect(document.body.textContent).toContain("hi"));
+
+    const callsBeforeEvent = vi.mocked(ipc.readSession).mock.calls.length;
+
+    emit("retranscribe-progress", {
+      path: "/tmp/some-unrelated-session.md",
+      phase: "done",
+      channel: null,
+      message: null,
+    });
+
+    // No extra call should ever fire for an unrelated path -- give any
+    // errant async work a tick to have shown up before asserting its absence.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(vi.mocked(ipc.readSession).mock.calls.length).toBe(callsBeforeEvent);
   });
 });
 

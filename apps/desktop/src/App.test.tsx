@@ -14,7 +14,18 @@ import { listen } from "@tauri-apps/api/event";
  * these tests since the folder picker is never clicked).
  */
 vi.mock("@/lib/ipc", () => ({
-  getConfig: vi.fn().mockResolvedValue({ output_dir: "/tmp", active_model: "m1", theme: "system" }),
+  getConfig: vi.fn().mockResolvedValue({
+    output_dir: "/tmp",
+    active_model: "m1",
+    theme: "system",
+    keep_audio: true,
+    audio_format: "aac",
+    retranscribe_model: "w1",
+    auto_retranscribe: false,
+    delete_audio_after_retranscribe: false,
+    detect_calls: true,
+    auto_stop_after_call: false,
+  }),
   listSessions: vi.fn().mockResolvedValue([]),
   readSession: vi
     .fn()
@@ -30,6 +41,14 @@ vi.mock("@/lib/ipc", () => ({
   setActiveModel: vi.fn().mockResolvedValue(undefined),
   setOutputDir: vi.fn().mockResolvedValue(undefined),
   setTheme: vi.fn().mockResolvedValue(undefined),
+  setKeepAudio: vi.fn().mockResolvedValue(undefined),
+  setAudioFormat: vi.fn().mockResolvedValue(undefined),
+  setAutoRetranscribe: vi.fn().mockResolvedValue(undefined),
+  setDeleteAudioAfterRetranscribe: vi.fn().mockResolvedValue(undefined),
+  setDetectCalls: vi.fn().mockResolvedValue(undefined),
+  setAutoStopAfterCall: vi.fn().mockResolvedValue(undefined),
+  setRetranscribeModel: vi.fn().mockResolvedValue(undefined),
+  deleteModel: vi.fn().mockResolvedValue(undefined),
   retranscribeSession: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -71,8 +90,20 @@ function emit(name: string, payload: unknown) {
 }
 
 beforeEach(() => {
-  vi.mocked(ipc.startRecording).mockClear();
-  vi.mocked(ipc.stopRecording).mockClear();
+  vi.mocked(ipc.getConfig).mockReset().mockResolvedValue({
+    output_dir: "/tmp",
+    active_model: "m1",
+    theme: "system",
+    keep_audio: true,
+    audio_format: "aac",
+    retranscribe_model: "w1",
+    auto_retranscribe: false,
+    delete_audio_after_retranscribe: false,
+    detect_calls: true,
+    auto_stop_after_call: false,
+  });
+  vi.mocked(ipc.startRecording).mockReset().mockResolvedValue("/tmp/active.md");
+  vi.mocked(ipc.stopRecording).mockReset().mockResolvedValue("/tmp/active.md");
   vi.mocked(ipc.listSessions).mockClear();
   vi.mocked(ipc.saveSession).mockClear();
   vi.mocked(ipc.updateActiveSession).mockClear();
@@ -80,7 +111,130 @@ beforeEach(() => {
   vi.mocked(listen).mockClear();
 });
 
+describe("App: call detection (stage 1.0)", () => {
+  async function emitDetected() {
+    await waitFor(() =>
+      expect(vi.mocked(listen).mock.calls.some(([name]) => name === "call-detected")).toBe(true),
+    );
+    emit("call-detected", { bundle_id: "com.tinyspeck.slackmacgap", app_name: "Slack" });
+  }
+
+  it("starts a new pre-titled recording from the banner", async () => {
+    render(<App />);
+    await emitDetected();
+
+    const start = await screen.findByRole("button", { name: /start recording/i });
+    expect(screen.getByText("Call detected: Slack")).toBeVisible();
+    fireEvent.click(start);
+
+    await waitFor(() => expect(ipc.startRecording).toHaveBeenCalledTimes(1));
+    const [path, title, bundleId] = vi.mocked(ipc.startRecording).mock.calls[0];
+    expect(path).toBeNull();
+    expect(title).toMatch(/^Slack call /);
+    expect(bundleId).toBe("com.tinyspeck.slackmacgap");
+    expect(screen.queryByText("Call detected: Slack")).not.toBeInTheDocument();
+  });
+
+  it("does not show a new-call banner while recording", async () => {
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /^record$/i }));
+    await screen.findByRole("button", { name: /stop/i });
+
+    await emitDetected();
+    expect(screen.queryByText("Call detected: Slack")).not.toBeInTheDocument();
+  });
+
+  it("offers the normal Stop path when a detection-started call ends", async () => {
+    render(<App />);
+    await emitDetected();
+    fireEvent.click(await screen.findByRole("button", { name: /start recording/i }));
+    await screen.findByRole("button", { name: /stop/i });
+
+    expect(
+      vi.mocked(listen).mock.calls.filter(([name]) => name === "call-ended"),
+    ).toHaveLength(1);
+
+    emit("call-ended", {
+      bundle_id: "com.tinyspeck.slackmacgap",
+      recording_id: "/tmp/active.md",
+    });
+    expect(await screen.findByText("Call seems over")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: /^stop$/i }));
+    await waitFor(() => expect(ipc.stopRecording).toHaveBeenCalledTimes(1));
+  });
+
+  it("auto-stops through stopRecording when the setting is enabled", async () => {
+    vi.mocked(ipc.getConfig).mockResolvedValue({
+      output_dir: "/tmp",
+      active_model: "m1",
+      theme: "system",
+      keep_audio: true,
+      audio_format: "aac",
+      retranscribe_model: "w1",
+      auto_retranscribe: false,
+      delete_audio_after_retranscribe: false,
+      detect_calls: true,
+      auto_stop_after_call: true,
+    });
+    render(<App />);
+    await emitDetected();
+    fireEvent.click(await screen.findByRole("button", { name: /start recording/i }));
+    await screen.findByRole("button", { name: /stop/i });
+
+    const ended = {
+      bundle_id: "com.tinyspeck.slackmacgap",
+      recording_id: "/tmp/active.md",
+    };
+    emit("call-ended", ended);
+    emit("call-ended", ended);
+    await waitFor(() => expect(ipc.stopRecording).toHaveBeenCalledTimes(1));
+  });
+
+  it("auto-stops a manually started recording after an associated call ends", async () => {
+    vi.mocked(ipc.getConfig).mockResolvedValue({
+      output_dir: "/tmp",
+      active_model: "m1",
+      theme: "system",
+      keep_audio: true,
+      audio_format: "aac",
+      retranscribe_model: "w1",
+      auto_retranscribe: false,
+      delete_audio_after_retranscribe: false,
+      detect_calls: true,
+      auto_stop_after_call: true,
+    });
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /^record$/i }));
+    await screen.findByRole("button", { name: /stop/i });
+
+    emit("call-ended", {
+      bundle_id: "org.mozilla.firefox",
+      recording_id: "/tmp/active.md",
+    });
+    await waitFor(() => expect(ipc.stopRecording).toHaveBeenCalledTimes(1));
+  });
+});
+
 describe("App: hot-mic fix (final review Critical finding)", () => {
+  it("leaves recording mode immediately while slow finalization stays in the background", async () => {
+    let finishStop!: (path: string) => void;
+    vi.mocked(ipc.stopRecording).mockImplementation(
+      () => new Promise<string>((resolve) => { finishStop = resolve; }),
+    );
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /^record$/i }));
+    const stopButton = await screen.findByRole("button", { name: /stop/i });
+    fireEvent.click(stopButton);
+
+    await waitFor(() => expect(ipc.stopRecording).toHaveBeenCalledTimes(1));
+    expect(screen.getByText("saving")).toBeVisible();
+    expect(screen.queryByRole("button", { name: /stop/i })).not.toBeInTheDocument();
+
+    act(() => finishStop("/tmp/active.md"));
+    expect(await screen.findByText(/saved to/)).toBeVisible();
+  });
+
   it("keeps the record control wired to Stop when a session-error lands mid-recording", async () => {
     render(<App />);
 

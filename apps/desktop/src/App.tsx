@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { RecordButton } from "@/components/RecordButton";
+import { CallBanner } from "@/components/CallBanner";
 import { SessionView, type SessionViewHandle } from "@/components/SessionView";
 import { Sidebar } from "@/components/Sidebar";
 import { SettingsDialog } from "@/components/SettingsDialog";
@@ -14,6 +15,9 @@ import {
   startRecording,
   stopRecording,
   type AppConfig,
+  type CallDetectionClearedPayload,
+  type CallDetectedPayload,
+  type CallEndedPayload,
   type ModelInfo,
   type RetranscribeProgress,
   type SessionData,
@@ -63,10 +67,16 @@ const ACTIVE_SESSION_PLACEHOLDER: Pick<SessionData, "title" | "notes"> = {
   notes: "",
 };
 
+function detectedCallTitle(appName: string, now = new Date()): string {
+  const time = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return `${appName} call ${time}`;
+}
+
 type Status =
   | { kind: "idle" }
   | { kind: "loading-model" }
   | { kind: "recording" }
+  | { kind: "saving" }
   | { kind: "saved"; path: string }
   | { kind: "error"; message: string };
 
@@ -79,7 +89,18 @@ function App() {
   const [modelReady, setModelReady] = useState(true);
   const [busy, setBusy] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [callDetection, setCallDetection] = useState<CallDetectedPayload | null>(null);
+  const [callEndedBundle, setCallEndedBundle] = useState<string | null>(null);
+  const [autoStopAfterCall, setAutoStopAfterCall] = useState(false);
   const loadingFallbackRef = useRef<number | null>(null);
+  const callLifecycleRef = useRef({
+    activePath: null as string | null,
+    autoStopAfterCall: false,
+  });
+  const handleStopRef = useRef<() => Promise<void>>(async () => {});
+  // State alone cannot reject two stop events delivered in the same React
+  // tick. This synchronous guard protects the one backend recording handle.
+  const stopInFlightRef = useRef(false);
 
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
@@ -169,12 +190,25 @@ function App() {
   // window entirely instead of narrowing it.
   const activeSessionViewRef = useRef<SessionViewHandle>(null);
 
+  // Core Audio events are independent of React renders. Keep one listener
+  // for the app lifetime and let it read the latest lifecycle state through
+  // this ref, avoiding a brief unsubscribe/resubscribe gap when recording
+  // starts or the auto-stop setting changes. Written from an effect, not
+  // during render, so only committed state ever reaches the listener.
+  useEffect(() => {
+    callLifecycleRef.current = {
+      activePath,
+      autoStopAfterCall,
+    };
+  }, [activePath, autoStopAfterCall]);
+
   // The settings dialog owns fetching config/models (on mount, on open, and
   // on download completion) and reports back through this callback, so the
   // "model not downloaded" gate here updates without an app restart.
   function handleModelsChanged(config: AppConfig, models: ModelInfo[]) {
     const active = models.find((m) => m.id === config.active_model);
     setModelReady(Boolean(active?.downloaded));
+    setAutoStopAfterCall(config.auto_stop_after_call);
   }
 
   // index.html already applied a pre-paint guess (system preference) before
@@ -191,6 +225,28 @@ function App() {
         // this is just guarding against an unexpected IPC failure. If it
         // ever does fire, the pre-paint script's system guess stands.
       });
+  }, []);
+
+  useEffect(() => {
+    const unlisten = listen<CallDetectedPayload>("call-detected", (event) => {
+      if (callLifecycleRef.current.activePath === null) {
+        setCallDetection(event.payload);
+      }
+    });
+    return () => {
+      unlisten.then((f) => f());
+    };
+  }, []);
+
+  useEffect(() => {
+    const unlisten = listen<CallDetectionClearedPayload>("call-detection-cleared", (event) => {
+      setCallDetection((current) =>
+        current?.bundle_id === event.payload.bundle_id ? null : current,
+      );
+    });
+    return () => {
+      unlisten.then((f) => f());
+    };
   }, []);
 
   const refreshSessions = useCallback(async () => {
@@ -456,7 +512,7 @@ function App() {
     }
   }
 
-  async function handleStart() {
+  async function handleStart(detected?: CallDetectedPayload) {
     if (busy) return;
     setBusy(true);
     setInterimMe("");
@@ -469,7 +525,7 @@ function App() {
     // "Untitled"/empty placeholder -- new lines from this recording are
     // appended after it by the `transcript-line` listener above, never
     // re-rendering what's already seeded.
-    const continuePath = selectedPath;
+    const continuePath = detected ? null : selectedPath;
     try {
       // Flush any pending, still-debouncing title/notes edit on the
       // currently mounted SessionView (whichever session is selected, still
@@ -479,7 +535,8 @@ function App() {
       // no SessionView mounted at all (nothing selected).
       await activeSessionViewRef.current?.flushPendingEdits();
 
-      let seedTitle = ACTIVE_SESSION_PLACEHOLDER.title;
+      const detectedTitle = detected ? detectedCallTitle(detected.app_name) : undefined;
+      let seedTitle = detectedTitle ?? ACTIVE_SESSION_PLACEHOLDER.title;
       let seedNotes = ACTIVE_SESSION_PLACEHOLDER.notes;
       let seedLines: string[] = [];
       if (continuePath !== null) {
@@ -491,10 +548,18 @@ function App() {
       setLines(seedLines);
       setActiveTitle(seedTitle);
       setActiveNotes(seedNotes);
-      const path = await startRecording(continuePath);
+      const path = detected
+        ? await startRecording(
+            null,
+            detectedTitle,
+            detected.bundle_id,
+          )
+        : await startRecording(continuePath);
       setRecordingStartedAt(Date.now());
       setActivePath(path);
       setSelectedPath(path);
+      setCallDetection(null);
+      setCallEndedBundle(null);
       setStatus({ kind: "loading-model" });
       clearLoadingFallback();
       loadingFallbackRef.current = window.setTimeout(() => {
@@ -510,7 +575,8 @@ function App() {
   }
 
   async function handleStop() {
-    if (busy) return;
+    if (busy || stopInFlightRef.current) return;
+    stopInFlightRef.current = true;
     setBusy(true);
     clearLoadingFallback();
     try {
@@ -520,19 +586,54 @@ function App() {
       // to null and the active-session JSX branch disappears) it's too
       // late. See SessionView's class doc comment.
       await activeSessionViewRef.current?.flushPendingEdits();
-      const path = await stopRecording();
+      const stopPromise = stopRecording();
+
+      // Capture has been handed to the backend's stop path. Reflect that
+      // immediately instead of keeping the UI looking live while transcript
+      // flush and audio encoding finish on a blocking worker.
       setRecordingStartedAt(null);
       setActivePath(null);
+      setCallEndedBundle(null);
       setInterimMe("");
       setInterimThem("");
+      setStatus({ kind: "saving" });
+      void refreshSessions();
+
+      const path = await stopPromise;
       setStatus({ kind: "saved", path });
-      refreshSessions();
+      void refreshSessions();
     } catch (err) {
       setStatus({ kind: "error", message: String(err) });
     } finally {
+      stopInFlightRef.current = false;
       setBusy(false);
     }
   }
+
+  // Same latest-value-through-a-ref pattern as callLifecycleRef above: the
+  // permanent call-ended listener must call the current handleStop closure,
+  // and the assignment happens in an effect, never during render.
+  useEffect(() => {
+    handleStopRef.current = handleStop;
+  });
+
+  useEffect(() => {
+    const unlisten = listen<CallEndedPayload>("call-ended", (event) => {
+      const lifecycle = callLifecycleRef.current;
+      if (event.payload.recording_id !== lifecycle.activePath) {
+        return;
+      }
+      setCallDetection(null);
+      if (lifecycle.autoStopAfterCall) {
+        void handleStopRef.current();
+      } else {
+        setCallEndedBundle(event.payload.bundle_id);
+      }
+    });
+    return () => {
+      unlisten.then((f) => f());
+    };
+  }, []);
 
   // Creates a new, empty note the user can type into right away -- no
   // recording involved. Deliberately leaves `activePath`/recording state
@@ -577,6 +678,8 @@ function App() {
       ? "loading model"
       : status.kind === "recording"
         ? "recording"
+        : status.kind === "saving"
+          ? "saving"
         : status.kind === "saved"
           ? `saved to ${truncateMiddle(status.path)}`
           : status.kind === "error"
@@ -600,7 +703,7 @@ function App() {
             recording={sessionActive}
             disabled={busy || (!sessionActive && !modelReady)}
             startedAt={recordingStartedAt}
-            onClick={sessionActive ? handleStop : handleStart}
+            onClick={sessionActive ? handleStop : () => void handleStart()}
           />
 
           <span
@@ -628,6 +731,26 @@ function App() {
             <Settings />
           </Button>
         </header>
+
+        {callDetection && !sessionActive && (
+          <CallBanner
+            message={`Call detected: ${callDetection.app_name}`}
+            actionLabel="Start recording"
+            disabled={busy || !modelReady}
+            onAction={() => void handleStart(callDetection)}
+            onDismiss={() => setCallDetection(null)}
+          />
+        )}
+
+        {callEndedBundle && sessionActive && (
+          <CallBanner
+            message="Call seems over"
+            actionLabel="Stop"
+            disabled={busy}
+            onAction={() => void handleStop()}
+            onDismiss={() => setCallEndedBundle(null)}
+          />
+        )}
 
         <div className="flex min-h-0 flex-1 flex-col p-6">
           {selectedPath === null ? (

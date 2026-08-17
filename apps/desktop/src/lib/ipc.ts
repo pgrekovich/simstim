@@ -54,6 +54,24 @@ export interface AppConfig {
    * `setDeleteAudioAfterRetranscribe`.
    */
   delete_audio_after_retranscribe: boolean;
+  /** Whether known mic-using call apps may surface a recording suggestion. */
+  detect_calls: boolean;
+  /** Whether an associated recording stops after app I/O release and remote-channel silence. */
+  auto_stop_after_call: boolean;
+}
+
+export interface CallDetectedPayload {
+  bundle_id: string;
+  app_name: string;
+}
+
+export interface CallEndedPayload {
+  bundle_id: string;
+  recording_id: string;
+}
+
+export interface CallDetectionClearedPayload {
+  bundle_id: string;
 }
 
 /**
@@ -228,8 +246,12 @@ export function deleteModel(id: string): Promise<void> {
  * (apps/desktop/src-tauri/src/lib.rs). Resolves with the path recorded into
  * either way.
  */
-export function startRecording(path: string | null): Promise<string> {
-  return invoke("start_recording", { path });
+export function startRecording(
+  path: string | null,
+  title?: string,
+  detectedBundleId?: string,
+): Promise<string> {
+  return invoke("start_recording", { path, title, detectedBundleId });
 }
 
 export function stopRecording(): Promise<string> {
@@ -282,6 +304,14 @@ export function setAutoRetranscribe(autoRetranscribe: boolean): Promise<void> {
  */
 export function setDeleteAudioAfterRetranscribe(deleteAudioAfterRetranscribe: boolean): Promise<void> {
   return invoke("set_delete_audio_after_retranscribe", { deleteAudioAfterRetranscribe });
+}
+
+export function setDetectCalls(enabled: boolean): Promise<void> {
+  return invoke("set_detect_calls", { enabled });
+}
+
+export function setAutoStopAfterCall(autoStopAfterCall: boolean): Promise<void> {
+  return invoke("set_auto_stop_after_call", { autoStopAfterCall });
 }
 
 export function listSessions(): Promise<SessionMeta[]> {

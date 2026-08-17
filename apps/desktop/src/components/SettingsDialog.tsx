@@ -21,6 +21,8 @@ import {
   setActiveModel,
   setAudioFormat,
   setAutoRetranscribe,
+  setAutoStopAfterCall,
+  setDetectCalls,
   setDeleteAudioAfterRetranscribe,
   setKeepAudio,
   setOutputDir,
@@ -146,6 +148,8 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
   const [audioFormatError, setAudioFormatError] = useState<string | null>(null);
   const [autoRetranscribeError, setAutoRetranscribeError] = useState<string | null>(null);
   const [deleteAudioAfterError, setDeleteAudioAfterError] = useState<string | null>(null);
+  const [detectCallsError, setDetectCallsError] = useState<string | null>(null);
+  const [autoStopAfterCallError, setAutoStopAfterCallError] = useState<string | null>(null);
   const [retranscribeError, setRetranscribeError] = useState<string | null>(null);
   const [progress, setProgress] = useState<Record<string, DownloadProgress>>({});
   const [busyIds, setBusyIds] = useState<Set<string>>(new Set());
@@ -335,6 +339,34 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
     }
   }
 
+  async function handleSetDetectCalls(enabled: boolean) {
+    const previous = config?.detect_calls;
+    if (previous === undefined || enabled === previous) return;
+    setDetectCallsError(null);
+    setConfig((prev) => (prev ? { ...prev, detect_calls: enabled } : prev));
+    try {
+      await setDetectCalls(enabled);
+      await refresh();
+    } catch (err) {
+      setConfig((prev) => (prev ? { ...prev, detect_calls: previous } : prev));
+      setDetectCallsError(String(err));
+    }
+  }
+
+  async function handleSetAutoStopAfterCall(enabled: boolean) {
+    const previous = config?.auto_stop_after_call;
+    if (previous === undefined || enabled === previous) return;
+    setAutoStopAfterCallError(null);
+    setConfig((prev) => (prev ? { ...prev, auto_stop_after_call: enabled } : prev));
+    try {
+      await setAutoStopAfterCall(enabled);
+      await refresh();
+    } catch (err) {
+      setConfig((prev) => (prev ? { ...prev, auto_stop_after_call: previous } : prev));
+      setAutoStopAfterCallError(String(err));
+    }
+  }
+
   async function handleChooseFolder() {
     setChoosingDir(true);
     setFolderError(null);
@@ -501,6 +533,43 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
               ))}
             </div>
             {themeError && <span className="text-xs text-destructive">{themeError}</span>}
+          </section>
+
+          <section className="flex flex-col gap-2">
+            <h3 className="text-sm font-semibold">Call detection</h3>
+            <div className="flex items-start gap-2">
+              <Checkbox
+                id="detect-calls"
+                checked={config?.detect_calls ?? false}
+                disabled={!config}
+                onCheckedChange={(checked) => handleSetDetectCalls(checked === true)}
+              />
+              <div className="flex flex-col gap-0.5">
+                <Label htmlFor="detect-calls">Suggest recording when a call starts</Label>
+                <span className="text-xs text-muted-foreground">
+                  Watches microphone activity from known calling apps. Recording still needs your click.
+                </span>
+              </div>
+            </div>
+            {detectCallsError && <span className="text-xs text-destructive">{detectCallsError}</span>}
+
+            <div className="ml-6 flex items-start gap-2 pt-1">
+              <Checkbox
+                id="auto-stop-after-call"
+                checked={config?.auto_stop_after_call ?? false}
+                disabled={!config || !config.detect_calls}
+                onCheckedChange={(checked) => handleSetAutoStopAfterCall(checked === true)}
+              />
+              <div className="flex flex-col gap-0.5">
+                <Label htmlFor="auto-stop-after-call">Stop automatically when the call ends</Label>
+                <span className="text-xs text-muted-foreground">
+                  Waits for the call app to release audio and for the remote channel to stay silent.
+                </span>
+              </div>
+            </div>
+            {autoStopAfterCallError && (
+              <span className="ml-6 text-xs text-destructive">{autoStopAfterCallError}</span>
+            )}
           </section>
 
           <section className="flex flex-col gap-2">

@@ -17,6 +17,8 @@ vi.mock("@/lib/ipc", () => ({
   setAudioFormat: vi.fn().mockResolvedValue(undefined),
   setAutoRetranscribe: vi.fn().mockResolvedValue(undefined),
   setDeleteAudioAfterRetranscribe: vi.fn().mockResolvedValue(undefined),
+  setDetectCalls: vi.fn().mockResolvedValue(undefined),
+  setAutoStopAfterCall: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("@tauri-apps/api/event", () => ({
@@ -36,6 +38,8 @@ const baseConfig: AppConfig = {
   retranscribe_model: "whisper-large-v3-turbo-q8",
   auto_retranscribe: false,
   delete_audio_after_retranscribe: false,
+  detect_calls: true,
+  auto_stop_after_call: false,
 };
 
 beforeEach(() => {
@@ -45,9 +49,51 @@ beforeEach(() => {
   vi.mocked(ipc.setAudioFormat).mockClear().mockResolvedValue(undefined);
   vi.mocked(ipc.setAutoRetranscribe).mockClear().mockResolvedValue(undefined);
   vi.mocked(ipc.setDeleteAudioAfterRetranscribe).mockClear().mockResolvedValue(undefined);
+  vi.mocked(ipc.setDetectCalls).mockClear().mockResolvedValue(undefined);
+  vi.mocked(ipc.setAutoStopAfterCall).mockClear().mockResolvedValue(undefined);
   vi.mocked(ipc.setActiveModel).mockClear().mockResolvedValue(undefined);
   vi.mocked(ipc.setRetranscribeModel).mockClear().mockResolvedValue(undefined);
   vi.mocked(ipc.deleteModel).mockClear().mockResolvedValue(undefined);
+});
+
+describe("SettingsDialog: call detection (stage 1.0)", () => {
+  it("persists detection and enables the dependent auto-stop row", async () => {
+    let persisted = { ...baseConfig };
+    vi.mocked(ipc.getConfig).mockImplementation(async () => ({ ...persisted }));
+    vi.mocked(ipc.setDetectCalls).mockImplementation(async (enabled: boolean) => {
+      persisted = { ...persisted, detect_calls: enabled };
+    });
+    vi.mocked(ipc.setAutoStopAfterCall).mockImplementation(async (enabled: boolean) => {
+      persisted = { ...persisted, auto_stop_after_call: enabled };
+    });
+
+    render(<SettingsDialog open onOpenChange={() => {}} />);
+    const detect = await screen.findByRole("checkbox", {
+      name: /suggest recording when a call starts/i,
+    });
+    const autoStop = screen.getByRole("checkbox", {
+      name: /stop automatically when the call ends/i,
+    });
+    expect(detect).toHaveAttribute("aria-checked", "true");
+    expect(autoStop).not.toBeDisabled();
+
+    fireEvent.click(autoStop);
+    await waitFor(() => expect(ipc.setAutoStopAfterCall).toHaveBeenCalledWith(true));
+    await waitFor(() => expect(autoStop).toHaveAttribute("aria-checked", "true"));
+  });
+
+  it("rolls detection back and shows the persistence error", async () => {
+    vi.mocked(ipc.setDetectCalls).mockRejectedValueOnce(new Error("config write failed"));
+    render(<SettingsDialog open onOpenChange={() => {}} />);
+    const detect = await screen.findByRole("checkbox", {
+      name: /suggest recording when a call starts/i,
+    });
+
+    fireEvent.click(detect);
+    await waitFor(() => expect(ipc.setDetectCalls).toHaveBeenCalledWith(false));
+    await waitFor(() => expect(detect).toHaveAttribute("aria-checked", "true"));
+    expect(await screen.findByText(/config write failed/i)).toBeVisible();
+  });
 });
 
 describe("SettingsDialog: keep-audio toggle (stage 0.7 Task 5)", () => {

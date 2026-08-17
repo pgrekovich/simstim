@@ -13,15 +13,18 @@ whisper re-transcribe with model selection and deletion, click-to-seek
 playback, auto re-transcribe on stop, audio cleanup after re-transcribe,
 recording into an existing note with audio and timestamp continuation.
 
-## Next: stage 1.0, call detection (owner's call: the most important thing)
+## Implemented, awaiting owner e2e: stage 1.0, call detection
 
 The original Granola magic and the last big piece of daily friction: today
 you must remember the app exists before a call starts.
 
-- Detect "an app started using the microphone" via Core Audio process
-  objects (no extra permission expected; events over polling if the API
-  allows). Match against a configurable whitelist of calling apps (Zoom,
-  Slack, Teams, browsers, FaceTime, Discord, ...).
+- Detect "an app started using the microphone" via Core Audio callbacks on
+  every audio device and process objects (no extra permission expected).
+  Track process output after recording starts so a muted listener remains in
+  the call. Use a low-frequency reconciliation scan only while an episode is
+  active, because macOS can omit a browser helper's final callback. Match
+  against the static whitelist of calling apps, including Firefox and
+  Chromium helpers.
 - Notify with the app's name; one click starts recording into a new note.
   **Never auto-record** (product principle 5): detection suggests, the human
   decides. This is also the legal line Granola is being sued over.

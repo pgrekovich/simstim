@@ -66,6 +66,35 @@ Two more settings live right under "Keep call audio" in Settings > Output (stage
 
 A second stop (or a manual click) while a re-transcribe is already running queues behind it instead of being rejected; jobs run one at a time, FIFO.
 
+## Call detection
+
+Call detection watches Core Audio metadata for known calling apps on every
+available audio device, including a non-default microphone selected inside a
+call app. After five continuous seconds of input activity it shows an in-app
+banner with the app name and a Start recording button. Output-only activity
+never starts detection. One continuous call only suggests once. After the app
+stays off the microphone for two seconds, a later call is treated as a new
+episode and can suggest again. Detection never starts a recording by itself.
+
+Chrome, Brave, Firefox, Safari, Arc and Zen are identified only by browser
+name. Without a browser extension, the app cannot distinguish a Meet call
+from another site using the mic.
+
+For both suggested and manually started recordings, simstim associates the
+active known call app with the recording. Input or output activity keeps the
+call alive, so sitting muted and listening does not look like a finished call.
+Once the app releases both directions and the remote system-audio channel has
+been silent for 30 seconds, simstim suggests stopping. Local microphone speech
+does not extend that window after the call ends. The opt-in automatic-stop
+setting uses the same condition and the normal safe stop path. Final transcript
+and audio encoding continue on a blocking worker, so Stop immediately leaves
+recording mode and keeps the app responsive while the header reports `saving`.
+
+Bundled builds also attempt a system notification. This is best effort and
+depends on macOS notification authorization. `pnpm tauri dev` only uses the
+in-app banner because unsigned dev binaries cannot register reliable system
+notifications under their own app identity.
+
 ## Audio format
 
 A measured codec benchmark on real call audio settled this: AAC at 32 kbps, forced to 16 kHz, is ~17 MB/hour at 3.8% word-error-rate versus lossless; FLAC is ~137 MB/hour at 0% WER. Raising the AAC bitrate doesn't recover accuracy (64 kbps measured 4.3% WER, worse, not better), so 32 kbps is the setting, not a corner cut. AAC is the default; FLAC stays available in Settings > Audio format for anyone who wants zero transcription-quality cost from the codec itself. Switching formats only affects future recordings; continuing an existing session re-encodes its whole audio (old + new) in whatever format is currently selected, so a session never ends up split across two audio files.
@@ -79,6 +108,11 @@ Parakeet runs the live recording and is not switchable. Whisper models are for t
 
 Turbo is faster: about 12x realtime measured on this machine; a 30-minute call takes about 2.5 minutes. Large-v3 is slower but the strongest on non-English speech. Models can be deleted from the same screen to reclaim disk (shows real on-disk sizes). Two older whisper variants were curated out of the offered lineup; if either is still downloaded from before, it stays visible in Settings for deletion only, labeled "no longer offered" - it can't be re-downloaded or selected again.
 
+Both models use the same quality-oriented offline decoding profile: a five-wide beam, context between internal windows, and non-speech token suppression. This makes re-transcription slower than the previous greedy decoder, especially with full large-v3, while Turbo remains the faster option.
+
 ## Status
 
-stage 0.8 shipped: a Settings > Models manager with model roles (Recording vs Re-transcribe), a curated two-model re-transcribe lineup (turbo and large-v3) picked in-app instead of a fixed default, and per-model deletion (with confirmation) to reclaim disk. Known gaps: no meeting detection yet, no menu bar/hotkeys.
+Stage 1.0 implemented: event-driven call detection, a one-click in-app
+recording suggestion, call-end handling, and best-effort bundled-build system
+notifications. The next owner-ordered item is menu bar presence plus a global
+hotkey.

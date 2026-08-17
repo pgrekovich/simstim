@@ -72,7 +72,7 @@ HN commenters on the Hyprnote launch literally begged for this product.
     (Linux).
   - `detect`: trait "stream of events: process X opened/closed the mic".
     macOS impl via Core Audio process objects (`kAudioProcessPropertyIsRunningInput`)
-    + configurable app whitelist (Zoom, Slack, Teams, FaceTime, Discord,
+    + a static app whitelist (Zoom, Slack, Teams, FaceTime, Discord,
     browsers). Windows: WASAPI session notifications. Linux: PipeWire node
     events. Notification with one-click "start recording".
   - `asr`: `Engine` trait. Default: **Parakeet TDT 0.6b v3 via sherpa-onnx**
@@ -146,6 +146,8 @@ Status (2026-08-16): stage 0.8 shipped: model roles (live vs re-transcribe), a c
 
 Status (2026-08-16): stage 0.9 shipped: two owner-requested settings, both off by default - re-transcribe automatically once a recording stops, and delete the call's audio once a re-transcribe succeeds (manual or automatic, irreversible). Re-transcribe jobs now queue FIFO instead of rejecting a second request while one is already running.
 
+Status (2026-08-17): stage 1.0 implemented, awaiting owner e2e: event-driven Core Audio call detection with a five-second debounce and call-episode tracking, an in-app one-click recording banner, call-end stop handling, and best-effort system notifications in bundled builds. Detection never starts recording automatically.
+
 ## Stage 0.6: the shell (approved 2026-08-15)
 
 Pivot from "process control panel" to "notes app where recording is a side
@@ -194,7 +196,10 @@ has no "ё" at all (hard architectural exclusion, not a tuning issue).
   Measured on the dev machine: 12x realtime, so a 30 minute call takes
   about 2.5 minutes. Segment timestamps come from whisper directly.
   sherpa-onnx's whisper is unusable here: its published models carry no
-  timestamps.
+  timestamps. Both supported Whisper variants share an offline quality
+  profile: a five-wide beam, context carried between internal windows, and
+  non-speech token suppression. Metal flash attention stays disabled for the
+  bundled whisper.cpp 1.7.6 path.
 - **The transcript is app-read-only** (Pavel's ruling): the app never offers
   transcript editing, so re-transcribing simply REPLACES the section. The
   old text is not preserved in the file. Hand-editing the .md outside the
@@ -219,15 +224,25 @@ Out of 0.7: meeting detection, tray, hotkeys, enhance, calendar.
 Kills the last daily friction: remembering the app exists before a call.
 Research basis: `docs/research/detection.md` (APIs verified with live probes).
 
-- **Detection**: listen on the default input device's "is running somewhere"
-  flag (Core Audio, via cidre, zero new deps, zero permissions), and on the
-  flag flipping, scan process objects to find which app grabbed the mic.
-  Identity resolved via NSRunningApplication + outermost-bundle walk (maps
-  browser helpers to the browser). Re-subscribes when the default input
-  device changes.
+- **Detection**: listen on every Core Audio device's "is running somewhere"
+  flag and on known Core Audio process input and output flags (via cidre,
+  zero new deps, zero permissions), and scan process objects only after those
+  callbacks. Device listeners cover apps using a non-default input and close
+  the new-process race; process listeners attribute lifecycle changes to a
+  particular app. Only input activity starts detection, while input or output
+  activity keeps an associated recording alive so a muted listener is not
+  treated as a finished call. While an episode or recording is active, a
+  two-second reconciliation scan guards against macOS coalescing a browser
+  helper's final callback; idle detection remains callback-only. Identity is
+  resolved via NSRunningApplication +
+  outermost-bundle walk, with direct Chromium helper-ID normalization when a
+  helper has no NSRunningApplication entry. Re-subscribes when the default
+  input device changes.
 - **Whitelist** of calling apps (Zoom, Slack, Teams, Webex, FaceTime,
-  Discord, Telegram, WhatsApp, major browsers), with a debounce before
-  firing and a per-app cooldown after. Browsers are labelled generically
+  Discord, Telegram, WhatsApp, Chrome, Brave, Firefox, Safari, Arc, Zen),
+  with a debounce before firing. One continuous mic-use episode fires once;
+  after two seconds continuously off the mic, a later call is a new episode
+  and may fire again. Browsers are labelled generically
   ("Call detected: Brave"): a site using the mic is indistinguishable from a
   call without an extension, accepted.
 - **The affordance is an in-app banner** ("Call detected: Slack. [Start
@@ -237,10 +252,12 @@ Research basis: `docs/research/detection.md` (APIs verified with live probes).
   bundled builds only.
 - **Never auto-record** (principle 5). Detection suggests; the click starts
   an ordinary recording into a new note titled after the detected app.
-- **Call end**: when the detected app releases the mic during a
-  detection-started recording, suggest stopping; `auto_stop_after_call`
-  setting (default off) stops automatically. Stopping is the safe direction
-  to automate; starting never is.
+- **Call end**: both suggested and manually started recordings bind to the
+  active known call app. When that app releases audio input and output and
+  Silero VAD sees no speech on the remote system-audio channel for 30 seconds,
+  suggest stopping; local microphone speech cannot extend the window after
+  the call ends. `auto_stop_after_call` (default off) stops through the normal
+  stop path. Stopping is the safe direction to automate; starting never is.
 - Settings: `detect_calls: bool` (default on: it only ever notifies).
 
 Out of 1.0: calendar signals, tray/menu-bar presence, global hotkey, tab

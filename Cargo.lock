@@ -955,6 +955,7 @@ dependencies = [
  "anyhow",
  "bzip2",
  "chrono",
+ "cidre",
  "claxon",
  "dirs",
  "flacenc",

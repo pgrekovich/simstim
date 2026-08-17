@@ -66,6 +66,16 @@ fn default_delete_audio_after_retranscribe() -> bool {
     false
 }
 
+/// Call detection only suggests recording and therefore defaults on.
+fn default_detect_calls() -> bool {
+    true
+}
+
+/// Stopping is safe to automate, but remains opt-in.
+fn default_auto_stop_after_call() -> bool {
+    false
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Config {
     pub output_dir: PathBuf,
@@ -116,6 +126,14 @@ pub struct Config {
     /// failing deserialization entirely.
     #[serde(default = "default_delete_audio_after_retranscribe")]
     pub delete_audio_after_retranscribe: bool,
+    /// Whether mic activity from known calling apps may surface a recording
+    /// suggestion. Detection never starts capture itself.
+    #[serde(default = "default_detect_calls")]
+    pub detect_calls: bool,
+    /// Whether a recording associated with a known call app stops after the
+    /// app releases audio input and output and the remote channel is silent.
+    #[serde(default = "default_auto_stop_after_call")]
+    pub auto_stop_after_call: bool,
 }
 
 impl Default for Config {
@@ -129,6 +147,8 @@ impl Default for Config {
             retranscribe_model: default_retranscribe_model(),
             auto_retranscribe: default_auto_retranscribe(),
             delete_audio_after_retranscribe: default_delete_audio_after_retranscribe(),
+            detect_calls: default_detect_calls(),
+            auto_stop_after_call: default_auto_stop_after_call(),
         }
     }
 }
@@ -217,6 +237,13 @@ pub fn set_delete_audio_after_retranscribe(delete_audio_after_retranscribe: bool
     cfg.save().map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+pub fn set_auto_stop_after_call(auto_stop_after_call: bool) -> Result<(), String> {
+    let mut cfg = Config::load();
+    cfg.auto_stop_after_call = auto_stop_after_call;
+    cfg.save().map_err(|e| e.to_string())
+}
+
 /// `~/Library/Application Support/simstim/config.json`: next to the models
 /// dir (`simstim_engine::models_dir()` is the `.../simstim/models` sibling).
 pub fn config_path() -> PathBuf {
@@ -288,6 +315,8 @@ mod tests {
             retranscribe_model: "whisper-large-v3".to_string(),
             auto_retranscribe: true,
             delete_audio_after_retranscribe: true,
+            detect_calls: false,
+            auto_stop_after_call: true,
         };
         cfg.save_to(&path).unwrap();
         let loaded = Config::load_from(&path);
@@ -323,6 +352,26 @@ mod tests {
     #[test]
     fn delete_audio_after_retranscribe_defaults_to_false() {
         assert!(!Config::default().delete_audio_after_retranscribe);
+    }
+
+    #[test]
+    fn call_detection_defaults_are_safe() {
+        assert!(Config::default().detect_calls);
+        assert!(!Config::default().auto_stop_after_call);
+    }
+
+    #[test]
+    fn old_config_json_gets_stage_1_defaults() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        std::fs::write(
+            &path,
+            r#"{"output_dir":"/tmp/some-output","active_model":"custom-model-id"}"#,
+        )
+        .unwrap();
+        let cfg = Config::load_from(&path);
+        assert!(cfg.detect_calls);
+        assert!(!cfg.auto_stop_after_call);
     }
 
     /// Stage-0.9 Global Constraints: an old config.json written before these

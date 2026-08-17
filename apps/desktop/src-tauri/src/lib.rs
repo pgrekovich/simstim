@@ -1,6 +1,7 @@
 pub mod aac;
 pub mod audio_sink;
 pub mod config;
+pub mod detect;
 pub mod models;
 pub mod retranscribe;
 pub mod session;
@@ -13,6 +14,7 @@ use session::PendingEdits;
 use simstim_capture::Channel;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 /// `session-error` event payload (Global Constraints): worker-side errors
@@ -54,6 +56,7 @@ fn channel_str(channel: Channel) -> &'static str {
 /// indefinitely instead of draining promptly on channel disconnect.
 struct Recording {
     session: session::Session,
+    activity: Arc<session::RecordingActivity>,
     mic: simstim_capture::CaptureHandle,
     speaker: simstim_capture::speaker::SpeakerHandle,
     /// The file this recording's worker exclusively owns while active (see
@@ -81,6 +84,29 @@ pub struct AppState {
     finalizing: Mutex<Option<PathBuf>>,
 }
 
+pub(crate) struct RecordingStatus {
+    pub(crate) id: String,
+    pub(crate) remote_silent_for: Duration,
+}
+
+/// Keeps `finalizing` accurate even if the async IPC request is cancelled.
+/// The blocking task owns this guard, so dropping the request future cannot
+/// expose a still-being-written audio file as complete.
+struct FinalizingGuard {
+    app: AppHandle,
+    path: PathBuf,
+}
+
+impl Drop for FinalizingGuard {
+    fn drop(&mut self) {
+        let state = self.app.state::<AppState>();
+        let mut finalizing = state.finalizing.lock().unwrap();
+        if finalizing.as_deref() == Some(self.path.as_path()) {
+            *finalizing = None;
+        }
+    }
+}
+
 impl Default for AppState {
     fn default() -> Self {
         AppState {
@@ -102,6 +128,21 @@ impl AppState {
     pub(crate) fn finalizing_path(&self) -> Option<PathBuf> {
         self.finalizing.lock().unwrap().clone()
     }
+
+    pub(crate) fn recording_status(&self) -> Option<RecordingStatus> {
+        let (id, activity) = {
+            let guard = self.recording.lock().unwrap();
+            let recording = guard.as_ref()?;
+            (
+                recording.path.display().to_string(),
+                recording.activity.clone(),
+            )
+        };
+        Some(RecordingStatus {
+            id,
+            remote_silent_for: activity.remote_silent_for(),
+        })
+    }
 }
 
 /// Whether starting a recording into `path` should be rejected because it
@@ -122,8 +163,17 @@ fn rejects_recording_into_active_path(path: Option<&std::path::Path>, active: Op
 /// continuing from where the file left off (see `session::ContinueFrom`'s
 /// docs). Returns the path recorded into either way.
 #[tauri::command]
-fn start_recording(app: AppHandle, path: Option<String>, state: State<AppState>) -> Result<String, String> {
+fn start_recording(
+    app: AppHandle,
+    path: Option<String>,
+    title: Option<String>,
+    detected_bundle_id: Option<String>,
+    state: State<AppState>,
+) -> Result<String, String> {
     let path = path.map(PathBuf::from);
+    if path.is_some() && (title.is_some() || detected_bundle_id.is_some()) {
+        return Err("a detected-call title can only be applied to a new session".into());
+    }
     let mut guard = state.recording.lock().unwrap();
     let active_path = guard.as_ref().map(|r| r.path.as_path());
     if rejects_recording_into_active_path(path.as_deref(), active_path) {
@@ -156,10 +206,11 @@ fn start_recording(app: AppHandle, path: Option<String>, state: State<AppState>)
     let line_emitter = app.clone();
     let interim_emitter = app.clone();
     let error_emitter = app.clone();
-    let session = session::Session::start(
+    let session = session::Session::start_with_title(
         rx,
         out.clone(),
         continue_from,
+        title,
         pending_edits.clone(),
         cfg.keep_audio,
         audio_sink::AudioFormat::from_config_str(&cfg.audio_format),
@@ -179,13 +230,17 @@ fn start_recording(app: AppHandle, path: Option<String>, state: State<AppState>)
             let _ = error_emitter.emit("session-error", SessionErrorPayload { message });
         },
     );
+    let activity = session.activity();
     *guard = Some(Recording {
         session,
+        activity,
         mic,
         speaker,
         path: out.clone(),
         pending_edits,
     });
+    app.state::<detect::DetectHandle>()
+        .recording_started(detected_bundle_id, out.display().to_string());
     Ok(out.display().to_string())
 }
 
@@ -206,7 +261,8 @@ fn update_active_session(
 }
 
 #[tauri::command]
-fn stop_recording(app: AppHandle, state: State<AppState>) -> Result<String, String> {
+async fn stop_recording(app: AppHandle) -> Result<String, String> {
+    let state = app.state::<AppState>();
     let Recording {
         session,
         mic,
@@ -226,28 +282,36 @@ fn stop_recording(app: AppHandle, state: State<AppState>) -> Result<String, Stri
     // after -- on every path, success or error, so it never gets stuck set.
     *state.finalizing.lock().unwrap() = Some(path.clone());
 
-    // Drop the capture handles before joining the session: this stops the
-    // mic/speaker streams and drops their Sender<Chunk> halves, disconnecting
-    // the channel so the worker thread notices immediately and drains, rather
-    // than blocking on a stop_flag poll gap that a live stream may never
-    // produce. See the `Recording` doc comment for why ordering matters here.
-    drop(mic);
-    drop(speaker);
-    let result = session.stop();
+    // Capture is no longer active from this point onward, even if flushing
+    // or encoding the session fails. Clear detector lifecycle state on every
+    // stop path so a failed finalization cannot poison the next call.
+    app.state::<detect::DetectHandle>().recording_stopped();
 
-    *state.finalizing.lock().unwrap() = None;
+    let finalizing_guard = FinalizingGuard {
+        app: app.clone(),
+        path,
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        // Drop capture before joining the session: this disconnects its
+        // channel immediately. The join, final transcript save, and audio
+        // encode may still take seconds, but they now run on the runtime's
+        // blocking pool and cannot freeze Tauri's event loop or webview.
+        drop(mic);
+        drop(speaker);
+        let result = session.stop();
 
-    let path = result.map_err(|e| e.to_string())?;
-    let path = path.display().to_string();
+        // Clear `finalizing` before a possible auto re-transcribe observes
+        // this session. The guard also covers every error and panic unwind.
+        drop(finalizing_guard);
 
-    // Stage 0.9 Global Constraints: fires (fully in the background -- see
-    // `maybe_auto_retranscribe`'s docs) after the session has fully stopped
-    // and been removed from `finalizing` above, never before -- this must
-    // not make `stop_recording` itself any slower.
-    let cfg = Config::load();
-    retranscribe::maybe_auto_retranscribe(app, path.clone(), &cfg);
-
-    Ok(path)
+        let path = result.map_err(|error| error.to_string())?;
+        let path = path.display().to_string();
+        let cfg = Config::load();
+        retranscribe::maybe_auto_retranscribe(app, path.clone(), &cfg);
+        Ok(path)
+    })
+    .await
+    .map_err(|error| format!("recording finalization task failed: {error}"))?
 }
 
 #[tauri::command]
@@ -425,6 +489,7 @@ pub fn run() {
             // this alone doesn't cover.
             let cfg = Config::load();
             allow_output_dir_in_asset_scope(app, &cfg.output_dir)?;
+            app.manage(detect::start(app.handle().clone(), cfg.detect_calls));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -440,6 +505,8 @@ pub fn run() {
             config::set_audio_format,
             config::set_auto_retranscribe,
             config::set_delete_audio_after_retranscribe,
+            config::set_auto_stop_after_call,
+            detect::set_detect_calls,
             models::list_models,
             models::download_model,
             models::delete_model,

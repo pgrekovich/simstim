@@ -64,8 +64,8 @@
 //! happens inside the same epoch before a forced cut does.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Receiver, RecvTimeoutError};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -261,7 +261,53 @@ pub fn load_continue_from(path: &Path) -> anyhow::Result<ContinueFrom> {
 /// down; `stop` blocks until the worker has flushed and saved everything.
 pub struct Session {
     stop_flag: Arc<AtomicBool>,
+    activity: Arc<RecordingActivity>,
     handle: JoinHandle<anyhow::Result<PathBuf>>,
+}
+
+/// Lock-free voice activity clock shared with call auto-stop policy.
+///
+/// The session worker updates it from the existing per-channel Silero VAD;
+/// no audio is copied or analyzed a second time. Millisecond precision is
+/// ample for an idle timeout measured in seconds.
+pub(crate) struct RecordingActivity {
+    started_at: Instant,
+    last_me_voice_ms: AtomicU64,
+    last_them_voice_ms: AtomicU64,
+}
+
+impl RecordingActivity {
+    fn new() -> Self {
+        Self {
+            started_at: Instant::now(),
+            last_me_voice_ms: AtomicU64::new(0),
+            last_them_voice_ms: AtomicU64::new(0),
+        }
+    }
+
+    fn mark_voice(&self, channel: Channel) {
+        let elapsed_ms = self.started_at.elapsed().as_millis().min(u64::MAX as u128) as u64;
+        self.mark_voice_at(channel, elapsed_ms);
+    }
+
+    fn mark_voice_at(&self, channel: Channel, elapsed_ms: u64) {
+        let clock = match channel {
+            Channel::Me => &self.last_me_voice_ms,
+            Channel::Them => &self.last_them_voice_ms,
+        };
+        clock.store(elapsed_ms, Ordering::Relaxed);
+    }
+
+    pub(crate) fn remote_silent_for(&self) -> Duration {
+        let elapsed_ms = self.started_at.elapsed().as_millis().min(u64::MAX as u128) as u64;
+        self.remote_silent_for_at(elapsed_ms)
+    }
+
+    fn remote_silent_for_at(&self, elapsed_ms: u64) -> Duration {
+        Duration::from_millis(
+            elapsed_ms.saturating_sub(self.last_them_voice_ms.load(Ordering::Relaxed)),
+        )
+    }
 }
 
 impl Session {
@@ -304,13 +350,49 @@ impl Session {
         on_interim: impl Fn(Channel, String) + Send + 'static,
         on_error: impl Fn(String) + Send + 'static,
     ) -> Session {
+        Self::start_with_title(
+            chunk_rx,
+            out_path,
+            continue_from,
+            None,
+            pending_edits,
+            keep_audio,
+            audio_format,
+            on_line,
+            on_interim,
+            on_error,
+        )
+    }
+
+    /// Starts a session and applies `new_title` before the new file's first
+    /// save. The title is ignored for continuation sessions.
+    #[allow(clippy::too_many_arguments)]
+    pub fn start_with_title(
+        chunk_rx: Receiver<Chunk>,
+        out_path: PathBuf,
+        continue_from: Option<ContinueFrom>,
+        new_title: Option<String>,
+        pending_edits: Arc<Mutex<PendingEdits>>,
+        keep_audio: bool,
+        audio_format: AudioFormat,
+        on_line: impl Fn(String) + Send + 'static,
+        on_interim: impl Fn(Channel, String) + Send + 'static,
+        on_error: impl Fn(String) + Send + 'static,
+    ) -> Session {
         let stop_flag = Arc::new(AtomicBool::new(false));
         let worker_stop_flag = stop_flag.clone();
+        let activity = Arc::new(RecordingActivity::new());
+        let worker_activity = activity.clone();
+        // `start_recording` must not race its immediate sidebar refresh.
+        // Wait only for the worker's first tiny atomic transcript save, not
+        // for model/VAD loading or any audio setup that follows it.
+        let (initial_save_tx, initial_save_rx) = std::sync::mpsc::sync_channel(0);
         let handle = std::thread::spawn(move || {
             run_worker(
                 chunk_rx,
                 out_path,
                 continue_from,
+                new_title,
                 pending_edits,
                 keep_audio,
                 audio_format,
@@ -318,9 +400,23 @@ impl Session {
                 on_interim,
                 on_error,
                 worker_stop_flag,
+                worker_activity,
+                initial_save_tx,
             )
         });
-        Session { stop_flag, handle }
+        // If the worker panics before the handoff, dropping the sender also
+        // releases this receive. The eventual `stop()` still reports the
+        // worker failure through the existing join path.
+        let _ = initial_save_rx.recv();
+        Session {
+            stop_flag,
+            activity,
+            handle,
+        }
+    }
+
+    pub(crate) fn activity(&self) -> Arc<RecordingActivity> {
+        self.activity.clone()
     }
 
     /// Signals the worker to stop, waits for it to flush both VADs,
@@ -378,6 +474,7 @@ fn run_worker(
     chunk_rx: Receiver<Chunk>,
     out_path: PathBuf,
     continue_from: Option<ContinueFrom>,
+    new_title: Option<String>,
     pending_edits: Arc<Mutex<PendingEdits>>,
     keep_audio: bool,
     audio_format: AudioFormat,
@@ -385,9 +482,40 @@ fn run_worker(
     on_interim: impl Fn(Channel, String),
     on_error: impl Fn(String),
     stop_flag: Arc<AtomicBool>,
+    activity: Arc<RecordingActivity>,
+    initial_save_tx: SyncSender<()>,
 ) -> anyhow::Result<PathBuf> {
     let models = models_dir();
     let started_at = Local::now();
+
+    // Establish the session file before any expensive model or VAD loading.
+    // This worker is already the file's sole writer, so the early atomic save
+    // preserves the single-writer invariant while letting the sidebar show
+    // the note as soon as `start_recording` returns.
+    let mut transcript = Transcript::new(started_at);
+    let continuation = match continue_from {
+        Some(seed) => {
+            transcript.set_title(seed.title);
+            transcript.set_notes(seed.notes);
+            transcript.set_raw_date(seed.raw_date);
+            transcript.set_transcript_prefix(seed.transcript_prefix);
+            transcript.set_duration_secs(seed.previous_duration_secs);
+            Some((seed.previous_duration_secs, seed.base_offset_secs))
+        }
+        None => {
+            if let Some(title) = new_title {
+                transcript.set_title(title);
+            }
+            None
+        }
+    };
+    if let Err(e) = transcript.save(&out_path) {
+        report_error(
+            &on_error,
+            format!("session: initial transcript save failed: {e}"),
+        );
+    }
+    let _ = initial_save_tx.send(());
 
     let engine = Engine::new(&models).map_err(|e| {
         report_error(&on_error, format!("session: engine init failed: {e}"));
@@ -442,14 +570,14 @@ fn run_worker(
     // this closes.
     let mut audio_from_secs: Option<u64> = None;
     let mut audio_sink: Option<AudioSink> = if keep_audio {
-        let sink_result: anyhow::Result<AudioSink> = match &continue_from {
-            Some(seed) => {
+        let sink_result: anyhow::Result<AudioSink> = match continuation {
+            Some((_, base_offset_secs)) => {
                 let existing_audio = crate::retranscribe::resolve_audio_path(&out_path);
                 let had_no_prior_audio = existing_audio.is_none();
                 AudioSink::new_continuing(
                     &out_path,
                     existing_audio.as_deref(),
-                    seed.base_offset_secs,
+                    base_offset_secs,
                     audio_format,
                 )
                 .map(|(sink, target_base_secs)| {
@@ -470,35 +598,24 @@ fn run_worker(
     } else {
         None
     };
-    let mut transcript = Transcript::new(started_at);
 
-    // Seed the transcript from the existing file when continuing one, and
-    // compute the sample offset that keeps new timestamps continuing from
-    // where it left off instead of restarting at 00:00:00. See
-    // `ContinueFrom`'s docs.
-    let previous_duration_secs = continue_from.as_ref().map_or(0, |c| c.previous_duration_secs);
-    let base_offset_samples = match continue_from {
-        Some(seed) => {
-            transcript.set_title(seed.title);
-            transcript.set_notes(seed.notes);
-            transcript.set_raw_date(seed.raw_date);
-            transcript.set_transcript_prefix(seed.transcript_prefix);
-            // Critical fix-review finding: without this, the file's
-            // existing `duration:` frontmatter (if any) was wiped the
-            // instant this worker did ANY save before the clean final one
-            // below (the up-front save right after this, or any
-            // edit-triggered save mid-recording) -- duration_secs stayed
-            // `None` until then, so a crash before a clean stop lost it
-            // permanently. Seeding it here means every save this worker
-            // ever does renders at least the previous total; the final
-            // save below still overwrites with the accumulated total.
-            transcript.set_duration_secs(seed.previous_duration_secs);
+    // Compute the sample offset that keeps continuation timestamps aligned
+    // with the audio sink's reconciled clock. See `ContinueFrom`'s docs.
+    let previous_duration_secs = continuation.map_or(0, |(duration, _)| duration);
+    let base_offset_samples = match continuation {
+        Some((_, transcript_base_offset_secs)) => {
             // Critical fix-review finding, stage 0.9: mark how much of the
             // timeline the audio file actually covers, when this
             // continuation had no real prior audio to prefill from (see
             // `audio_from_secs`'s doc comment above).
             if let Some(secs) = audio_from_secs {
                 transcript.set_audio_from_secs(secs);
+                if let Err(e) = transcript.save(&out_path) {
+                    report_error(
+                        &on_error,
+                        format!("session: audio coverage save failed: {e}"),
+                    );
+                }
             }
             // Important fix-review finding, wave 2: prefer the reconciled
             // offset `AudioSink::new_continuing` returned (see
@@ -508,7 +625,8 @@ fn run_worker(
             // that can silently disagree. Falls back to the transcript's
             // own last-line offset when there's no audio to reconcile
             // against.
-            let base_offset_secs = continued_base_offset_secs.unwrap_or(seed.base_offset_secs);
+            let base_offset_secs =
+                continued_base_offset_secs.unwrap_or(transcript_base_offset_secs);
             (base_offset_secs * 16000.0).round() as usize
         }
         None => 0,
@@ -521,15 +639,6 @@ fn run_worker(
         epoch_base_samples: base_offset_samples,
         ..Default::default()
     };
-
-    // Save once up front so the file exists even if the session ends (stop
-    // called, or the sender is dropped) before any speech is detected.
-    if let Err(e) = transcript.save(&out_path) {
-        report_error(
-            &on_error,
-            format!("session: initial transcript save failed: {e}"),
-        );
-    }
 
     let mut last_edit_save = Instant::now()
         .checked_sub(MIN_EDIT_SAVE_INTERVAL)
@@ -548,7 +657,14 @@ fn run_worker(
                     Channel::Me => (&mut vad_me, &mut interim_me),
                     Channel::Them => (&mut vad_them, &mut interim_them),
                 };
-                if process_channel_chunk(
+                let was_speech_active = vad.speech_active();
+                if was_speech_active {
+                    // Mark before a finalize can enter a comparatively slow
+                    // ASR decode, so auto-stop never mistakes time spent
+                    // transcribing recent speech for channel silence.
+                    activity.mark_voice(chunk.channel);
+                }
+                let saved = process_channel_chunk(
                     &engine,
                     vad,
                     interim,
@@ -559,7 +675,11 @@ fn run_worker(
                     &on_error,
                     chunk.channel,
                     &chunk.samples,
-                ) {
+                );
+                if vad.speech_active() || saved {
+                    activity.mark_voice(chunk.channel);
+                }
+                if saved {
                     saved_this_tick = true;
                 }
             }
@@ -917,6 +1037,17 @@ mod tests {
         let (title, notes) = pending.take();
         assert_eq!(title.as_deref(), Some("Title A"));
         assert_eq!(notes.as_deref(), Some("Notes B"));
+    }
+
+    #[test]
+    fn local_voice_does_not_reset_remote_silence() {
+        let activity = RecordingActivity::new();
+        activity.mark_voice_at(Channel::Them, 10);
+        activity.mark_voice_at(Channel::Me, 100);
+        assert_eq!(activity.remote_silent_for_at(110), Duration::from_millis(100));
+
+        activity.mark_voice_at(Channel::Them, 105);
+        assert_eq!(activity.remote_silent_for_at(110), Duration::from_millis(5));
     }
 
     // continuation_audio_from_secs: Critical fix-review finding, stage 0.9.

@@ -95,10 +95,11 @@ fn session_transcribes_fake_channel_stream() {
     // before the worker thread gets a chance to save into it.
     let dir = tempfile::tempdir().unwrap();
     let out = dir.path().join("call.md");
-    let session = desktop_lib::session::Session::start(
+    let session = desktop_lib::session::Session::start_with_title(
         rx,
         out.clone(),
         None,
+        Some("Detected call".to_string()),
         no_pending_edits(),
         true,
         desktop_lib::audio_sink::AudioFormat::Flac,
@@ -106,6 +107,8 @@ fn session_transcribes_fake_channel_stream() {
         |_, _| {},
         |_| {},
     );
+    let initial = simstim_transcript::parse_meta(&out).unwrap();
+    assert_eq!(initial.title, "Detected call");
     for chunk in samples.chunks(1600) {
         tx.send(Chunk {
             channel: Channel::Them,

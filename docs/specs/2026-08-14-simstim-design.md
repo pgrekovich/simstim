@@ -295,11 +295,17 @@ action buttons behind hover.
   the call app. Windows/Linux later reuse the same window without the panel
   conversion; the conversion lives behind the existing platform boundary.
 - **UI**: same React stack, separate entry routed by window label. Two
-  states: detected ("Call detected" + app name, primary Start recording,
-  an Open simstim item, a close button) and call-ended ("Call seems over",
-  Stop, close). A progress strip shows time until auto-dismiss (30 s for
+  states: detected ("Call detected" + app name, primary Start recording)
+  and call-ended ("Call seems over", Stop). The primary action is a split
+  button carrying the app icon, with secondary actions (Open simstim)
+  behind its chevron; the close button appears only on hover, in the
+  corner. A progress strip shows time until auto-dismiss (30 s for
   detected); hovering pauses the timer. The call-ended state stays until
-  acted on, auto-stopped, or the episode ends.
+  acted on, auto-stopped, or the episode ends. The card is styled in CSS
+  rather than with a native NSVisualEffectView material: the material
+  would fill the whole window, which is deliberately taller than the card
+  so the dropdown has room, and CSS keeps the banner identical on every
+  platform.
 - **Data flow**: visibility logic stays in Rust. A banner controller in
   src-tauri consumes the same detector Actions and shows/hides/positions
   the window, pushing state to the banner webview as events. Start and Stop
@@ -318,7 +324,9 @@ action buttons behind hover.
 Out of 1.1: per-app detection opt-out from the banner, banner settings,
 sound, Windows/Linux positioning polish.
 
-Status (2026-08-19): stage 1.1 implemented, awaiting owner e2e: floating
+Status (2026-08-20): stage 1.1 implemented, owner has seen and approved the
+banner's look on a real detection; the rest of the e2e (full-screen call,
+no focus steal on click, call end, cooldown) is still pending. Floating
 banner window (Tauri window converted to a non-activating NSPanel on macOS,
 tauri-nspanel pinned rev), detected and call-ended states with a 30-second
 hover-pausable auto-dismiss, clicks routed through the main window's

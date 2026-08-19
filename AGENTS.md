@@ -99,9 +99,19 @@ section replaced.
 
 ## Traps that already bit us
 
-- **System audio permission**: unsigned dev builds inherit the terminal's TCC
-  identity, and terminals carry no `NSAudioCaptureUsageDescription`, so macOS
-  shows no prompt and the tap records silence. See README.
+- **System audio permission**: unsigned dev builds inherit the TCC identity
+  of whatever app is responsible for the launching shell, and that app
+  usually carries no `NSAudioCaptureUsageDescription`, so macOS shows no
+  prompt and the tap records silence. A dev build launched from an agent's
+  shell instead of the owner's terminal loses the whole remote channel this
+  way. See README.
+- **Hardened runtime blocks the microphone.** Signing the bundle enables it,
+  and it denies mic access before TCC is consulted unless
+  `com.apple.security.device.audio-input` is in
+  `src-tauri/entitlements.plist`. No prompt, no Privacy entry, no error: the
+  mic channel is just digital silence while system audio still works. Both
+  of these failure modes look identical from the UI, which is why a recorded
+  call must be checked per channel (`ffmpeg ... astats`), not by ear.
 - **Never hand whisper silence.** It picks the language once from the first
   30 seconds it gets, and it hallucinates filler over quiet stretches (with
   `keep_context` on, the filler then prompts itself). A mic channel that opens

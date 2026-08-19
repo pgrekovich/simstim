@@ -104,6 +104,16 @@ hover). `signingIdentity: "-"` in `tauri.conf.json` stays regardless:
 bundles need a real code signature for a stable TCC identity, and a bare
 `cargo`-produced binary is only linker-signed.
 
+Signing the bundle turns on the hardened runtime, and that changes what the
+app may capture. The microphone then needs the
+`com.apple.security.device.audio-input` entitlement
+(`src-tauri/entitlements.plist`, wired through `bundle.macOS.entitlements`):
+without it macOS blocks the microphone before TCC is ever consulted, so no
+permission prompt appears, nothing shows up in Privacy settings, and the
+mic channel records digital silence while system audio keeps working.
+Check a signed build with
+`codesign -d --entitlements - --xml <app> | plutil -p -`.
+
 ## Audio format
 
 A measured codec benchmark on real call audio settled this: AAC at 32 kbps, forced to 16 kHz, is ~17 MB/hour at 3.8% word-error-rate versus lossless; FLAC is ~137 MB/hour at 0% WER. Raising the AAC bitrate doesn't recover accuracy (64 kbps measured 4.3% WER, worse, not better), so 32 kbps is the setting, not a corner cut. AAC is the default; FLAC stays available in Settings > Audio format for anyone who wants zero transcription-quality cost from the codec itself. Switching formats only affects future recordings; continuing an existing session re-encodes its whole audio (old + new) in whatever format is currently selected, so a session never ends up split across two audio files.

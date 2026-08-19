@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <!--
+      Tauri's bundler signs with the hardened runtime enabled. Under it the
+      microphone is blocked at the runtime level unless this entitlement is
+      present: macOS never even shows the permission prompt, so the mic
+      channel records nothing while system audio (a Core Audio process tap,
+      gated by TCC rather than the runtime) keeps working. That exact
+      half-dead recording cost a real debugging session on 2026-08-20.
+    -->
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+  </dict>
+</plist>

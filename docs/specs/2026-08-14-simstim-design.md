@@ -276,6 +276,48 @@ Research basis: `docs/research/detection.md` (APIs verified with live probes).
 Out of 1.0: calendar signals, tray/menu-bar presence, global hotkey, tab
 identification in browsers, AX-based in-meeting confidence.
 
+## Stage 1.1: floating call banner (approved 2026-08-19)
+
+Replaces both stage-1.0 notification affordances (the in-app banner and the
+best-effort UN system notification) with a single Granola-style floating
+banner window. Motivation, owner's words: one affordance that looks and works
+identically on every platform. Debugging on 2026-08-19 also showed the UN
+layer's ceiling: it needs a signed bundle, cannot be styled, and hides its
+action buttons behind hover.
+
+- **Window**: one pre-created hidden Tauri window labelled `banner`:
+  frameless, transparent, always-on-top, skip-taskbar, fixed width, visible
+  on all Spaces. Shown at the top-right of the monitor containing the cursor
+  (primary monitor as fallback). On macOS the window is converted to a
+  non-activating NSPanel (tauri-nspanel, Tauri 2 branch; used in production
+  by Cap and Screenpipe) with full-screen-auxiliary collection behavior, so
+  it appears over a full-screen Zoom and its buttons never steal focus from
+  the call app. Windows/Linux later reuse the same window without the panel
+  conversion; the conversion lives behind the existing platform boundary.
+- **UI**: same React stack, separate entry routed by window label. Two
+  states: detected ("Call detected" + app name, primary Start recording,
+  an Open simstim item, a close button) and call-ended ("Call seems over",
+  Stop, close). A progress strip shows time until auto-dismiss (30 s for
+  detected); hovering pauses the timer. The call-ended state stays until
+  acted on, auto-stopped, or the episode ends.
+- **Data flow**: visibility logic stays in Rust. A banner controller in
+  src-tauri consumes the same detector Actions and shows/hides/positions
+  the window, pushing state to the banner webview as events. Start and Stop
+  clicks forward to the main window and run the existing handleStart and
+  handleStop paths (the main window always exists, even hidden): one code
+  path for starting a recording, same as stage 1.0. Dismiss semantics and
+  the 10-minute per-app cooldown in detect.rs are unchanged.
+- **Removed**: the `system_notification` module in detect.rs (with it the
+  only consumer of `cidre::un`) and the CallBanner in the main window.
+  `signingIdentity: "-"` stays in tauri.conf.json: a real bundle signature
+  is still required for stable TCC identity.
+- **Deliberate**: the banner ignores macOS Focus/DND (it is not a
+  Notification Center notification; `detect_calls` is the off switch) and
+  leaves no Notification Center history.
+
+Out of 1.1: per-app detection opt-out from the banner, banner settings,
+sound, Windows/Linux positioning polish.
+
 ## Milestones after MVP-0
 
 1. Audio file kept next to the .md; re-transcribe command (whisper turbo).

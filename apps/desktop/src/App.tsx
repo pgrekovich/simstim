@@ -3,7 +3,6 @@ import { listen } from "@tauri-apps/api/event";
 import { Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { RecordButton } from "@/components/RecordButton";
-import { CallBanner } from "@/components/CallBanner";
 import { SessionView, type SessionViewHandle } from "@/components/SessionView";
 import { Sidebar } from "@/components/Sidebar";
 import { SettingsDialog } from "@/components/SettingsDialog";
@@ -12,10 +11,10 @@ import {
   getConfig,
   listSessions,
   readSession,
+  showMainWindow,
   startRecording,
   stopRecording,
   type AppConfig,
-  type CallDetectionClearedPayload,
   type CallDetectedPayload,
   type CallEndedPayload,
   type ModelInfo,
@@ -89,8 +88,6 @@ function App() {
   const [modelReady, setModelReady] = useState(true);
   const [busy, setBusy] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [callDetection, setCallDetection] = useState<CallDetectedPayload | null>(null);
-  const [callEndedBundle, setCallEndedBundle] = useState<string | null>(null);
   const [autoStopAfterCall, setAutoStopAfterCall] = useState(false);
   const loadingFallbackRef = useRef<number | null>(null);
   const callLifecycleRef = useRef({
@@ -98,6 +95,7 @@ function App() {
     autoStopAfterCall: false,
   });
   const handleStopRef = useRef<() => Promise<void>>(async () => {});
+  const bannerStartRef = useRef<(payload: CallDetectedPayload) => void>(() => {});
   // State alone cannot reject two stop events delivered in the same React
   // tick. This synchronous guard protects the one backend recording handle.
   const stopInFlightRef = useRef(false);
@@ -231,11 +229,25 @@ function App() {
       });
   }, []);
 
+  // The floating banner window (stage 1.1) owns rendering call
+  // suggestions; its clicks forward here so recording keeps its single
+  // code path. Same latest-value-through-a-ref pattern as handleStopRef:
+  // the permanent listener must see current busy/model/recording state.
   useEffect(() => {
-    const unlisten = listen<CallDetectedPayload>("call-detected", (event) => {
-      if (callLifecycleRef.current.activePath === null) {
-        setCallDetection(event.payload);
+    bannerStartRef.current = (payload: CallDetectedPayload) => {
+      if (busy || !modelReady || activePath !== null) {
+        // Cannot start right now (mid-operation, model missing, or already
+        // recording): surface the app instead of silently doing nothing.
+        void showMainWindow();
+        return;
       }
+      void handleStart(payload);
+    };
+  });
+
+  useEffect(() => {
+    const unlisten = listen<CallDetectedPayload>("banner-start", (event) => {
+      bannerStartRef.current(event.payload);
     });
     return () => {
       unlisten.then((f) => f());
@@ -243,10 +255,9 @@ function App() {
   }, []);
 
   useEffect(() => {
-    const unlisten = listen<CallDetectionClearedPayload>("call-detection-cleared", (event) => {
-      setCallDetection((current) =>
-        current?.bundle_id === event.payload.bundle_id ? null : current,
-      );
+    const unlisten = listen("banner-stop", () => {
+      // handleStop carries its own busy/in-flight guards.
+      void handleStopRef.current();
     });
     return () => {
       unlisten.then((f) => f());
@@ -562,8 +573,6 @@ function App() {
       setRecordingStartedAt(Date.now());
       setActivePath(path);
       setSelectedPath(path);
-      setCallDetection(null);
-      setCallEndedBundle(null);
       setStatus({ kind: "loading-model" });
       clearLoadingFallback();
       loadingFallbackRef.current = window.setTimeout(() => {
@@ -597,7 +606,6 @@ function App() {
       // flush and audio encoding finish on a blocking worker.
       setRecordingStartedAt(null);
       setActivePath(null);
-      setCallEndedBundle(null);
       setInterimMe("");
       setInterimThem("");
       setStatus({ kind: "saving" });
@@ -649,11 +657,10 @@ function App() {
       if (event.payload.recording_id !== lifecycle.activePath) {
         return;
       }
-      setCallDetection(null);
+      // The floating banner shows the "Call seems over" suggestion; this
+      // listener only drives the opt-in automatic stop.
       if (lifecycle.autoStopAfterCall) {
         void handleStopRef.current();
-      } else {
-        setCallEndedBundle(event.payload.bundle_id);
       }
     });
     return () => {
@@ -757,26 +764,6 @@ function App() {
             <Settings />
           </Button>
         </header>
-
-        {callDetection && !sessionActive && (
-          <CallBanner
-            message={`Call detected: ${callDetection.app_name}`}
-            actionLabel="Start recording"
-            disabled={busy || !modelReady}
-            onAction={() => void handleStart(callDetection)}
-            onDismiss={() => setCallDetection(null)}
-          />
-        )}
-
-        {callEndedBundle && sessionActive && (
-          <CallBanner
-            message="Call seems over"
-            actionLabel="Stop"
-            disabled={busy}
-            onAction={() => void handleStop()}
-            onDismiss={() => setCallEndedBundle(null)}
-          />
-        )}
 
         <div className="flex min-h-0 flex-1 flex-col p-6">
           {selectedPath === null ? (

@@ -51,6 +51,7 @@ vi.mock("@/lib/ipc", () => ({
   deleteModel: vi.fn().mockResolvedValue(undefined),
   retranscribeSession: vi.fn().mockResolvedValue(undefined),
   createSession: vi.fn().mockResolvedValue("/tmp/new.md"),
+  showMainWindow: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("@tauri-apps/api/event", () => ({
@@ -110,58 +111,71 @@ beforeEach(() => {
   vi.mocked(ipc.updateActiveSession).mockClear();
   vi.mocked(ipc.retranscribeSession).mockClear().mockResolvedValue(undefined);
   vi.mocked(ipc.createSession).mockClear().mockResolvedValue("/tmp/new.md");
+  vi.mocked(ipc.showMainWindow).mockClear();
   vi.mocked(listen).mockClear();
 });
 
-describe("App: call detection (stage 1.0)", () => {
-  async function emitDetected() {
+describe("App: call detection via the banner window (stage 1.1)", () => {
+  /** Fires the event BannerApp (the banner window) sends on Start. */
+  async function emitBannerStart(
+    payload = { bundle_id: "com.tinyspeck.slackmacgap", app_name: "Slack" },
+  ) {
     await waitFor(() =>
-      expect(vi.mocked(listen).mock.calls.some(([name]) => name === "call-detected")).toBe(true),
+      expect(vi.mocked(listen).mock.calls.some(([name]) => name === "banner-start")).toBe(true),
     );
-    emit("call-detected", { bundle_id: "com.tinyspeck.slackmacgap", app_name: "Slack" });
+    emit("banner-start", payload);
   }
 
-  it("starts a new pre-titled recording from the banner", async () => {
+  it("starts a new pre-titled recording from a banner-start event", async () => {
     render(<App />);
-    await emitDetected();
-
-    const start = await screen.findByRole("button", { name: /start recording/i });
-    expect(screen.getByText("Call detected: Slack")).toBeVisible();
-    fireEvent.click(start);
+    await emitBannerStart();
 
     await waitFor(() => expect(ipc.startRecording).toHaveBeenCalledTimes(1));
     const [path, title, bundleId] = vi.mocked(ipc.startRecording).mock.calls[0];
     expect(path).toBeNull();
     expect(title).toMatch(/^Slack call /);
     expect(bundleId).toBe("com.tinyspeck.slackmacgap");
-    expect(screen.queryByText("Call detected: Slack")).not.toBeInTheDocument();
+    expect(ipc.showMainWindow).not.toHaveBeenCalled();
   });
 
-  it("does not show a new-call banner while recording", async () => {
+  it("surfaces the main window instead of starting while recording", async () => {
     render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: /^record$/i }));
     await screen.findByRole("button", { name: /stop/i });
 
-    await emitDetected();
-    expect(screen.queryByText("Call detected: Slack")).not.toBeInTheDocument();
+    await emitBannerStart();
+    await waitFor(() => expect(ipc.showMainWindow).toHaveBeenCalledTimes(1));
+    expect(ipc.startRecording).toHaveBeenCalledTimes(1);
   });
 
-  it("offers the normal Stop path when a detection-started call ends", async () => {
+  it("surfaces the main window instead of starting when the model is not ready", async () => {
+    vi.mocked(ipc.listModels).mockResolvedValueOnce([
+      {
+        id: "m1",
+        name: "Test model",
+        tagline: null,
+        size_mb: 100,
+        downloaded: false,
+        active: true,
+        role: "live",
+        size_on_disk_bytes: 0,
+        retired: false,
+      },
+    ]);
     render(<App />);
-    await emitDetected();
-    fireEvent.click(await screen.findByRole("button", { name: /start recording/i }));
+    await screen.findByText("model not downloaded");
+
+    await emitBannerStart();
+    await waitFor(() => expect(ipc.showMainWindow).toHaveBeenCalledTimes(1));
+    expect(ipc.startRecording).not.toHaveBeenCalled();
+  });
+
+  it("stops through the normal stop path on a banner-stop event", async () => {
+    render(<App />);
+    await emitBannerStart();
     await screen.findByRole("button", { name: /stop/i });
 
-    expect(
-      vi.mocked(listen).mock.calls.filter(([name]) => name === "call-ended"),
-    ).toHaveLength(1);
-
-    emit("call-ended", {
-      bundle_id: "com.tinyspeck.slackmacgap",
-      recording_id: "/tmp/active.md",
-    });
-    expect(await screen.findByText("Call seems over")).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: /^stop$/i }));
+    emit("banner-stop", undefined);
     await waitFor(() => expect(ipc.stopRecording).toHaveBeenCalledTimes(1));
   });
 
@@ -179,8 +193,7 @@ describe("App: call detection (stage 1.0)", () => {
       auto_stop_after_call: true,
     });
     render(<App />);
-    await emitDetected();
-    fireEvent.click(await screen.findByRole("button", { name: /start recording/i }));
+    await emitBannerStart();
     await screen.findByRole("button", { name: /stop/i });
 
     const ended = {
@@ -302,10 +315,7 @@ describe("App: a saving session must not block the next call (owner bug: missed 
     vi.mocked(ipc.startRecording).mockResolvedValue("/tmp/detected.md");
     await enterSavingState();
 
-    emit("call-detected", { bundle_id: "us.zoom.xos", app_name: "Zoom" });
-    const action = await screen.findByRole("button", { name: /start recording/i });
-    expect(action).toBeEnabled();
-    fireEvent.click(action);
+    emit("banner-start", { bundle_id: "us.zoom.xos", app_name: "Zoom" });
 
     await waitFor(() => expect(ipc.startRecording).toHaveBeenCalledTimes(2));
     // A detected call always records into a brand-new session (path null),

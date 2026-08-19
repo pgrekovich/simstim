@@ -99,9 +99,21 @@ describe("BannerApp", () => {
     expect(emitTo).toHaveBeenCalledWith("main", "banner-stop");
   });
 
-  it("has no close button; the detected state relies on auto-dismiss", async () => {
+  it("reveals the close button on hover only, and it dismisses", async () => {
     await renderDetected();
     expect(screen.queryByRole("button", { name: /dismiss/i })).not.toBeInTheDocument();
+
+    fireEvent.mouseEnter(screen.getByRole("status"));
+    fireEvent.click(screen.getByRole("button", { name: /dismiss/i }));
+    expect(ipc.bannerDismiss).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers the close button in the ended state too", async () => {
+    await renderDetected();
+    emit("banner-state", { kind: "ended" });
+    fireEvent.mouseEnter(screen.getByRole("status"));
+    fireEvent.click(screen.getByRole("button", { name: /dismiss/i }));
+    expect(ipc.bannerDismiss).toHaveBeenCalledTimes(1);
   });
 
   it("open simstim lives in the dropdown, focuses the main window, keeps the banner", async () => {
@@ -114,15 +126,13 @@ describe("BannerApp", () => {
     expect(screen.queryByRole("button", { name: /open simstim/i })).not.toBeInTheDocument();
   });
 
-  it("the detected dropdown has no dismiss entry, the ended dropdown does", async () => {
+  it("closes the dropdown when a new state arrives", async () => {
     await renderDetected();
     fireEvent.click(screen.getByRole("button", { name: /more options/i }));
-    expect(screen.queryByRole("button", { name: /^dismiss$/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /open simstim/i })).toBeVisible();
 
     emit("banner-state", { kind: "ended" });
-    fireEvent.click(screen.getByRole("button", { name: /more options/i }));
-    fireEvent.click(screen.getByRole("button", { name: /^dismiss$/i }));
-    expect(ipc.bannerDismiss).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: /open simstim/i })).not.toBeInTheDocument();
   });
 
   it("auto-dismisses the detected state exactly once when the timer drains", async () => {

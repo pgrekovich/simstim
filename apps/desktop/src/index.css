@@ -126,8 +126,10 @@
     }
   /* The banner window is a transparent layer around a floating card
      (main.tsx tags <html> with .banner-window); the default opaque body
-     would paint the whole window rectangle. */
+     would paint the whole window rectangle. Smoothing matches how macOS
+     renders its own notification text. */
   .banner-window body {
     background: transparent;
+    -webkit-font-smoothing: antialiased;
     }
 }

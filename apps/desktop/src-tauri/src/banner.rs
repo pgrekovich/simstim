@@ -61,6 +61,13 @@ impl From<&BannerState> for BannerPayload {
 
 pub struct BannerController {
     state: BannerState,
+    /// Whether a recording is live, tracked here and not derived from the
+    /// detector: `Banner::recording_started` is called synchronously from
+    /// the start command, while the detector learns about it over a channel
+    /// on its worker thread. A Detected action computed by the worker before
+    /// it processes that message would otherwise show a call banner during
+    /// a live recording.
+    recording_live: bool,
 }
 
 impl Default for BannerController {
@@ -73,21 +80,17 @@ impl BannerController {
     pub fn new() -> Self {
         Self {
             state: BannerState::Hidden,
+            recording_live: false,
         }
     }
 
     /// A whitelisted app started a call. Ignored while a recording is live
-    /// (detect.rs already suppresses these; this is defense in depth) and
-    /// while the ended banner is up (a recording is live by definition
-    /// there). A newer detection replaces the shown one: latest call wins,
-    /// same as the stage-1.0 in-app banner.
-    pub fn on_detected(
-        &mut self,
-        bundle_id: &str,
-        app_name: &str,
-        recording_live: bool,
-    ) -> Option<BannerState> {
-        if recording_live || self.state == BannerState::Ended {
+    /// (detect.rs already suppresses these on its own thread; this closes
+    /// the cross-thread window, see the `recording_live` field) and while
+    /// the ended banner is up. A newer detection replaces the shown one:
+    /// latest call wins, same as the stage-1.0 in-app banner.
+    pub fn on_detected(&mut self, bundle_id: &str, app_name: &str) -> Option<BannerState> {
+        if self.recording_live || self.state == BannerState::Ended {
             return None;
         }
         self.transition(BannerState::Detected {
@@ -114,10 +117,12 @@ impl BannerController {
     }
 
     pub fn on_recording_started(&mut self) -> Option<BannerState> {
+        self.recording_live = true;
         self.transition(BannerState::Hidden)
     }
 
     pub fn on_recording_stopped(&mut self) -> Option<BannerState> {
+        self.recording_live = false;
         self.transition(BannerState::Hidden)
     }
 
@@ -176,37 +181,46 @@ impl Banner {
         })
     }
 
-    pub fn detected(&self, bundle_id: &str, app_name: &str, recording_live: bool) {
-        let next = self
-            .controller
-            .lock()
-            .unwrap()
-            .on_detected(bundle_id, app_name, recording_live);
+    // Every method below holds the controller lock ACROSS apply(): the
+    // detector worker and command threads race into these, and releasing
+    // the lock between the transition and its application could apply two
+    // transitions in the opposite order (e.g. leave the window visible
+    // while the controller says Hidden). emit_to and run_on_main_thread
+    // only enqueue, so nothing here can deadlock back into the lock.
+
+    pub fn detected(&self, bundle_id: &str, app_name: &str) {
+        let mut controller = self.controller.lock().unwrap();
+        let next = controller.on_detected(bundle_id, app_name);
         self.apply(next);
     }
 
     pub fn detection_cleared(&self, bundle_id: &str) {
-        let next = self.controller.lock().unwrap().on_detection_cleared(bundle_id);
+        let mut controller = self.controller.lock().unwrap();
+        let next = controller.on_detection_cleared(bundle_id);
         self.apply(next);
     }
 
     pub fn call_ended(&self) {
-        let next = self.controller.lock().unwrap().on_call_ended();
+        let mut controller = self.controller.lock().unwrap();
+        let next = controller.on_call_ended();
         self.apply(next);
     }
 
     pub fn recording_started(&self) {
-        let next = self.controller.lock().unwrap().on_recording_started();
+        let mut controller = self.controller.lock().unwrap();
+        let next = controller.on_recording_started();
         self.apply(next);
     }
 
     pub fn recording_stopped(&self) {
-        let next = self.controller.lock().unwrap().on_recording_stopped();
+        let mut controller = self.controller.lock().unwrap();
+        let next = controller.on_recording_stopped();
         self.apply(next);
     }
 
     pub fn dismiss(&self) {
-        let next = self.controller.lock().unwrap().on_dismiss();
+        let mut controller = self.controller.lock().unwrap();
+        let next = controller.on_dismiss();
         self.apply(next);
     }
 
@@ -373,23 +387,31 @@ mod tests {
     fn detection_shows_banner_when_no_recording() {
         let mut c = BannerController::new();
         assert_eq!(
-            c.on_detected("us.zoom.xos", "Zoom", false),
+            c.on_detected("us.zoom.xos", "Zoom"),
             Some(detected("us.zoom.xos", "Zoom"))
         );
         assert_eq!(*c.current(), detected("us.zoom.xos", "Zoom"));
     }
 
     #[test]
-    fn detection_is_ignored_while_recording_is_live() {
+    fn detection_is_ignored_while_a_recording_is_live() {
         let mut c = BannerController::new();
-        assert_eq!(c.on_detected("us.zoom.xos", "Zoom", true), None);
+        c.on_recording_started();
+        assert_eq!(c.on_detected("us.zoom.xos", "Zoom"), None);
         assert_eq!(*c.current(), BannerState::Hidden);
+
+        // The stop clears the flag: the next call may suggest again.
+        c.on_recording_stopped();
+        assert_eq!(
+            c.on_detected("us.zoom.xos", "Zoom"),
+            Some(detected("us.zoom.xos", "Zoom"))
+        );
     }
 
     #[test]
     fn clearing_the_shown_bundle_hides() {
         let mut c = BannerController::new();
-        c.on_detected("us.zoom.xos", "Zoom", false);
+        c.on_detected("us.zoom.xos", "Zoom");
         assert_eq!(
             c.on_detection_cleared("us.zoom.xos"),
             Some(BannerState::Hidden)
@@ -400,7 +422,7 @@ mod tests {
     #[test]
     fn clearing_a_different_bundle_is_ignored() {
         let mut c = BannerController::new();
-        c.on_detected("us.zoom.xos", "Zoom", false);
+        c.on_detected("us.zoom.xos", "Zoom");
         assert_eq!(c.on_detection_cleared("com.hnc.Discord"), None);
         assert_eq!(*c.current(), detected("us.zoom.xos", "Zoom"));
     }
@@ -414,7 +436,7 @@ mod tests {
     #[test]
     fn recording_start_hides_the_detected_banner() {
         let mut c = BannerController::new();
-        c.on_detected("us.zoom.xos", "Zoom", false);
+        c.on_detected("us.zoom.xos", "Zoom");
         assert_eq!(c.on_recording_started(), Some(BannerState::Hidden));
     }
 
@@ -427,9 +449,9 @@ mod tests {
     #[test]
     fn a_newer_detection_replaces_the_shown_one() {
         let mut c = BannerController::new();
-        c.on_detected("us.zoom.xos", "Zoom", false);
+        c.on_detected("us.zoom.xos", "Zoom");
         assert_eq!(
-            c.on_detected("com.hnc.Discord", "Discord", false),
+            c.on_detected("com.hnc.Discord", "Discord"),
             Some(detected("com.hnc.Discord", "Discord"))
         );
     }
@@ -440,7 +462,7 @@ mod tests {
         assert_eq!(c.on_call_ended(), Some(BannerState::Ended));
 
         let mut c = BannerController::new();
-        c.on_detected("us.zoom.xos", "Zoom", false);
+        c.on_detected("us.zoom.xos", "Zoom");
         assert_eq!(c.on_call_ended(), Some(BannerState::Ended));
     }
 
@@ -448,7 +470,7 @@ mod tests {
     fn detection_is_ignored_while_ended_is_shown() {
         let mut c = BannerController::new();
         c.on_call_ended();
-        assert_eq!(c.on_detected("us.zoom.xos", "Zoom", true), None);
+        assert_eq!(c.on_detected("us.zoom.xos", "Zoom"), None);
         assert_eq!(*c.current(), BannerState::Ended);
     }
 
@@ -468,7 +490,7 @@ mod tests {
     #[test]
     fn dismiss_hides_any_visible_state() {
         let mut c = BannerController::new();
-        c.on_detected("us.zoom.xos", "Zoom", false);
+        c.on_detected("us.zoom.xos", "Zoom");
         assert_eq!(c.on_dismiss(), Some(BannerState::Hidden));
 
         let mut c = BannerController::new();

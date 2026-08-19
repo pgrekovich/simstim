@@ -55,7 +55,12 @@ export default function BannerApp() {
   }, []);
 
   useEffect(() => {
-    if (state.kind === "detected") setRemainingMs(AUTO_DISMISS_MS);
+    if (state.kind !== "detected") return;
+    setRemainingMs(AUTO_DISMISS_MS);
+    // Reset hover too: when the banner hides with the pointer inside it
+    // (X, Start, auto-stop) the card unmounts and onMouseLeave never
+    // fires, which would leave the NEXT banner's timer permanently paused.
+    setHovered(false);
   }, [state]);
 
   useEffect(() => {

@@ -137,6 +137,24 @@ describe("BannerApp", () => {
     expect(ipc.bannerDismiss).toHaveBeenCalledTimes(1);
   });
 
+  it("a dismissal while hovered does not pause the next banner's timer", async () => {
+    vi.useFakeTimers();
+    await renderDetected();
+    // Hover, then dismiss via X: the card unmounts with the pointer inside
+    // it, so no mouseleave ever fires.
+    fireEvent.mouseEnter(screen.getByRole("status"));
+    fireEvent.click(screen.getByRole("button", { name: /dismiss/i }));
+    emit("banner-state", { kind: "hidden" });
+    vi.mocked(ipc.bannerDismiss).mockClear();
+
+    emit("banner-state", { ...DETECTED, bundle_id: "com.hnc.Discord", app_name: "Discord" });
+    screen.getByText("Discord");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(AUTO_DISMISS_MS + 1_000);
+    });
+    expect(ipc.bannerDismiss).toHaveBeenCalledTimes(1);
+  });
+
   it("the ended state has no auto-dismiss", async () => {
     vi.useFakeTimers();
     await renderDetected();

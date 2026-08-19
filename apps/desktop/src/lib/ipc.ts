@@ -60,6 +60,10 @@ export interface AppConfig {
   auto_stop_after_call: boolean;
 }
 
+/**
+ * Payload of the `banner-start` event the banner window emits toward the
+ * main window when its Start recording button is clicked.
+ */
 export interface CallDetectedPayload {
   bundle_id: string;
   app_name: string;
@@ -93,10 +97,6 @@ export function showMainWindow(): Promise<void> {
 export interface CallEndedPayload {
   bundle_id: string;
   recording_id: string;
-}
-
-export interface CallDetectionClearedPayload {
-  bundle_id: string;
 }
 
 /**

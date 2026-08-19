@@ -355,17 +355,6 @@ impl DetectionMachine {
 }
 
 #[derive(Clone, Serialize)]
-pub struct CallDetectedPayload {
-    pub bundle_id: String,
-    pub app_name: String,
-}
-
-#[derive(Clone, Serialize)]
-struct DetectionClearedPayload {
-    bundle_id: String,
-}
-
-#[derive(Clone, Serialize)]
 pub struct CallEndedPayload {
     pub bundle_id: String,
     pub recording_id: String,
@@ -443,27 +432,13 @@ fn emit_actions(app: &AppHandle, actions: Vec<Action>) {
         match action {
             Action::Detected(active) => {
                 if let Some(banner) = &banner {
-                    // recording_live is false by contract: the detector only
-                    // emits Detected while no recording is live (its own
-                    // tests pin that); the controller re-checks as defense.
-                    banner.detected(&active.bundle_id, &active.app_name, false);
+                    banner.detected(&active.bundle_id, &active.app_name);
                 }
-                let _ = app.emit(
-                    "call-detected",
-                    CallDetectedPayload {
-                        bundle_id: active.bundle_id,
-                        app_name: active.app_name,
-                    },
-                );
             }
             Action::DetectionCleared(bundle_id) => {
                 if let Some(banner) = &banner {
                     banner.detection_cleared(&bundle_id);
                 }
-                let _ = app.emit(
-                    "call-detection-cleared",
-                    DetectionClearedPayload { bundle_id },
-                );
             }
             Action::CallEnded {
                 bundle_id,

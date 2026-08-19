@@ -101,6 +101,10 @@ function App() {
   // State alone cannot reject two stop events delivered in the same React
   // tick. This synchronous guard protects the one backend recording handle.
   const stopInFlightRef = useRef(false);
+  // Monotonic id per stop, so a background finalization that finishes late
+  // (after a newer stop already owns the status line) reports nothing --
+  // see handleStop.
+  const stopEpochRef = useRef(0);
 
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
@@ -599,9 +603,31 @@ function App() {
       setStatus({ kind: "saving" });
       void refreshSessions();
 
-      const path = await stopPromise;
-      setStatus({ kind: "saved", path });
-      void refreshSessions();
+      // The finalization itself (transcript flush + audio encode, real
+      // wall-clock time for a long call) stays in the background: `busy` is
+      // released in the finally below, NOT held across this await, so the
+      // user can create a new note and start recording the next call while
+      // the previous one is still saving. (Holding busy here once cost the
+      // owner the start of a real call.) The backend supports this: the
+      // recording slot frees immediately on stop, and start_recording
+      // rejects only the one file still being finalized. The epoch guards
+      // the status line: "saved" from an old stop must not repaint whatever
+      // a newer start/stop has put there since.
+      const epoch = ++stopEpochRef.current;
+      void stopPromise
+        .then((path) => {
+          if (stopEpochRef.current === epoch) {
+            setStatus((prev) => (prev.kind === "saving" ? { kind: "saved", path } : prev));
+          }
+          void refreshSessions();
+        })
+        .catch((err) => {
+          // A failed save means that call's file may be incomplete; always
+          // surface it, even over a newer recording's status. `status` is
+          // display-only (see sessionActive's comment), so this cannot
+          // unwire the record control.
+          setStatus({ kind: "error", message: String(err) });
+        });
     } catch (err) {
       setStatus({ kind: "error", message: String(err) });
     } finally {

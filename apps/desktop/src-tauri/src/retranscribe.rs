@@ -1037,10 +1037,11 @@ async fn run_job<R: tauri::Runtime>(
     // "error" phase and drops the job -- the pipeline is never reached, so
     // nothing is ever written or deleted for a job that fails this check.
     let state = app.state::<AppState>();
+    let finalizing = state.finalizing_match(&md_path);
     let revalidated = revalidate_before_run(
         &md_path,
         state.active_output_path().as_deref(),
-        state.finalizing_path().as_deref(),
+        finalizing.as_deref(),
         &asr_id,
     );
     let (audio_path, model_path) = match revalidated {
@@ -1165,10 +1166,11 @@ pub async fn retranscribe_session(
     state: State<'_, AppState>,
 ) -> Result<(), String> {
     let md_path = PathBuf::from(&path);
+    let finalizing = state.finalizing_match(&md_path);
     check_not_active(
         &md_path,
         state.active_output_path().as_deref(),
-        state.finalizing_path().as_deref(),
+        finalizing.as_deref(),
     )?;
 
     let audio_path = resolve_audio_path(&md_path);
@@ -1920,7 +1922,7 @@ mod tests {
             {
                 let jobs = handle.state::<RetranscribeState>();
                 jobs.0.lock().unwrap().queue.running = Some(md_path.display().to_string());
-                *handle.state::<AppState>().finalizing.lock().unwrap() = Some(md_path.clone());
+                handle.state::<AppState>().finalizing.lock().unwrap().push(md_path.clone());
             }
 
             let result = tauri::async_runtime::block_on(run_job(

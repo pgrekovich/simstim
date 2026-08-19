@@ -50,6 +50,7 @@ vi.mock("@/lib/ipc", () => ({
   setRetranscribeModel: vi.fn().mockResolvedValue(undefined),
   deleteModel: vi.fn().mockResolvedValue(undefined),
   retranscribeSession: vi.fn().mockResolvedValue(undefined),
+  createSession: vi.fn().mockResolvedValue("/tmp/new.md"),
 }));
 
 vi.mock("@tauri-apps/api/event", () => ({
@@ -108,6 +109,7 @@ beforeEach(() => {
   vi.mocked(ipc.saveSession).mockClear();
   vi.mocked(ipc.updateActiveSession).mockClear();
   vi.mocked(ipc.retranscribeSession).mockClear().mockResolvedValue(undefined);
+  vi.mocked(ipc.createSession).mockClear().mockResolvedValue("/tmp/new.md");
   vi.mocked(listen).mockClear();
 });
 
@@ -258,6 +260,84 @@ describe("App: hot-mic fix (final review Critical finding)", () => {
 
     await waitFor(() => expect(ipc.stopRecording).toHaveBeenCalledTimes(1));
     expect(ipc.startRecording).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("App: a saving session must not block the next call (owner bug: missed a call start)", () => {
+  /** Starts a recording, then stops it with `stopRecording` left pending, so
+   *  the app sits in the "saving" state a long encode produces. Returns the
+   *  resolver for the pending stop. */
+  async function enterSavingState() {
+    let finishStop!: (path: string) => void;
+    vi.mocked(ipc.stopRecording).mockImplementation(
+      () => new Promise<string>((resolve) => { finishStop = resolve; }),
+    );
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /^record$/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /stop/i }));
+    await waitFor(() => expect(ipc.stopRecording).toHaveBeenCalledTimes(1));
+    expect(screen.getByText("saving")).toBeVisible();
+    return (path: string) => act(() => finishStop(path));
+  }
+
+  it("creates a new note and records into it while the previous session is still saving", async () => {
+    const finishStop = await enterSavingState();
+
+    fireEvent.click(screen.getByRole("button", { name: /new note/i }));
+    await waitFor(() => expect(ipc.createSession).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(await screen.findByRole("button", { name: /^record$/i }));
+    await waitFor(() => expect(ipc.startRecording).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(ipc.startRecording).mock.calls[1][0]).toBe("/tmp/new.md");
+    await screen.findByRole("button", { name: /stop/i });
+
+    // The old call's save finishing must not repaint the status of the NEW,
+    // live recording as "saved" (the record control must stay a Stop).
+    finishStop("/tmp/active.md");
+    expect(screen.getByRole("button", { name: /stop/i })).toBeVisible();
+    expect(screen.queryByText(/saved to/)).not.toBeInTheDocument();
+  });
+
+  it("starts a detected call from the banner while the previous session is still saving", async () => {
+    vi.mocked(ipc.startRecording).mockResolvedValue("/tmp/detected.md");
+    await enterSavingState();
+
+    emit("call-detected", { bundle_id: "us.zoom.xos", app_name: "Zoom" });
+    const action = await screen.findByRole("button", { name: /start recording/i });
+    expect(action).toBeEnabled();
+    fireEvent.click(action);
+
+    await waitFor(() => expect(ipc.startRecording).toHaveBeenCalledTimes(2));
+    // A detected call always records into a brand-new session (path null),
+    // which the backend accepts even mid-finalization.
+    expect(vi.mocked(ipc.startRecording).mock.calls[1][0]).toBeNull();
+  });
+
+  it("still reports the finished save when nothing newer replaced the status", async () => {
+    const finishStop = await enterSavingState();
+    finishStop("/tmp/active.md");
+    expect(await screen.findByText(/saved to/)).toBeVisible();
+  });
+
+  it("surfaces a failed background save as an error even after a new recording started", async () => {
+    let failStop!: (err: unknown) => void;
+    vi.mocked(ipc.stopRecording).mockImplementation(
+      () => new Promise<string>((_resolve, reject) => { failStop = reject; }),
+    );
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /^record$/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /stop/i }));
+    await waitFor(() => expect(ipc.stopRecording).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole("button", { name: /new note/i }));
+    await waitFor(() => expect(ipc.createSession).toHaveBeenCalledTimes(1));
+    fireEvent.click(await screen.findByRole("button", { name: /^record$/i }));
+    await screen.findByRole("button", { name: /stop/i });
+
+    // A save failure means the old call's file may be incomplete; the owner
+    // must see it even though a new recording is already running.
+    act(() => failStop("encode failed: disk full"));
+    expect(await screen.findByText(/encode failed: disk full/)).toBeVisible();
   });
 });
 

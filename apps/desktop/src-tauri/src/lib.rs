@@ -70,18 +70,24 @@ struct Recording {
 
 pub struct AppState {
     recording: Mutex<Option<Recording>>,
-    /// The path of a session currently being finalized: `stop_recording` has
-    /// already removed it from `recording` (so `active_output_path` no
+    /// The paths of sessions currently being finalized: `stop_recording` has
+    /// already removed each from `recording` (so `active_output_path` no
     /// longer reports it) and is blocking on `session.stop()` -- the final
     /// transcript save plus, for a call with audio, the FLAC encode, which
-    /// can take real wall-clock time for a long recording. Set right before
-    /// that blocking call and cleared right after, on every path including
-    /// an error return (Important fix-review finding: without this, a
-    /// re-transcribe or a `read_session` audio-path resolution started in
-    /// that window could see a stale/still-being-written `.wav` and either
-    /// decode a truncated file or hand it to the player as if it were
-    /// finished).
-    finalizing: Mutex<Option<PathBuf>>,
+    /// can take real wall-clock time for a long recording. Marked right
+    /// before that blocking call and cleared right after, on every path
+    /// including an error return (Important fix-review finding: without
+    /// this, a re-transcribe or a `read_session` audio-path resolution
+    /// started in that window could see a stale/still-being-written `.wav`
+    /// and either decode a truncated file or hand it to the player as if it
+    /// were finished).
+    ///
+    /// A collection, not a single slot: stopping no longer blocks the UI, so
+    /// a second session can be started and stopped while the first is still
+    /// encoding, and each finalization must keep its own mark until ITS
+    /// guard drops (a single `Option` slot let the second stop overwrite the
+    /// first one's mark, unguarding its half-written audio).
+    finalizing: Mutex<Vec<PathBuf>>,
 }
 
 pub(crate) struct RecordingStatus {
@@ -101,9 +107,7 @@ impl Drop for FinalizingGuard {
     fn drop(&mut self) {
         let state = self.app.state::<AppState>();
         let mut finalizing = state.finalizing.lock().unwrap();
-        if finalizing.as_deref() == Some(self.path.as_path()) {
-            *finalizing = None;
-        }
+        finalizing.retain(|p| p != &self.path);
     }
 }
 
@@ -111,7 +115,7 @@ impl Default for AppState {
     fn default() -> Self {
         AppState {
             recording: Mutex::new(None),
-            finalizing: Mutex::new(None),
+            finalizing: Mutex::new(Vec::new()),
         }
     }
 }
@@ -123,10 +127,16 @@ impl AppState {
         self.recording.lock().unwrap().as_ref().map(|r| r.path.clone())
     }
 
-    /// The path of a session currently being finalized (stop-to-encode
-    /// window), if any -- see the `finalizing` field's doc comment.
-    pub(crate) fn finalizing_path(&self) -> Option<PathBuf> {
-        self.finalizing.lock().unwrap().clone()
+    /// Whether `path` is currently being finalized (its stop-to-encode
+    /// window, see the `finalizing` field's doc comment), returned as the
+    /// stored path so callers comparing `Option<&Path>` keep working.
+    pub(crate) fn finalizing_match(&self, path: &Path) -> Option<PathBuf> {
+        self.finalizing
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|p| p.as_path() == path)
+            .cloned()
     }
 
     pub(crate) fn recording_status(&self) -> Option<RecordingStatus> {
@@ -145,15 +155,31 @@ impl AppState {
     }
 }
 
-/// Whether starting a recording into `path` should be rejected because it
-/// equals the currently-active session's path. Recording into an
-/// already-recording session is impossible via the UI (the Record button
-/// becomes Stop while a session is active, so `path` would never even be
-/// offered), but the backend still guards it explicitly rather than relying
-/// solely on that. Factored out as a pure function so it's directly
+/// Why starting a recording into `path` must be rejected, if it must be:
+/// the single-writer rule gives a session file exactly one owner at a time,
+/// and there are two possible owners to collide with. `active` is the file a
+/// live worker is recording into right now. `finalizing` is the file a just-
+/// stopped session's blocking finalization (final transcript save + audio
+/// encode) is still writing -- starting a NEW session during that window is
+/// deliberately allowed (blocking every control until a long call finished
+/// encoding cost the owner the start of a real call), so this rejection is
+/// what keeps that concurrency safe for the one file that still has a
+/// writer. `path: None` (a brand-new session) never conflicts: it gets its
+/// own timestamped file. Factored out as a pure function so it's directly
 /// unit-testable without a running Tauri `State`.
-fn rejects_recording_into_active_path(path: Option<&std::path::Path>, active: Option<&std::path::Path>) -> bool {
-    path.is_some() && path == active
+fn recording_start_conflict(
+    path: Option<&std::path::Path>,
+    active: Option<&std::path::Path>,
+    finalizing: Option<&std::path::Path>,
+) -> Option<&'static str> {
+    path?;
+    if path == active {
+        return Some("cannot record into a session that is already recording");
+    }
+    if path == finalizing {
+        return Some("this session is still saving; wait for it to finish or start a new note");
+    }
+    None
 }
 
 /// `start_recording(path: None)` starts a brand-new session, exactly as
@@ -175,9 +201,12 @@ fn start_recording(
         return Err("a detected-call title can only be applied to a new session".into());
     }
     let mut guard = state.recording.lock().unwrap();
-    let active_path = guard.as_ref().map(|r| r.path.as_path());
-    if rejects_recording_into_active_path(path.as_deref(), active_path) {
-        return Err("cannot record into a session that is already recording".into());
+    let active_path = guard.as_ref().map(|r| r.path.clone());
+    let finalizing_path = path.as_deref().and_then(|p| state.finalizing_match(p));
+    if let Some(conflict) =
+        recording_start_conflict(path.as_deref(), active_path.as_deref(), finalizing_path.as_deref())
+    {
+        return Err(conflict.into());
     }
     if guard.is_some() {
         return Err("already recording".into());
@@ -280,7 +309,7 @@ async fn stop_recording(app: AppHandle) -> Result<String, String> {
     // written `.wav` as if the recording were already fully saved. Mark it
     // as finalizing here, before the blocking call, and clear it right
     // after -- on every path, success or error, so it never gets stuck set.
-    *state.finalizing.lock().unwrap() = Some(path.clone());
+    state.finalizing.lock().unwrap().push(path.clone());
 
     // Capture is no longer active from this point onward, even if flushing
     // or encoding the session fails. Clear detector lifecycle state on every
@@ -525,55 +554,101 @@ mod tests {
     use super::*;
     use std::path::Path;
 
-    /// Important fix-review finding: `AppState::finalizing_path` must
-    /// reflect exactly what `stop_recording` last set/cleared -- the
-    /// mechanism `check_not_active` (retranscribe.rs) and `read_session_at`
-    /// (sessions.rs) both key their stop-to-encode-window rejection off of.
+    /// Important fix-review finding (extended for overlapping saves):
+    /// `AppState::finalizing_match` must reflect exactly what
+    /// `stop_recording` set and `FinalizingGuard` cleared -- the mechanism
+    /// `check_not_active` (retranscribe.rs), `read_session_at` (sessions.rs)
+    /// and `recording_start_conflict` all key their stop-to-encode-window
+    /// rejection off of.
     #[test]
-    fn finalizing_path_reflects_the_last_value_set() {
+    fn finalizing_match_reflects_what_was_marked_and_cleared() {
         let state = AppState::default();
-        assert_eq!(state.finalizing_path(), None);
-
         let path = PathBuf::from("/tmp/call.md");
-        *state.finalizing.lock().unwrap() = Some(path.clone());
-        assert_eq!(state.finalizing_path(), Some(path));
+        assert_eq!(state.finalizing_match(&path), None);
 
-        *state.finalizing.lock().unwrap() = None;
-        assert_eq!(state.finalizing_path(), None);
+        state.finalizing.lock().unwrap().push(path.clone());
+        assert_eq!(state.finalizing_match(&path), Some(path.clone()));
+
+        state.finalizing.lock().unwrap().retain(|p| p != &path);
+        assert_eq!(state.finalizing_match(&path), None);
+    }
+
+    /// Overlapping finalizations are reachable now that stopping no longer
+    /// blocks the UI: stop A (long encode), start B, stop B while A is
+    /// still saving. Session B's save finishing must not unmark A as
+    /// finalizing -- with the old single-slot `Option<PathBuf>`, B's mark
+    /// overwrote A's, and A's stop-to-encode window went unguarded (a
+    /// re-transcribe could read its half-written audio).
+    #[test]
+    fn finalizing_marks_for_overlapping_saves_are_independent() {
+        let state = AppState::default();
+        let a = PathBuf::from("/tmp/a.md");
+        let b = PathBuf::from("/tmp/b.md");
+
+        state.finalizing.lock().unwrap().push(a.clone());
+        state.finalizing.lock().unwrap().push(b.clone());
+        assert_eq!(state.finalizing_match(&a), Some(a.clone()));
+        assert_eq!(state.finalizing_match(&b), Some(b.clone()));
+
+        // B finishes first (its guard drops): A must stay marked.
+        state.finalizing.lock().unwrap().retain(|p| p != &b);
+        assert_eq!(state.finalizing_match(&a), Some(a.clone()));
+        assert_eq!(state.finalizing_match(&b), None);
     }
 
     #[test]
-    fn rejects_recording_into_active_path_is_false_when_nothing_is_active() {
-        assert!(!rejects_recording_into_active_path(
-            Some(Path::new("/tmp/call.md")),
+    fn recording_start_conflict_allows_a_path_no_one_owns() {
+        assert_eq!(
+            recording_start_conflict(
+                Some(Path::new("/tmp/call.md")),
+                None,
+                Some(Path::new("/tmp/other.md"))
+            ),
             None
-        ));
+        );
     }
 
     #[test]
-    fn rejects_recording_into_active_path_is_false_for_a_different_path() {
-        assert!(!rejects_recording_into_active_path(
+    fn recording_start_conflict_allows_starting_fresh_regardless_of_owners() {
+        // path: None ("start a new session") is never rejected: the new
+        // file gets its own timestamped name, so there is nothing to
+        // collide with. This is exactly what must keep working while a
+        // previous session is still saving (a missed call start was the
+        // cost of getting this wrong).
+        assert_eq!(
+            recording_start_conflict(
+                None,
+                Some(Path::new("/tmp/a.md")),
+                Some(Path::new("/tmp/b.md"))
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn recording_start_conflict_rejects_the_actively_recording_path() {
+        let err = recording_start_conflict(
             Some(Path::new("/tmp/call.md")),
-            Some(Path::new("/tmp/other.md"))
-        ));
-    }
-
-    #[test]
-    fn rejects_recording_into_active_path_is_false_when_starting_fresh() {
-        // path: None ("start a new session") is never rejected, regardless
-        // of what's active -- there's nothing to collide with.
-        assert!(!rejects_recording_into_active_path(
+            Some(Path::new("/tmp/call.md")),
             None,
-            Some(Path::new("/tmp/call.md"))
-        ));
+        )
+        .unwrap();
+        assert!(err.contains("already recording"), "{err}");
     }
 
     #[test]
-    fn rejects_recording_into_active_path_is_true_when_path_equals_active() {
-        assert!(rejects_recording_into_active_path(
+    fn recording_start_conflict_rejects_a_path_that_is_still_saving() {
+        // Single-writer rule: between stop_recording taking the session and
+        // its blocking finalization finishing, the OLD worker still owns the
+        // file (final transcript save, audio encode). A new recording into
+        // that same file would be a second writer.
+        let err = recording_start_conflict(
             Some(Path::new("/tmp/call.md")),
-            Some(Path::new("/tmp/call.md"))
-        ));
+            None,
+            Some(Path::new("/tmp/call.md")),
+        )
+        .unwrap();
+        assert!(err.contains("still saving"), "{err}");
     }
 
     #[test]

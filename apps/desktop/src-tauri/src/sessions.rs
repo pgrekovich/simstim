@@ -327,7 +327,7 @@ pub fn create_session() -> Result<String, String> {
 
 #[tauri::command]
 pub fn read_session(path: String, state: State<AppState>) -> Result<SessionDataOut, String> {
-    let finalizing = state.finalizing_path();
+    let finalizing = state.finalizing_match(Path::new(&path));
     read_session_at(Path::new(&path), finalizing.as_deref()).map_err(|e| e.to_string())
 }
 

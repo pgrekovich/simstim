@@ -99,17 +99,30 @@ describe("BannerApp", () => {
     expect(emitTo).toHaveBeenCalledWith("main", "banner-stop");
   });
 
-  it("the close button dismisses through the backend", async () => {
+  it("has no close button; the detected state relies on auto-dismiss", async () => {
     await renderDetected();
-    fireEvent.click(screen.getByRole("button", { name: /dismiss/i }));
-    expect(ipc.bannerDismiss).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: /dismiss/i })).not.toBeInTheDocument();
   });
 
-  it("open simstim focuses the main window and keeps the banner up", async () => {
+  it("open simstim lives in the dropdown, focuses the main window, keeps the banner", async () => {
     await renderDetected();
+    fireEvent.click(screen.getByRole("button", { name: /more options/i }));
     fireEvent.click(screen.getByRole("button", { name: /open simstim/i }));
     expect(ipc.showMainWindow).toHaveBeenCalledTimes(1);
     expect(screen.getByText("Call detected")).toBeVisible();
+    // The menu closed on selection.
+    expect(screen.queryByRole("button", { name: /open simstim/i })).not.toBeInTheDocument();
+  });
+
+  it("the detected dropdown has no dismiss entry, the ended dropdown does", async () => {
+    await renderDetected();
+    fireEvent.click(screen.getByRole("button", { name: /more options/i }));
+    expect(screen.queryByRole("button", { name: /^dismiss$/i })).not.toBeInTheDocument();
+
+    emit("banner-state", { kind: "ended" });
+    fireEvent.click(screen.getByRole("button", { name: /more options/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^dismiss$/i }));
+    expect(ipc.bannerDismiss).toHaveBeenCalledTimes(1);
   });
 
   it("auto-dismisses the detected state exactly once when the timer drains", async () => {
@@ -137,13 +150,13 @@ describe("BannerApp", () => {
     expect(ipc.bannerDismiss).toHaveBeenCalledTimes(1);
   });
 
-  it("a dismissal while hovered does not pause the next banner's timer", async () => {
+  it("a hide while hovered does not pause the next banner's timer", async () => {
     vi.useFakeTimers();
     await renderDetected();
-    // Hover, then dismiss via X: the card unmounts with the pointer inside
-    // it, so no mouseleave ever fires.
+    // Hover, then let the backend hide the banner (Start, auto-stop or a
+    // cleared detection): the card unmounts with the pointer inside it, so
+    // no mouseleave ever fires.
     fireEvent.mouseEnter(screen.getByRole("status"));
-    fireEvent.click(screen.getByRole("button", { name: /dismiss/i }));
     emit("banner-state", { kind: "hidden" });
     vi.mocked(ipc.bannerDismiss).mockClear();
 

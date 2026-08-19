@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { emitTo, listen } from "@tauri-apps/api/event";
-import { X } from "lucide-react";
+import { ChevronDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import appIcon from "../../src-tauri/icons/128x128.png";
 import {
   bannerCurrentState,
   bannerDismiss,
@@ -26,6 +27,7 @@ export default function BannerApp() {
   const [state, setState] = useState<BannerStatePayload>({ kind: "hidden" });
   const [remainingMs, setRemainingMs] = useState(AUTO_DISMISS_MS);
   const [hovered, setHovered] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
 
   useEffect(() => {
     getConfig()
@@ -55,11 +57,14 @@ export default function BannerApp() {
   }, []);
 
   useEffect(() => {
+    // Any pushed state change closes the dropdown; a detected state also
+    // resets the timer AND the hover flag: when the banner hides with the
+    // pointer inside it (Start, auto-stop, cleared) the card unmounts and
+    // onMouseLeave never fires, which would leave the NEXT banner's timer
+    // permanently paused.
+    setMenuOpen(false);
     if (state.kind !== "detected") return;
     setRemainingMs(AUTO_DISMISS_MS);
-    // Reset hover too: when the banner hides with the pointer inside it
-    // (X, Start, auto-stop) the card unmounts and onMouseLeave never
-    // fires, which would leave the NEXT banner's timer permanently paused.
     setHovered(false);
   }, [state]);
 
@@ -79,6 +84,23 @@ export default function BannerApp() {
 
   if (state.kind === "hidden") return null;
 
+  const detected = state.kind === "detected";
+
+  function onPrimary() {
+    if (state.kind === "detected") {
+      void emitTo("main", "banner-start", {
+        bundle_id: state.bundle_id,
+        app_name: state.app_name,
+      });
+    } else {
+      void emitTo("main", "banner-stop");
+    }
+  }
+
+  // Granola-style layout (owner e2e feedback): no close button (the
+  // detected state dismisses itself, the ended state has Dismiss in the
+  // dropdown), one prominent split button with the app icon so the popup
+  // is identifiable, secondary actions behind the chevron.
   return (
     <div
       role="status"
@@ -86,63 +108,60 @@ export default function BannerApp() {
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
     >
-      <div className="relative w-full overflow-hidden rounded-xl border bg-background shadow-lg">
-        {state.kind === "detected" ? (
-          <>
-            <div className="flex items-center gap-2 p-3 pb-1">
-              <div className="min-w-0 flex-1">
-                <p className="text-sm font-medium">Call detected</p>
+      <div className="relative w-full">
+        <div className="relative overflow-hidden rounded-xl border bg-background shadow-lg">
+          <div className="flex items-center gap-3 p-3">
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-semibold">
+                {detected ? "Call detected" : "Call seems over"}
+              </p>
+              {state.kind === "detected" && (
                 <p className="truncate text-xs text-muted-foreground">{state.app_name}</p>
-              </div>
-              <Button
-                size="sm"
-                onClick={() =>
-                  void emitTo("main", "banner-start", {
-                    bundle_id: state.bundle_id,
-                    app_name: state.app_name,
-                  })
-                }
-              >
-                Start recording
+              )}
+            </div>
+            <div className="flex items-stretch overflow-hidden rounded-lg shadow-sm">
+              <Button className="h-10 gap-2 rounded-none px-3 text-sm" onClick={onPrimary}>
+                <img src={appIcon} alt="" className="size-5 rounded" />
+                {detected ? "Start recording" : "Stop"}
               </Button>
               <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label="Dismiss"
-                onClick={() => void bannerDismiss()}
+                className="h-10 rounded-none border-l border-primary-foreground/20 px-1.5"
+                aria-label="More options"
+                onClick={() => setMenuOpen((open) => !open)}
               >
-                <X />
+                <ChevronDown />
               </Button>
             </div>
-            <div className="flex px-2 pb-2">
-              <Button
-                variant="ghost"
-                size="xs"
-                className="text-muted-foreground"
-                onClick={() => void showMainWindow()}
-              >
-                Open simstim
-              </Button>
-            </div>
+          </div>
+          {detected && (
             <div
               className="absolute inset-x-0 bottom-0 h-0.5 bg-primary"
               style={{ width: `${(remainingMs / AUTO_DISMISS_MS) * 100}%` }}
             />
-          </>
-        ) : (
-          <div className="flex items-center gap-2 p-3">
-            <p className="min-w-0 flex-1 text-sm font-medium">Call seems over</p>
-            <Button size="sm" onClick={() => void emitTo("main", "banner-stop")}>
-              Stop
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label="Dismiss"
-              onClick={() => void bannerDismiss()}
+          )}
+        </div>
+        {menuOpen && (
+          <div className="absolute right-0 top-full z-10 mt-1 min-w-44 rounded-lg border bg-background p-1 shadow-lg">
+            <button
+              className="w-full rounded-md px-2.5 py-1.5 text-left text-sm hover:bg-muted"
+              onClick={() => {
+                setMenuOpen(false);
+                void showMainWindow();
+              }}
             >
-              <X />
-            </Button>
+              Open simstim
+            </button>
+            {!detected && (
+              <button
+                className="w-full rounded-md px-2.5 py-1.5 text-left text-sm hover:bg-muted"
+                onClick={() => {
+                  setMenuOpen(false);
+                  void bannerDismiss();
+                }}
+              >
+                Dismiss
+              </button>
+            )}
           </div>
         )}
       </div>

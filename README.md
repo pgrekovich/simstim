@@ -90,15 +90,19 @@ setting uses the same condition and the normal safe stop path. Final transcript
 and audio encoding continue on a blocking worker, so Stop immediately leaves
 recording mode and keeps the app responsive while the header reports `saving`.
 
-Bundled builds also attempt a system notification. This is best effort and
-depends on macOS notification authorization. `pnpm tauri dev` only uses the
-in-app banner because unsigned dev binaries cannot register reliable system
-notifications under their own app identity. The bundle must carry a real
-code signature for that registration: a bare `cargo`-produced binary is only
-linker-signed, and UNUserNotificationCenter rejects it with UNErrorDomain
-code 1 without ever showing the permission prompt. `signingIdentity: "-"`
-in `tauri.conf.json` makes the bundler ad-hoc sign every build, which is
-enough locally; distribution will need a real identity.
+The suggestion itself is a floating banner window (stage 1.1): frameless,
+always on top, shown at the top-right of the screen the cursor is on, with
+a Start recording button, an Open simstim link, a close button, and a
+progress strip that drains until the banner dismisses itself (hovering
+pauses it). On macOS it is a non-activating panel, so clicking its buttons
+never steals focus from the call app, and it appears over full-screen apps.
+It works identically in `pnpm tauri dev` and bundled builds, and it is the
+single notification surface: there is no Notification Center integration
+(an earlier UNUserNotificationCenter layer was removed with stage 1.1; it
+required a signed bundle, could not be styled, and hid its buttons behind
+hover). `signingIdentity: "-"` in `tauri.conf.json` stays regardless:
+bundles need a real code signature for a stable TCC identity, and a bare
+`cargo`-produced binary is only linker-signed.
 
 ## Audio format
 

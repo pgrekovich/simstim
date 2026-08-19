@@ -318,6 +318,13 @@ action buttons behind hover.
 Out of 1.1: per-app detection opt-out from the banner, banner settings,
 sound, Windows/Linux positioning polish.
 
+Status (2026-08-19): stage 1.1 implemented, awaiting owner e2e: floating
+banner window (Tauri window converted to a non-activating NSPanel on macOS,
+tauri-nspanel pinned rev), detected and call-ended states with a 30-second
+hover-pausable auto-dismiss, clicks routed through the main window's
+existing start and stop paths, in-app CallBanner and the UN notification
+layer removed (cidre's `un` feature dropped).
+
 ## Milestones after MVP-0
 
 1. Audio file kept next to the .md; re-transcribe command (whisper turbo).

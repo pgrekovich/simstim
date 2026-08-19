@@ -975,18 +975,32 @@ fn run_retranscribe_pipeline(
 
     let (me_samples, them_samples) = decode_audio_stereo(audio_path)?;
 
+    // Each channel is transcribed speech-only (see
+    // `simstim_engine::detect_speech` and `speech.rs`'s module docs): a
+    // channel handed to whisper whole has its language decided by whatever
+    // its first 30 seconds hold -- silence, for any mic on a call the other
+    // side started -- and hallucinates filler over every quiet stretch after
+    // that. Detection runs inside the channel's own "transcribing" phase
+    // rather than announcing itself: it is fast next to the decode, and the
+    // progress contract has no phase of its own for it.
+    let models_dir = simstim_engine::models_dir();
+
     on_progress("transcribing", Some("me"), None);
+    let me_timeline = simstim_engine::detect_speech(&models_dir, &me_samples)
+        .context("detecting speech in the Me channel")?;
     let cb = on_progress.clone();
     let me_segments = engine
-        .transcribe(&me_samples, move |pct| {
+        .transcribe_speech(&me_samples, &me_timeline, move |pct| {
             cb("transcribing", Some("me"), Some(format!("{:.0}%", pct * 100.0)));
         })
         .context("transcribing the Me channel")?;
 
     on_progress("transcribing", Some("them"), None);
+    let them_timeline = simstim_engine::detect_speech(&models_dir, &them_samples)
+        .context("detecting speech in the Them channel")?;
     let cb = on_progress.clone();
     let them_segments = engine
-        .transcribe(&them_samples, move |pct| {
+        .transcribe_speech(&them_samples, &them_timeline, move |pct| {
             cb("transcribing", Some("them"), Some(format!("{:.0}%", pct * 100.0)));
         })
         .context("transcribing the Them channel")?;

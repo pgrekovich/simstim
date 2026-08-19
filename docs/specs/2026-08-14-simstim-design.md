@@ -148,6 +148,10 @@ Status (2026-08-16): stage 0.9 shipped: two owner-requested settings, both off b
 
 Status (2026-08-17): stage 1.0 implemented, awaiting owner e2e: event-driven Core Audio call detection with a five-second debounce and call-episode tracking, an in-app one-click recording banner, call-end stop handling, and best-effort system notifications in bundled builds. Detection never starts recording automatically.
 
+Fix (2026-08-18): the offline whisper pass now transcribes each channel speech-only. Found on a real hour-long Polish lesson whose mic channel came back as "Thank you." every two seconds, with the Polish that was actually spoken rendered as English nonsense. Root cause, reproduced end to end: whisper.cpp picks the language once from the first 30 seconds it is given, and a mic channel on a call someone else starts opens with silence, so the language was decided by silence and every quiet stretch afterwards hallucinated filler that `keep_context` then locked in. Silero now finds the speech, only that reaches whisper, and timestamps are mapped back to file time. Verified on the same call: both channels correct Polish, no hallucinated lines, and the pass got faster (10 minutes of audio in 42 seconds) since silence is no longer decoded.
+
+Fix (2026-08-18, same session): condensing a channel removed the pauses whisper segments by, so one line could carry several of a speaker's turns and the merged transcript stopped interleaving like the real conversation. Segments are now split at speech-region seams using whisper's per-token timestamps, with words moved across a seam whole (token timing is noisy enough to strand a word's tail otherwise -- "porząd"/"ku" on the real call) and token bytes concatenated before UTF-8 decoding (BPE splits multi-byte characters across tokens). Verified on the same Polish lesson: turns interleave, no split words, no hallucinations, same speed.
+
 ## Stage 0.6: the shell (approved 2026-08-15)
 
 Pivot from "process control panel" to "notes app where recording is a side
@@ -199,7 +203,12 @@ has no "ё" at all (hard architectural exclusion, not a tuning issue).
   timestamps. Both supported Whisper variants share an offline quality
   profile: a five-wide beam, context carried between internal windows, and
   non-speech token suppression. Metal flash attention stays disabled for the
-  bundled whisper.cpp 1.7.6 path.
+  bundled whisper.cpp 1.7.6 path. Each channel is transcribed SPEECH-ONLY:
+  Silero finds the speech, the silence between it is cut out before whisper
+  sees anything, and the resulting timestamps are mapped back to file time
+  (fixed 2026-08-18, see Known issues). Feeding whisper a whole channel
+  including its silence is not an optimization question, it corrupts the
+  output.
 - **The transcript is app-read-only** (Pavel's ruling): the app never offers
   transcript editing, so re-transcribing simply REPLACES the section. The
   old text is not preserved in the file. Hand-editing the .md outside the
@@ -214,6 +223,8 @@ Out of 0.7: meeting detection, tray, hotkeys, enhance, calendar.
 
 ## Known issues
 
+- Re-transcribe lines can start or end mid-sentence when the speaker paused mid-sentence: segments are split at speech-region seams (fixed 2026-08-18, see the status line), and a seam is wherever Silero heard a real pause, which does not always align with grammar. The words themselves are never split and land on the correct turn.
+- Restoring turn pauses by inserting short silences into the condensed audio was tried and measured worse -- whisper hallucinates over inserted silence exactly as it does over real silence (the mic channel flipped language and filled up with a repeated subtitle credit). Segment splitting is done from whisper's token timestamps instead; do not reintroduce separators.
 - Whisper segment timestamps after a re-transcribe are sometimes off; the owner reviewed this and accepted it rather than chase it. Cause: whisper's segment boundaries are approximate and merging two independently transcribed channels compounds the drift.
 - Compression costs about 4 percent WER versus lossless (measured on English/German/French/Spanish; Russian unmeasured). AAC 32 kbps is the default because raising the bitrate does not recover that accuracy (AAC 64k measured at 4.3 percent vs 3.8 percent for 32k), so the real choice is lossless or not.
 - Continuing a recording into a note whose audio is in the other format re-encodes the combined audio into the current format.

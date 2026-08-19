@@ -5,7 +5,9 @@ use sherpa_onnx::{
 };
 use std::path::{Path, PathBuf};
 
+mod speech;
 mod whisper;
+pub use speech::{detect_speech, SpeechProfile, SpeechRegion, SpeechTimeline};
 pub use whisper::{WhisperEngine, WhisperSegment};
 
 pub fn models_dir() -> PathBuf {

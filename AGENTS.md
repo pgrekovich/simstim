@@ -54,7 +54,8 @@ apps/desktop        Tauri 2 shell. src-tauri: session pipeline, sessions IPC,
 ```
 
 Live path: capture -> VAD chunks -> Parakeet -> lines appended to the `.md`.
-Offline path: stored audio -> whisper per channel -> merged -> transcript
+Offline path: stored audio -> Silero per channel (speech regions, silence cut
+out) -> whisper -> timestamps mapped back to file time -> merged -> transcript
 section replaced.
 
 ## Where the decisions live
@@ -101,6 +102,12 @@ section replaced.
 - **System audio permission**: unsigned dev builds inherit the terminal's TCC
   identity, and terminals carry no `NSAudioCaptureUsageDescription`, so macOS
   shows no prompt and the tap records silence. See README.
+- **Never hand whisper silence.** It picks the language once from the first
+  30 seconds it gets, and it hallucinates filler over quiet stretches (with
+  `keep_context` on, the filler then prompts itself). A mic channel that opens
+  with silence lost a whole hour-long call to this. The offline pass cuts
+  silence out per channel; do not "simplify" that away. Inserting short
+  silences back in to recover turn boundaries was measured and is worse.
 - **Continuation**: recording into an existing note must continue its audio
   and its timestamps. Getting this wrong destroyed data twice in review.
 - **Re-transcribe replaces the transcript.** Anything that makes the audio

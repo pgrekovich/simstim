@@ -271,6 +271,7 @@ fn start_recording(
     });
     app.state::<detect::DetectHandle>()
         .recording_started(detected_bundle_id, out.display().to_string());
+    app.state::<banner::Banner>().recording_started();
     Ok(out.display().to_string())
 }
 
@@ -316,6 +317,7 @@ async fn stop_recording(app: AppHandle) -> Result<String, String> {
     // or encoding the session fails. Clear detector lifecycle state on every
     // stop path so a failed finalization cannot poison the next call.
     app.state::<detect::DetectHandle>().recording_stopped();
+    app.state::<banner::Banner>().recording_stopped();
 
     let finalizing_guard = FinalizingGuard {
         app: app.clone(),
@@ -502,9 +504,12 @@ fn set_retranscribe_model(id: String) -> Result<(), String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_dialog::init());
+    #[cfg(target_os = "macos")]
+    let builder = builder.plugin(tauri_nspanel::init());
+    builder
         .manage(AppState::default())
         .manage(DownloadState::default())
         .manage(retranscribe::RetranscribeState::default())
@@ -519,6 +524,10 @@ pub fn run() {
             // this alone doesn't cover.
             let cfg = Config::load();
             allow_output_dir_in_asset_scope(app, &cfg.output_dir)?;
+            // Banner before detect: the detector's actions look the banner
+            // state up through the app handle, so it must be managed by the
+            // time the first action can possibly fire.
+            app.manage(banner::Banner::create(app.handle())?);
             app.manage(detect::start(app.handle().clone(), cfg.detect_calls));
             Ok(())
         })
@@ -537,6 +546,9 @@ pub fn run() {
             config::set_delete_audio_after_retranscribe,
             config::set_auto_stop_after_call,
             detect::set_detect_calls,
+            banner::banner_dismiss,
+            banner::banner_current_state,
+            banner::show_main_window,
             models::list_models,
             models::download_model,
             models::delete_model,

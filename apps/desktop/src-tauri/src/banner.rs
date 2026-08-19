@@ -6,12 +6,57 @@
 //! should the banner window render now? `Some(state)` means "the visible
 //! state changed, apply it"; `None` means "ignore, nothing to re-render".
 
+use std::sync::Mutex;
+
+use serde::Serialize;
+use tauri::{
+    AppHandle, Emitter, Manager, PhysicalPosition, State, WebviewUrl, WebviewWindow,
+    WebviewWindowBuilder,
+};
+
+/// Label of the banner window; `main.tsx` branches on it to render the
+/// banner UI instead of the app.
+pub const WINDOW_LABEL: &str = "banner";
+/// Logical size of the banner window. The card inside is inset by CSS so
+/// its shadow has room to render (the window itself is transparent and
+/// shadowless: a native shadow on a transparent window leaves artifacts
+/// when the content redraws).
+const WINDOW_WIDTH: f64 = 370.0;
+const WINDOW_HEIGHT: f64 = 120.0;
+/// Logical inset from the monitor's top-right corner.
+const SCREEN_MARGIN: f64 = 16.0;
+
 /// What the banner window is currently showing.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BannerState {
     Hidden,
     Detected { bundle_id: String, app_name: String },
     Ended,
+}
+
+/// The `banner-state` event payload and `banner_current_state` return value.
+#[derive(Clone, Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum BannerPayload {
+    Hidden,
+    Detected { bundle_id: String, app_name: String },
+    Ended,
+}
+
+impl From<&BannerState> for BannerPayload {
+    fn from(state: &BannerState) -> Self {
+        match state {
+            BannerState::Hidden => BannerPayload::Hidden,
+            BannerState::Detected {
+                bundle_id,
+                app_name,
+            } => BannerPayload::Detected {
+                bundle_id: bundle_id.clone(),
+                app_name: app_name.clone(),
+            },
+            BannerState::Ended => BannerPayload::Ended,
+        }
+    }
 }
 
 pub struct BannerController {
@@ -91,6 +136,220 @@ impl BannerController {
         self.state = next.clone();
         Some(next)
     }
+}
+
+/// The shell around [`BannerController`]: owns the window, applies every
+/// state change the controller reports (emit to the webview first, then
+/// show or hide), and is the `app.manage()`d entry point the detector and
+/// the recording commands call into.
+pub struct Banner {
+    app: AppHandle,
+    controller: Mutex<BannerController>,
+}
+
+impl Banner {
+    /// Builds the hidden banner window. Must run on the main thread (the
+    /// macOS panel conversion swizzles the NSWindow's class); `.setup()`
+    /// qualifies.
+    pub fn create(app: &AppHandle) -> tauri::Result<Self> {
+        let window = WebviewWindowBuilder::new(app, WINDOW_LABEL, WebviewUrl::App("index.html".into()))
+            .decorations(false)
+            .transparent(true)
+            .shadow(false)
+            .always_on_top(true)
+            .skip_taskbar(true)
+            .resizable(false)
+            .focused(false)
+            .visible(false)
+            .inner_size(WINDOW_WIDTH, WINDOW_HEIGHT)
+            .visible_on_all_workspaces(true)
+            .build()?;
+
+        #[cfg(target_os = "macos")]
+        convert_to_panel(&window)?;
+        #[cfg(not(target_os = "macos"))]
+        let _ = &window;
+
+        Ok(Self {
+            app: app.clone(),
+            controller: Mutex::new(BannerController::new()),
+        })
+    }
+
+    pub fn detected(&self, bundle_id: &str, app_name: &str, recording_live: bool) {
+        let next = self
+            .controller
+            .lock()
+            .unwrap()
+            .on_detected(bundle_id, app_name, recording_live);
+        self.apply(next);
+    }
+
+    pub fn detection_cleared(&self, bundle_id: &str) {
+        let next = self.controller.lock().unwrap().on_detection_cleared(bundle_id);
+        self.apply(next);
+    }
+
+    pub fn call_ended(&self) {
+        let next = self.controller.lock().unwrap().on_call_ended();
+        self.apply(next);
+    }
+
+    pub fn recording_started(&self) {
+        let next = self.controller.lock().unwrap().on_recording_started();
+        self.apply(next);
+    }
+
+    pub fn recording_stopped(&self) {
+        let next = self.controller.lock().unwrap().on_recording_stopped();
+        self.apply(next);
+    }
+
+    pub fn dismiss(&self) {
+        let next = self.controller.lock().unwrap().on_dismiss();
+        self.apply(next);
+    }
+
+    pub fn current_payload(&self) -> BannerPayload {
+        BannerPayload::from(self.controller.lock().unwrap().current())
+    }
+
+    fn apply(&self, next: Option<BannerState>) {
+        let Some(state) = next else { return };
+        let visible = !matches!(state, BannerState::Hidden);
+        // Emit before showing so the webview never gets displayed while
+        // still rendering the previous state.
+        if let Err(error) = self
+            .app
+            .emit_to(WINDOW_LABEL, "banner-state", BannerPayload::from(&state))
+        {
+            eprintln!("banner state emit failed: {error}");
+        }
+        // Detector actions arrive on its listener thread; every AppKit call
+        // below must happen on the main thread.
+        let app = self.app.clone();
+        let result = self.app.run_on_main_thread(move || {
+            set_window_visible(&app, visible);
+        });
+        if let Err(error) = result {
+            eprintln!("banner main-thread dispatch failed: {error}");
+        }
+    }
+}
+
+/// Shows (repositioning first) or hides the banner window. On macOS this
+/// goes through the NSPanel so ordering front never activates simstim;
+/// elsewhere the plain window API does the same job.
+fn set_window_visible(app: &AppHandle, visible: bool) {
+    let Some(window) = app.get_webview_window(WINDOW_LABEL) else {
+        return;
+    };
+    if visible {
+        if let Err(error) = move_to_top_right(app, &window) {
+            eprintln!("banner positioning failed: {error}");
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        use tauri_nspanel::ManagerExt;
+        if let Ok(panel) = app.get_webview_panel(WINDOW_LABEL) {
+            if visible {
+                panel.show();
+            } else {
+                panel.order_out(None);
+            }
+            return;
+        }
+    }
+
+    let result = if visible { window.show() } else { window.hide() };
+    if let Err(error) = result {
+        eprintln!("banner visibility change failed: {error}");
+    }
+}
+
+/// Places the window at the top-right of the monitor containing the cursor
+/// (primary monitor fallback).
+fn move_to_top_right(app: &AppHandle, window: &WebviewWindow) -> tauri::Result<()> {
+    let monitor = app
+        .cursor_position()
+        .ok()
+        .and_then(|cursor| app.monitor_from_point(cursor.x, cursor.y).ok().flatten());
+    let Some(monitor) = monitor.or_else(|| app.primary_monitor().ok().flatten()) else {
+        return Ok(());
+    };
+    let (x, y) = top_right_position(
+        (monitor.position().x, monitor.position().y),
+        (monitor.size().width, monitor.size().height),
+        monitor.scale_factor(),
+        WINDOW_WIDTH,
+        SCREEN_MARGIN,
+    );
+    window.set_position(PhysicalPosition::new(x, y))
+}
+
+/// Physical top-right position for a window of logical `width` inset by a
+/// logical `margin` on a monitor whose geometry is physical pixels.
+fn top_right_position(
+    monitor_position: (i32, i32),
+    monitor_size: (u32, u32),
+    scale_factor: f64,
+    width: f64,
+    margin: f64,
+) -> (i32, i32) {
+    let x = f64::from(monitor_position.0) + f64::from(monitor_size.0) - (width + margin) * scale_factor;
+    let y = f64::from(monitor_position.1) + margin * scale_factor;
+    (x.round() as i32, y.round() as i32)
+}
+
+#[cfg(target_os = "macos")]
+// The cocoa crate deprecated all its AppKit types in favor of objc2, but
+// tauri-nspanel's set_collection_behaviour takes exactly this type; the
+// allow goes when upstream migrates.
+#[allow(deprecated)]
+fn convert_to_panel(window: &WebviewWindow) -> tauri::Result<()> {
+    use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
+    use tauri_nspanel::WebviewWindowExt;
+
+    /// NSWindowStyleMaskNonactivatingPanel: clicking the banner's buttons
+    /// must not activate simstim, the call app keeps focus (spec, stage
+    /// 1.1). The window is borderless, so this is the whole mask.
+    const NON_ACTIVATING_PANEL: i32 = 1 << 7;
+    /// NSStatusWindowLevel: above normal windows and full-screen spaces'
+    /// menu bar reveals; where system notification banners live.
+    const STATUS_WINDOW_LEVEL: i32 = 25;
+
+    let panel = window.to_panel()?;
+    panel.set_style_mask(NON_ACTIVATING_PANEL);
+    panel.set_level(STATUS_WINDOW_LEVEL);
+    // fullScreenAuxiliary is the load-bearing flag: calls are often in
+    // full-screen Zoom or Meet, and a plain window can never order in over
+    // another app's full-screen space.
+    panel.set_collection_behaviour(
+        NSWindowCollectionBehavior::NSWindowCollectionBehaviorCanJoinAllSpaces
+            | NSWindowCollectionBehavior::NSWindowCollectionBehaviorStationary
+            | NSWindowCollectionBehavior::NSWindowCollectionBehaviorFullScreenAuxiliary,
+    );
+    Ok(())
+}
+
+#[tauri::command]
+pub fn banner_dismiss(banner: State<Banner>) {
+    banner.dismiss();
+}
+
+#[tauri::command]
+pub fn banner_current_state(banner: State<Banner>) -> BannerPayload {
+    banner.current_payload()
+}
+
+/// The banner's "Open simstim" action: the one deliberate focus steal.
+#[tauri::command]
+pub fn show_main_window(app: AppHandle) -> Result<(), String> {
+    let window = app.get_webview_window("main").ok_or("main window missing")?;
+    window.show().map_err(|error| error.to_string())?;
+    window.set_focus().map_err(|error| error.to_string())
 }
 
 #[cfg(test)]
@@ -221,5 +480,24 @@ mod tests {
     fn dismiss_while_hidden_is_ignored() {
         let mut c = BannerController::new();
         assert_eq!(c.on_dismiss(), None);
+    }
+
+    #[test]
+    fn top_right_position_at_scale_one() {
+        // 1440x900 monitor at the origin: 370 wide window, 16 margin.
+        assert_eq!(
+            top_right_position((0, 0), (1440, 900), 1.0, 370.0, 16.0),
+            (1440 - 370 - 16, 16)
+        );
+    }
+
+    #[test]
+    fn top_right_position_scales_logical_sizes() {
+        // Retina (2x) monitor NOT at the origin: logical width and margin
+        // both double in physical pixels; the monitor offset does not.
+        assert_eq!(
+            top_right_position((1512, 0), (3024, 1964), 2.0, 370.0, 16.0),
+            (1512 + 3024 - (370 + 16) * 2, 32)
+        );
     }
 }

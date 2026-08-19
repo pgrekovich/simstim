@@ -436,11 +436,20 @@ pub fn set_detect_calls(enabled: bool, detector: State<DetectHandle>) -> Result<
 }
 
 fn emit_actions(app: &AppHandle, actions: Vec<Action>) {
+    // try_state, not state: unit tests drive emit paths without a managed
+    // banner, and the detector must never panic over missing UI.
+    let banner = app.try_state::<crate::banner::Banner>();
     for action in actions {
         match action {
             Action::Detected(active) => {
                 if !tauri::is_dev() {
                     system_notification::post(&active.app_name);
+                }
+                if let Some(banner) = &banner {
+                    // recording_live is false by contract: the detector only
+                    // emits Detected while no recording is live (its own
+                    // tests pin that); the controller re-checks as defense.
+                    banner.detected(&active.bundle_id, &active.app_name, false);
                 }
                 let _ = app.emit(
                     "call-detected",
@@ -451,6 +460,9 @@ fn emit_actions(app: &AppHandle, actions: Vec<Action>) {
                 );
             }
             Action::DetectionCleared(bundle_id) => {
+                if let Some(banner) = &banner {
+                    banner.detection_cleared(&bundle_id);
+                }
                 let _ = app.emit(
                     "call-detection-cleared",
                     DetectionClearedPayload { bundle_id },
@@ -460,6 +472,9 @@ fn emit_actions(app: &AppHandle, actions: Vec<Action>) {
                 bundle_id,
                 recording_id,
             } => {
+                if let Some(banner) = &banner {
+                    banner.call_ended();
+                }
                 let _ = app.emit(
                     "call-ended",
                     CallEndedPayload {

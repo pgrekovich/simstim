@@ -18,7 +18,9 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["protocol-asset"] }
+# macos-private-api: the only way to get a transparent webview window on
+# macOS (the banner window is a transparent layer around a rounded card).
+tauri = { version = "2", features = ["protocol-asset", "macos-private-api"] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
@@ -56,6 +58,11 @@ tempfile = "3"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cidre = { version = "0.15", default-features = false, features = ["app", "at", "blocks", "core_audio", "un"] }
+# Converts the banner window into a non-activating NSPanel so clicking its
+# buttons never steals focus from the call app, and the panel can float over
+# full-screen apps (fullScreenAuxiliary). Not on crates.io; pinned to a rev
+# of the v2 branch (the v2.1 branch is a different PanelBuilder API).
+tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", rev = "18ffb9a201fbf6fedfaa382fd4b92315ea30ab1a" }
 
 [dev-dependencies]
 # Adds `tauri::test::mock_app()` (Cargo's feature unification only pulls

@@ -93,7 +93,12 @@ recording mode and keeps the app responsive while the header reports `saving`.
 Bundled builds also attempt a system notification. This is best effort and
 depends on macOS notification authorization. `pnpm tauri dev` only uses the
 in-app banner because unsigned dev binaries cannot register reliable system
-notifications under their own app identity.
+notifications under their own app identity. The bundle must carry a real
+code signature for that registration: a bare `cargo`-produced binary is only
+linker-signed, and UNUserNotificationCenter rejects it with UNErrorDomain
+code 1 without ever showing the permission prompt. `signingIdentity: "-"`
+in `tauri.conf.json` makes the bundler ad-hoc sign every build, which is
+enough locally; distribution will need a real identity.
 
 ## Audio format
 

@@ -1,10 +1,18 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import "./index.css";
 import App from "./App";
+import BannerApp from "./banner/BannerApp";
+
+// One dist serves every window; the label picks the UI. The banner window
+// additionally needs a transparent body (it is a floating card on a
+// transparent window), tagged on <html> before first paint.
+const isBanner = getCurrentWebviewWindow().label === "banner";
+if (isBanner) {
+  document.documentElement.classList.add("banner-window");
+}
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>,
+  <React.StrictMode>{isBanner ? <BannerApp /> : <App />}</React.StrictMode>,
 );

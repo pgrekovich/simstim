@@ -65,6 +65,31 @@ export interface CallDetectedPayload {
   app_name: string;
 }
 
+/**
+ * What the floating banner window is showing. Pushed by the backend as the
+ * `banner-state` event and returned by `banner_current_state` (the mount-time
+ * seed, so a reloaded banner webview cannot miss a push). Mirrors
+ * `banner::BannerPayload` (apps/desktop/src-tauri/src/banner.rs).
+ */
+export type BannerStatePayload =
+  | { kind: "hidden" }
+  | { kind: "detected"; bundle_id: string; app_name: string }
+  | { kind: "ended" };
+
+export function bannerCurrentState(): Promise<BannerStatePayload> {
+  return invoke("banner_current_state");
+}
+
+/** Hides the banner (the X button and the auto-dismiss timeout). */
+export function bannerDismiss(): Promise<void> {
+  return invoke("banner_dismiss");
+}
+
+/** The banner's "Open simstim": shows and focuses the main window. */
+export function showMainWindow(): Promise<void> {
+  return invoke("show_main_window");
+}
+
 export interface CallEndedPayload {
   bundle_id: string;
   recording_id: string;

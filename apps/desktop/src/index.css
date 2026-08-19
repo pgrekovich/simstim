@@ -124,4 +124,10 @@
   body {
     @apply m-0 bg-background text-foreground;
     }
+  /* The banner window is a transparent layer around a floating card
+     (main.tsx tags <html> with .banner-window); the default opaque body
+     would paint the whole window rectangle. */
+  .banner-window body {
+    background: transparent;
+    }
 }

@@ -1,5 +1,6 @@
 pub mod aac;
 pub mod audio_sink;
+pub mod banner;
 pub mod config;
 pub mod detect;
 pub mod models;

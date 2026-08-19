@@ -57,7 +57,7 @@ libc = "0.2"
 tempfile = "3"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-cidre = { version = "0.15", default-features = false, features = ["app", "at", "blocks", "core_audio", "un"] }
+cidre = { version = "0.15", default-features = false, features = ["app", "at", "blocks", "core_audio"] }
 # Converts the banner window into a non-activating NSPanel so clicking its
 # buttons never steals focus from the call app, and the panel can float over
 # full-screen apps (fullScreenAuxiliary). Not on crates.io; pinned to a rev

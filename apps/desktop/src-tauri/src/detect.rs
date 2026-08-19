@@ -442,9 +442,6 @@ fn emit_actions(app: &AppHandle, actions: Vec<Action>) {
     for action in actions {
         match action {
             Action::Detected(active) => {
-                if !tauri::is_dev() {
-                    system_notification::post(&active.app_name);
-                }
                 if let Some(banner) = &banner {
                     // recording_live is false by contract: the detector only
                     // emits Detected while no recording is live (its own
@@ -485,86 +482,6 @@ fn emit_actions(app: &AppHandle, actions: Vec<Action>) {
             }
         }
     }
-}
-
-#[cfg(target_os = "macos")]
-mod system_notification {
-    use cidre::{blocks, ns, objc, un};
-
-    /// cidre 0.15 exposes the UN types but not these three center selectors.
-    /// This transparent overlay keeps the missing Objective-C surface local
-    /// while still using cidre for ownership, strings, requests and blocks.
-    #[repr(transparent)]
-    struct CenterApi(un::Center);
-
-    impl CenterApi {
-        #[objc::msg_send(requestAuthorizationWithOptions:completionHandler:)]
-        fn request_authorization(
-            &self,
-            options: un::AuthorizationOpts,
-            completion: &mut blocks::EscBlock<fn(bool, Option<&ns::Error>)>,
-        );
-
-        #[objc::msg_send(addNotificationRequest:withCompletionHandler:)]
-        fn add_request(
-            &self,
-            request: &un::NotificationRequest,
-            completion: Option<&mut blocks::ErrCh>,
-        );
-    }
-
-    fn center() -> &'static CenterApi {
-        let center = un::Center::current() as *mut un::Center;
-        unsafe { &*center.cast::<CenterApi>() }
-    }
-
-    pub fn post(app_name: &str) {
-        let app_name = app_name.to_string();
-        let mut completion =
-            blocks::EscBlock::new2(move |granted: bool, error: Option<&ns::Error>| {
-                if let Some(error) = error {
-                    eprintln!("call detection notification authorization failed: {error:?}");
-                    return;
-                }
-                if !granted {
-                    return;
-                }
-
-                let mut content = un::NotificationContent::new().copy_mut();
-                content.set_title(&ns::String::with_str("Call detected"));
-                content.set_body(&ns::String::with_str(&format!(
-                    "{app_name} is using the microphone. Open simstim to start recording."
-                )));
-                // Reusing one UNNotificationRequest identifier silently
-                // replaces the previous delivered notification. Give every
-                // call episode its own ID so a later call can alert again.
-                let notification_id = format!(
-                    "simstim-call-detected-{}-{}",
-                    std::process::id(),
-                    std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_nanos()
-                );
-                let request = un::NotificationRequest::with_trigger(
-                    &ns::String::with_str(&notification_id),
-                    &content,
-                    None,
-                );
-                let mut delivered = blocks::ErrCh::new1(|error: Option<&ns::Error>| {
-                    if let Some(error) = error {
-                        eprintln!("call detection notification failed: {error:?}");
-                    }
-                });
-                center().add_request(&request, Some(&mut delivered));
-            });
-        center().request_authorization(un::AuthorizationOpts::ALERT, &mut completion);
-    }
-}
-
-#[cfg(not(target_os = "macos"))]
-mod system_notification {
-    pub fn post(_app_name: &str) {}
 }
 
 fn run_worker(app: AppHandle, rx: Receiver<WorkerMsg>, tx: Sender<WorkerMsg>, enabled: bool) {

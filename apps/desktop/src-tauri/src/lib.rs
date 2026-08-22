@@ -531,6 +531,18 @@ pub fn run() {
             app.manage(detect::start(app.handle().clone(), cfg.detect_calls));
             Ok(())
         })
+        .on_window_event(|window, event| {
+            // macOS convention: closing the main window (red X or Cmd+W)
+            // keeps the app alive in the Dock; destroying it instead left
+            // nothing for a Dock click to reopen. Hide, don't close. Quit
+            // still works: Cmd+Q fires ExitRequested, not CloseRequested.
+            if window.label() == "main" {
+                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             start_recording,
             stop_recording,
@@ -558,8 +570,21 @@ pub fn run() {
             sessions::create_session,
             retranscribe::retranscribe_session
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            // A Dock-icon click on macOS arrives as Reopen; bring back the
+            // main window hidden by the close handler above.
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen { .. } = event {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
+            let _ = (app, event);
+        });
 }
 
 #[cfg(test)]

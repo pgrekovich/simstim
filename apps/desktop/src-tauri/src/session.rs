@@ -1165,6 +1165,24 @@ mod tests {
 
         const CHUNK_LEN: usize = 1600;
 
+        /// These tests exercise the real Vad + Engine, so they need the
+        /// downloaded Parakeet + Silero models (0.5-3 GB, never downloaded
+        /// in tests). CI runners don't have them: skip loudly there instead
+        /// of failing. On a machine that has run the app they always run.
+        fn skip_without_real_models() -> bool {
+            let models = models_dir();
+            let parakeet_wav = models.join("parakeet-tdt-0.6b-v3-int8/test_wavs/en.wav");
+            let silero = models.join("silero_vad.onnx");
+            if parakeet_wav.is_file() && silero.is_file() {
+                return false;
+            }
+            eprintln!(
+                "skipping: real models not downloaded under {}",
+                models.display()
+            );
+            true
+        }
+
         fn load_wav_16k_mono(path: &std::path::Path) -> Vec<f32> {
             let mut r = hound::WavReader::open(path).unwrap();
             let rate = r.spec().sample_rate;
@@ -1210,6 +1228,9 @@ mod tests {
         // segment here.
         #[test]
         fn forced_cut_bounds_every_segment_when_speech_outlasts_the_cap() {
+            if skip_without_real_models() {
+                return;
+            }
             let models = models_dir();
             let clip =
                 load_wav_16k_mono(&models.join("parakeet-tdt-0.6b-v3-int8/test_wavs/en.wav"));
@@ -1317,6 +1338,9 @@ mod tests {
         #[test]
         fn production_cap_is_never_exceeded_even_though_natural_vad_segmentation_handles_this_audio(
         ) {
+            if skip_without_real_models() {
+                return;
+            }
             let models = models_dir();
             let clip =
                 load_wav_16k_mono(&models.join("parakeet-tdt-0.6b-v3-int8/test_wavs/en.wav"));
@@ -1393,6 +1417,9 @@ mod tests {
         // offsets `on_line` actually receives.
         #[test]
         fn offsets_stay_correct_across_a_natural_finalize_then_a_forced_cut() {
+            if skip_without_real_models() {
+                return;
+            }
             let models = models_dir();
             let clip =
                 load_wav_16k_mono(&models.join("parakeet-tdt-0.6b-v3-int8/test_wavs/en.wav"));

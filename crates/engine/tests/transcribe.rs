@@ -1,5 +1,22 @@
 use simstim_engine::{models_dir, Engine, Vad};
 
+/// These tests run the real Vad + Engine, so they need the downloaded
+/// Parakeet + Silero models (0.5-3 GB, never downloaded in tests). CI
+/// runners don't have them: skip loudly there instead of failing. On a
+/// machine that has run the app they always run.
+fn skip_without_real_models() -> bool {
+    let models = models_dir();
+    let parakeet_wav = models.join("parakeet-tdt-0.6b-v3-int8/test_wavs/en.wav");
+    if parakeet_wav.is_file() && models.join("silero_vad.onnx").is_file() {
+        return false;
+    }
+    eprintln!(
+        "skipping: real models not downloaded under {}",
+        models.display()
+    );
+    true
+}
+
 // The shipped test wavs are not all 16 kHz (en.wav is 24 kHz, others 22050 Hz),
 // so this test-only loader resamples to the 16 kHz mono the engine expects.
 fn load_wav_16k_mono(path: &std::path::Path) -> Vec<f32> {
@@ -33,6 +50,9 @@ fn resample_linear(input: &[f32], from_rate: u32, to_rate: u32) -> Vec<f32> {
 
 #[test]
 fn transcribes_english_test_wav() {
+    if skip_without_real_models() {
+        return;
+    }
     let dir = models_dir();
     let wav = dir.join("parakeet-tdt-0.6b-v3-int8/test_wavs/en.wav");
     let samples = load_wav_16k_mono(&wav);
@@ -43,6 +63,9 @@ fn transcribes_english_test_wav() {
 
 #[test]
 fn vad_segments_speech_from_test_wav() {
+    if skip_without_real_models() {
+        return;
+    }
     let dir = models_dir();
     let wav = dir.join("parakeet-tdt-0.6b-v3-int8/test_wavs/en.wav");
     let samples = load_wav_16k_mono(&wav);
@@ -60,6 +83,9 @@ fn vad_segments_speech_from_test_wav() {
 // the last chunk, the flush()-pads-and-feeds-the-remainder path.
 #[test]
 fn vad_segments_speech_when_fed_in_small_chunks() {
+    if skip_without_real_models() {
+        return;
+    }
     let dir = models_dir();
     let wav = dir.join("parakeet-tdt-0.6b-v3-int8/test_wavs/en.wav");
     let samples = load_wav_16k_mono(&wav);

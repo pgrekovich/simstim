@@ -7,6 +7,22 @@ fn no_pending_edits() -> Arc<Mutex<PendingEdits>> {
     Arc::new(Mutex::new(PendingEdits::default()))
 }
 
+/// Every test in this file runs the real Vad + Engine, so they need the
+/// downloaded Parakeet + Silero models (0.5-3 GB, never downloaded in
+/// tests). CI runners don't have them: skip loudly there instead of
+/// failing. On a machine that has run the app they always run.
+fn skip_without_real_models() -> bool {
+    let models = simstim_engine::models_dir();
+    if test_wav_path().is_file() && models.join("silero_vad.onnx").is_file() {
+        return false;
+    }
+    eprintln!(
+        "skipping: real models not downloaded under {}",
+        models.display()
+    );
+    true
+}
+
 // The shipped test wavs are not all 16 kHz (en.wav is 24 kHz), so this
 // test-only loader resamples to the 16 kHz mono the pipeline expects. Copied
 // from crates/engine/tests/transcribe.rs.
@@ -55,6 +71,9 @@ fn test_wav_path() -> std::path::PathBuf {
 // near zero instead of continuing from where the first pass left off.
 #[test]
 fn vad_start_sample_is_absolute_over_the_whole_stream() {
+    if crate::skip_without_real_models() {
+        return;
+    }
     let dir = simstim_engine::models_dir();
     let samples = load_wav_16k_mono(&test_wav_path());
     let mut vad = simstim_engine::Vad::new(&dir).unwrap();
@@ -89,6 +108,9 @@ fn vad_start_sample_is_absolute_over_the_whole_stream() {
 
 #[test]
 fn session_transcribes_fake_channel_stream() {
+    if crate::skip_without_real_models() {
+        return;
+    }
     let samples = load_wav_16k_mono(&test_wav_path());
     let (tx, rx) = channel();
     // Bind the TempDir guard so it isn't dropped (and the directory deleted)
@@ -133,6 +155,9 @@ fn session_transcribes_fake_channel_stream() {
 // is unit-tested in `audio_sink.rs` directly.
 #[test]
 fn keep_audio_true_produces_a_flac_file_next_to_the_transcript() {
+    if crate::skip_without_real_models() {
+        return;
+    }
     let samples = load_wav_16k_mono(&test_wav_path());
     let (tx, rx) = channel();
     let dir = tempfile::tempdir().unwrap();
@@ -172,6 +197,9 @@ fn keep_audio_true_produces_a_flac_file_next_to_the_transcript() {
 // Global Constraints: `keep_audio: false` writes no audio file at all.
 #[test]
 fn keep_audio_false_writes_no_audio_file() {
+    if crate::skip_without_real_models() {
+        return;
+    }
     let samples = load_wav_16k_mono(&test_wav_path());
     let (tx, rx) = channel();
     let dir = tempfile::tempdir().unwrap();
@@ -209,6 +237,9 @@ fn keep_audio_false_writes_no_audio_file() {
 
 #[test]
 fn session_stop_with_no_chunks_still_produces_valid_file() {
+    if crate::skip_without_real_models() {
+        return;
+    }
     let (_tx, rx) = channel::<Chunk>();
     let dir = tempfile::tempdir().unwrap();
     let out = dir.path().join("call.md");
@@ -242,6 +273,9 @@ fn session_stop_with_no_chunks_still_produces_valid_file() {
 
 #[test]
 fn pending_edits_set_before_start_land_in_the_saved_file() {
+    if crate::skip_without_real_models() {
+        return;
+    }
     let samples = load_wav_16k_mono(&test_wav_path());
     let (tx, rx) = channel();
     let dir = tempfile::tempdir().unwrap();
@@ -284,6 +318,9 @@ fn pending_edits_set_before_start_land_in_the_saved_file() {
 
 #[test]
 fn save_failures_are_reported_via_on_error_and_stop_returns_err() {
+    if crate::skip_without_real_models() {
+        return;
+    }
     // A parent directory that doesn't exist makes every save (initial and
     // final) fail, without needing to fake out the filesystem.
     let dir = tempfile::tempdir().unwrap();
@@ -339,6 +376,9 @@ fn parse_offset_secs(line: &str) -> Option<u64> {
 #[test]
 fn continuing_an_existing_session_appends_after_existing_content_with_continued_timestamps_title_notes_date_and_duration(
 ) {
+    if crate::skip_without_real_models() {
+        return;
+    }
     let samples = load_wav_16k_mono(&test_wav_path());
     let dir = tempfile::tempdir().unwrap();
     let out = dir.path().join("call.md");
@@ -436,6 +476,9 @@ fn continuing_an_existing_session_appends_after_existing_content_with_continued_
 
 #[test]
 fn continuing_a_session_with_no_prior_transcript_starts_offsets_at_zero() {
+    if crate::skip_without_real_models() {
+        return;
+    }
     // A freshly created empty note (title "Untitled", no transcript yet):
     // continuing it should behave like a normal first recording, not
     // introduce a stray offset or leading blank line.
@@ -489,6 +532,9 @@ fn continuing_a_session_with_no_prior_transcript_starts_offsets_at_zero() {
 // WHILE the worker is still running, before ever calling `stop()`.
 #[test]
 fn continuing_a_session_does_not_wipe_its_existing_duration_before_the_final_save() {
+    if crate::skip_without_real_models() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let out = dir.path().join("call.md");
     let existing = "---\ndate: 2026-06-01T09:00:00+02:00\ntitle: Weekly sync\nasr: parakeet-tdt-0.6b-v3\nduration: 5m\n---\n\n## Notes\n\nSome notes\n\n## Transcript\n\n[00:00:01] Me: hi\n";
@@ -604,6 +650,9 @@ mod continuing_audio {
 
     #[test]
     fn continuing_with_an_existing_flac_prefills_it_before_new_capture() {
+        if crate::skip_without_real_models() {
+            return;
+        }
         let dir = tempfile::tempdir().unwrap();
         let out = dir.path().join("call.md");
         std::fs::write(&out, existing_md("duration: 1m\n")).unwrap();
@@ -709,6 +758,9 @@ mod continuing_audio {
 
     #[test]
     fn continuing_with_no_audio_but_a_prior_last_line_offset_prefills_silence_to_match() {
+        if crate::skip_without_real_models() {
+            return;
+        }
         let dir = tempfile::tempdir().unwrap();
         let out = dir.path().join("call.md");
         // Deliberately no audio file at all -- the "keep_audio was off, now
@@ -770,6 +822,9 @@ mod continuing_audio {
     /// overlapping it.
     #[test]
     fn continuing_when_audio_is_longer_than_the_last_line_puts_new_lines_after_the_audio_end() {
+        if crate::skip_without_real_models() {
+            return;
+        }
         let dir = tempfile::tempdir().unwrap();
         let out = dir.path().join("call.md");
         // Last line at 00:00:01, but (below) 3 real seconds of existing
@@ -839,6 +894,9 @@ mod continuing_audio {
     /// continuation, not just the `AudioSink` unit test.
     #[test]
     fn continuing_from_a_retained_wav_fallback_appends_new_audio_after_the_old() {
+        if crate::skip_without_real_models() {
+            return;
+        }
         let dir = tempfile::tempdir().unwrap();
         let out = dir.path().join("call.md");
         std::fs::write(&out, existing_md("duration: 1m\n")).unwrap();
@@ -924,6 +982,9 @@ mod continuing_audio {
     /// just the `AudioSink` unit tests that call `new_continuing` directly.
     #[test]
     fn continuing_after_a_crashed_prior_continuation_recovers_its_audio() {
+        if crate::skip_without_real_models() {
+            return;
+        }
         let dir = tempfile::tempdir().unwrap();
         let out = dir.path().join("call.md");
         std::fs::write(&out, existing_md("duration: 1m\n")).unwrap();
@@ -1002,6 +1063,9 @@ mod continuing_audio {
     /// recording, while leaving the original file completely untouched.
     #[test]
     fn continuing_with_a_corrupt_existing_audio_reports_an_error_and_leaves_it_untouched() {
+        if crate::skip_without_real_models() {
+            return;
+        }
         let dir = tempfile::tempdir().unwrap();
         let out = dir.path().join("call.md");
         std::fs::write(&out, existing_md("duration: 1m\n")).unwrap();

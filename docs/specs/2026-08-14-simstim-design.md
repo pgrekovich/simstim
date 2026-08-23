@@ -343,6 +343,25 @@ layer removed (cidre's `un` feature dropped).
 6. Windows port, then Linux.
 7. Public release: signing, notarization, updater, docs, Show HN.
 
+Idea backlog (owner-approved direction, no stage yet):
+
+- **Them-channel diarization in the offline pass** (idea saved 2026-08-23).
+  Whisper doesn't diarize; sherpa-onnx (already in the stack) ships an
+  offline pipeline for it: pyannote segmentation (~6 MB) + speaker
+  embeddings (~20-70 MB) + clustering. Run it on the THEM channel only
+  during re-transcribe -- Me stays exact by construction, and the model
+  only has to answer "which remote speaker", a strictly easier task than
+  the mixed-track diarization competitors run (our channel split removes
+  the own-voice-vs-remote confusion entirely). Map speaker turns onto
+  whisper segments by timestamp, the same mechanic the silence-cut
+  offset mapping already uses; lines become `Them 1:` / `Them 2:`.
+  Costs to plan for: format v2 change (parse/render round-trip, old
+  notes stay valid), unknown speaker count (threshold clustering),
+  call-codec-compressed audio weakening embeddings (fine at 2-3 remote
+  speakers, degrades in a six-person shared-mic room, same as everyone).
+  Strictly an opt-in re-transcribe toggle, off by default. Possible
+  follow-up: renaming `Them N` to real names in the note.
+
 ## Risks / open questions
 
 - **Core Audio taps are under-documented.** Known footguns: AVAudioEngine

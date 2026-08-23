@@ -1,5 +1,7 @@
 # simstim
 
+<img src="apps/desktop/src-tauri/icons/128x128@2x.png" align="right" width="140" height="140" alt="simstim icon: a tape-recorder face with two reels and a red recording strip">
+
 **Local-first call transcription for macOS.** Real-time, on-device ASR; one
 call = one plain `.md` file in a folder you own.
 

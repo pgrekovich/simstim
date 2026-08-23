@@ -35,6 +35,29 @@ ASR models download inside the app on first run (Settings > Models), into
 
 [releases]: ../../releases/latest
 
+## Why not Granola, Hyprnote or Meetily
+
+[Granola](https://granola.ai) nailed the UX and this app borrows from it
+shamelessly, but it is cloud all the way down: audio streams to hosted ASR,
+notes live on their servers behind an account, the audio itself is not kept
+(a wrong transcript can never be re-checked), and there is no plain-markdown
+export.
+
+[Hyprnote](https://github.com/fastrepl/anarlog) is the closest project and
+has real local ASR, but it grew into a platform: accounts, a Pro tier, cloud
+sync, analytics on by default, and a SQLite store its own docs tell you not
+to edit directly or put inside an Obsidian vault. Markdown is a manual
+per-meeting export.
+
+[Meetily](https://github.com/Zackriya-Solutions/meetily) is honestly local
+with no login, but the transcripts live in SQLite and markdown export is a
+paid feature: the data is local, yet not really yours.
+
+simstim is the leftover quadrant: local like Meetily, polished-workflow like
+Granola, and the `.md` in your folder IS the storage, not an export. The
+audio stays next to it, re-transcribable with a stronger model any time.
+Full reasoning with sources: [prior-art.md](docs/research/prior-art.md).
+
 ## The file
 
 Everything about a call lives in one `.md`, its audio (if kept) sits next to

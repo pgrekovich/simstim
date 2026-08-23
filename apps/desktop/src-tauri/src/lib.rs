@@ -568,6 +568,7 @@ pub fn run() {
             sessions::read_session,
             sessions::save_session,
             sessions::create_session,
+            sessions::delete_session,
             retranscribe::retranscribe_session
         ])
         .build(tauri::generate_context!())

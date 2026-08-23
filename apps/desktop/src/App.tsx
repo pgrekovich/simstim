@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { ask } from "@tauri-apps/plugin-dialog";
 import { Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { RecordButton } from "@/components/RecordButton";
@@ -8,6 +9,7 @@ import { Sidebar } from "@/components/Sidebar";
 import { SettingsDialog } from "@/components/SettingsDialog";
 import {
   createSession,
+  deleteSession,
   getConfig,
   listSessions,
   readSession,
@@ -673,6 +675,28 @@ function App() {
   // untouched: this is just another (inactive) session file that happens to
   // start selected, not a substitute for `handleStart`. Recording always
   // creates its own file via `start_recording`, independent of this one.
+  async function handleDeleteSession(path: string) {
+    const title = sessions.find((s) => s.path === path)?.title ?? "this note";
+    // A native confirm, not a silent delete: the files leave the folder.
+    // They go to the Trash (recoverable), and the dialog says so.
+    const confirmed = await ask(`Move "${title}" and its audio to the Trash?`, {
+      title: "Delete note",
+      kind: "warning",
+      okLabel: "Move to Trash",
+      cancelLabel: "Cancel",
+    });
+    if (!confirmed) return;
+    try {
+      await deleteSession(path);
+      if (selectedPath === path) {
+        setSelectedPath(null);
+      }
+      await refreshSessions();
+    } catch (err) {
+      setStatus({ kind: "error", message: String(err) });
+    }
+  }
+
   async function handleNewSession() {
     if (busy) return;
     setBusy(true);
@@ -727,6 +751,7 @@ function App() {
         activePath={activePath}
         onSelect={setSelectedPath}
         onNewSession={handleNewSession}
+        onDelete={handleDeleteSession}
       />
 
       <div className="flex min-w-0 flex-1 flex-col">

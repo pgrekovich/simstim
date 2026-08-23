@@ -276,6 +276,19 @@ impl RetranscribeState {
     pub fn has_queued_jobs(&self) -> bool {
         !self.0.lock().unwrap().queue.pending.is_empty()
     }
+
+    /// Whether `path` specifically is the currently RUNNING job or sitting
+    /// anywhere in the FIFO queue (stage 0.10: `sessions::delete_session`'s
+    /// rejection -- trashing a session's files out from under its own
+    /// in-flight or queued re-transcribe would at best fail the job late and
+    /// at worst race its final write). Unlike [`RetranscribeState::is_running`]
+    /// this is per-path: a job busy with a DIFFERENT session doesn't block
+    /// deleting this one.
+    pub fn involves(&self, path: &str) -> bool {
+        let inner = self.0.lock().unwrap();
+        inner.queue.running.as_deref() == Some(path)
+            || inner.queue.pending.iter().any(|p| p == path)
+    }
 }
 
 /// Claims or queues `path` on `app`'s [`RetranscribeState`], storing `job`'s
@@ -1565,6 +1578,24 @@ mod tests {
                 inner.queue.enqueue("/tmp/b.md");
             }
             assert!(state.has_queued_jobs(), "a second path queues behind the first");
+        }
+
+        #[test]
+        fn involves_is_per_path_over_both_running_and_pending() {
+            let state = RetranscribeState::default();
+            assert!(!state.involves("/tmp/a.md"));
+
+            {
+                let mut inner = state.0.lock().unwrap();
+                inner.queue.enqueue("/tmp/a.md");
+                inner.queue.enqueue("/tmp/b.md");
+            }
+            assert!(state.involves("/tmp/a.md"), "the running path is involved");
+            assert!(state.involves("/tmp/b.md"), "a queued path is involved");
+            assert!(
+                !state.involves("/tmp/c.md"),
+                "a path the queue has never seen is not"
+            );
         }
     }
 

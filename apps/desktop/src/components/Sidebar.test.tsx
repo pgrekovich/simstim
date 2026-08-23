@@ -21,6 +21,7 @@ describe("Sidebar: recording indicator", () => {
         activePath="/tmp/a.md"
         onSelect={vi.fn()}
         onNewSession={vi.fn()}
+        onDelete={vi.fn()}
       />
     );
 
@@ -43,6 +44,7 @@ describe("Sidebar: recording indicator", () => {
         activePath="/tmp/a.md"
         onSelect={vi.fn()}
         onNewSession={vi.fn()}
+        onDelete={vi.fn()}
       />
     );
 
@@ -61,6 +63,7 @@ describe("Sidebar: recording indicator", () => {
         activePath={null}
         onSelect={vi.fn()}
         onNewSession={vi.fn()}
+        onDelete={vi.fn()}
       />
     );
 
@@ -78,6 +81,7 @@ describe("Sidebar: selected styling", () => {
         activePath={null}
         onSelect={vi.fn()}
         onNewSession={vi.fn()}
+        onDelete={vi.fn()}
       />
     );
 
@@ -104,6 +108,7 @@ describe("Sidebar: selected styling", () => {
         activePath={null}
         onSelect={vi.fn()}
         onNewSession={vi.fn()}
+        onDelete={vi.fn()}
       />
     );
 
@@ -130,11 +135,51 @@ describe("Sidebar: new note button", () => {
         activePath={null}
         onSelect={vi.fn()}
         onNewSession={onNewSession}
+        onDelete={vi.fn()}
       />
     );
 
     expect(screen.queryByText(/^simstim$/i)).toBeNull();
     screen.getByRole("button", { name: /new note/i }).click();
     expect(onNewSession).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("Sidebar: delete button", () => {
+  it("calls onDelete with the row's path, and never onSelect, when its trash button is clicked", () => {
+    const onSelect = vi.fn();
+    const onDelete = vi.fn();
+    render(
+      <Sidebar
+        sessions={makeSessions()}
+        selectedPath={null}
+        activePath={null}
+        onSelect={onSelect}
+        onNewSession={vi.fn()}
+        onDelete={onDelete}
+      />
+    );
+
+    const trashButtons = screen.getAllByRole("button", { name: /move to trash/i });
+    expect(trashButtons).toHaveLength(2);
+    trashButtons[1].click();
+    expect(onDelete).toHaveBeenCalledExactlyOnceWith("/tmp/b.md");
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("offers no trash button for the recording row (the backend refuses deleting it anyway)", () => {
+    render(
+      <Sidebar
+        sessions={makeSessions()}
+        selectedPath={null}
+        activePath="/tmp/a.md"
+        onSelect={vi.fn()}
+        onNewSession={vi.fn()}
+        onDelete={vi.fn()}
+      />
+    );
+
+    // Only Session B's row (not recording) gets one.
+    expect(screen.getAllByRole("button", { name: /move to trash/i })).toHaveLength(1);
   });
 });

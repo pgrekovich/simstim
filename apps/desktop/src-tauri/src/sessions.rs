@@ -313,6 +313,49 @@ fn create_session_at(dir: &Path, now: DateTime<Local>) -> Result<PathBuf> {
     Ok(path)
 }
 
+/// Rejections for `delete_session`, split from the deletion itself so
+/// they're unit-testable with plain `Option<&Path>`/`bool` values (the same
+/// shape as `retranscribe::check_not_active`, and the same reasoning as
+/// `models::validate_delete`). Each busy state gets its own user-facing
+/// message since they call for different actions.
+fn validate_delete_session(
+    md_path: &Path,
+    active: Option<&Path>,
+    finalizing: Option<&Path>,
+    retranscribing: bool,
+) -> Result<(), String> {
+    if active == Some(md_path) {
+        Err("this session is currently recording; stop it before deleting".to_string())
+    } else if finalizing == Some(md_path) {
+        Err("this call is still being saved, try again in a moment".to_string())
+    } else if retranscribing {
+        Err("this session is being re-transcribed; wait for it to finish before deleting".to_string())
+    } else if !md_path.is_file() {
+        Err("session file not found".to_string())
+    } else {
+        Ok(())
+    }
+}
+
+/// Moves `md_path` and every audio sibling that exists to the Trash -- not a
+/// hard unlink: the user's words are sacred, so a mis-click must stay
+/// recoverable from the Finder. Sweeps ALL audio variants
+/// (`.flac`/`.m4a`/`.wav`/`.recording.wav`), not just the first one
+/// `retranscribe::resolve_audio_path` would pick: a session can carry a
+/// stale fallback next to its encoded file, and deleting the note must not
+/// strand any of them.
+pub fn delete_session_at(md_path: &Path) -> Result<()> {
+    let mut doomed = vec![md_path.to_path_buf()];
+    let audio_candidates = [
+        crate::audio_sink::audio_path_for(md_path),
+        crate::audio_sink::m4a_path_for(md_path),
+        crate::audio_sink::wav_path_for(md_path),
+        crate::audio_sink::recording_wav_path_for(md_path),
+    ];
+    doomed.extend(audio_candidates.into_iter().filter(|p| p.is_file()));
+    trash::delete_all(&doomed).map_err(|e| anyhow!("couldn't move to Trash: {e}"))
+}
+
 #[tauri::command]
 pub fn list_sessions() -> Vec<SessionMeta> {
     list_sessions_in(&Config::load().output_dir)
@@ -329,6 +372,28 @@ pub fn create_session() -> Result<String, String> {
 pub fn read_session(path: String, state: State<AppState>) -> Result<SessionDataOut, String> {
     let finalizing = state.finalizing_match(Path::new(&path));
     read_session_at(Path::new(&path), finalizing.as_deref()).map_err(|e| e.to_string())
+}
+
+/// Moves a session's `.md` and its audio to the Trash (stage 0.10). Rejects
+/// the currently-recording session (single-writer rule -- and its worker
+/// would just keep writing a resurrected file anyway), one still being
+/// finalized, and one with an in-flight or queued re-transcribe job.
+#[tauri::command]
+pub fn delete_session(
+    path: String,
+    state: State<AppState>,
+    retranscribe: State<crate::retranscribe::RetranscribeState>,
+) -> Result<(), String> {
+    let md_path = Path::new(&path);
+    let active = state.active_output_path();
+    let finalizing = state.finalizing_match(md_path);
+    validate_delete_session(
+        md_path,
+        active.as_deref(),
+        finalizing.as_deref(),
+        retranscribe.involves(&path),
+    )?;
+    delete_session_at(md_path).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -350,6 +415,81 @@ mod tests {
 
     fn t(hour: u32, min: u32, sec: u32) -> DateTime<Local> {
         Local.with_ymd_and_hms(2026, 8, 14, hour, min, sec).unwrap()
+    }
+
+    mod delete_session {
+        use super::*;
+
+        fn session_with_audio() -> (tempfile::TempDir, PathBuf, PathBuf) {
+            let dir = tempfile::tempdir().unwrap();
+            let md = dir.path().join("call.md");
+            Transcript::new(t(9, 0, 0)).save(&md).unwrap();
+            let flac = dir.path().join("call.flac");
+            std::fs::write(&flac, b"fake-audio").unwrap();
+            (dir, md, flac)
+        }
+
+        #[test]
+        fn validate_rejects_the_recording_session() {
+            let (_dir, md, _) = session_with_audio();
+            let err = validate_delete_session(&md, Some(&md), None, false).unwrap_err();
+            assert!(err.contains("currently recording"), "{err}");
+        }
+
+        #[test]
+        fn validate_rejects_a_finalizing_session() {
+            let (_dir, md, _) = session_with_audio();
+            let err = validate_delete_session(&md, None, Some(&md), false).unwrap_err();
+            assert!(err.contains("still being saved"), "{err}");
+        }
+
+        #[test]
+        fn validate_rejects_a_session_busy_retranscribing() {
+            let (_dir, md, _) = session_with_audio();
+            let err = validate_delete_session(&md, None, None, true).unwrap_err();
+            assert!(err.contains("re-transcribed"), "{err}");
+        }
+
+        #[test]
+        fn validate_rejects_a_missing_file() {
+            let err = validate_delete_session(Path::new("/no/such/session.md"), None, None, false)
+                .unwrap_err();
+            assert!(err.contains("not found"), "{err}");
+        }
+
+        #[test]
+        fn validate_allows_a_plain_existing_session_even_while_other_paths_are_busy() {
+            let (_dir, md, _) = session_with_audio();
+            let other = Path::new("/somewhere/else.md");
+            assert!(validate_delete_session(&md, Some(other), Some(other), false).is_ok());
+        }
+
+        #[test]
+        fn delete_moves_the_md_and_every_audio_sibling_out_of_the_folder() {
+            let (dir, md, flac) = session_with_audio();
+            // A stale wav fallback next to the encoded flac must go too.
+            let wav = dir.path().join("call.wav");
+            std::fs::write(&wav, b"fake-wav").unwrap();
+            // An unrelated neighbor session must be untouched.
+            let neighbor = dir.path().join("other.md");
+            Transcript::new(t(10, 0, 0)).save(&neighbor).unwrap();
+
+            delete_session_at(&md).unwrap();
+
+            assert!(!md.exists(), "md must be gone from the output folder");
+            assert!(!flac.exists(), "flac must be gone from the output folder");
+            assert!(!wav.exists(), "wav fallback must be gone too");
+            assert!(neighbor.exists(), "neighbor session must be untouched");
+        }
+
+        #[test]
+        fn delete_works_for_a_session_without_audio() {
+            let dir = tempfile::tempdir().unwrap();
+            let md = dir.path().join("call.md");
+            Transcript::new(t(9, 0, 0)).save(&md).unwrap();
+            delete_session_at(&md).unwrap();
+            assert!(!md.exists());
+        }
     }
 
     #[test]

@@ -37,6 +37,9 @@ reqwest = { version = "0.13", default-features = false, features = ["stream", "r
 # another one can still await its OWN job's result once its turn comes,
 # instead of resolving before the job actually ran.
 tokio = { version = "1", default-features = false, features = ["fs", "io-util", "sync"] }
+# Session deletion moves files to the macOS Trash instead of unlinking them:
+# a mis-click must stay recoverable (the user's words are sacred).
+trash = "5"
 futures-util = "0.3"
 tar = "0.4"
 bzip2 = "0.4"

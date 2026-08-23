@@ -237,6 +237,10 @@ pub struct ContinueFrom {
     pub transcript_prefix: String,
     pub base_offset_secs: f64,
     pub previous_duration_secs: u64,
+    /// An existing `## Summary` (stage 0.11 enhance) survives recording into
+    /// the note, same as notes and the transcript prefix do.
+    pub summary: String,
+    pub summary_model: Option<String>,
 }
 
 /// Loads `path`'s existing content into a [`ContinueFrom`] seed for
@@ -254,6 +258,8 @@ pub fn load_continue_from(path: &Path) -> anyhow::Result<ContinueFrom> {
         transcript_prefix: data.transcript,
         base_offset_secs,
         previous_duration_secs: meta.duration_secs.unwrap_or(0),
+        summary: data.summary,
+        summary_model: data.summary_model,
     })
 }
 
@@ -499,6 +505,7 @@ fn run_worker(
             transcript.set_notes(seed.notes);
             transcript.set_raw_date(seed.raw_date);
             transcript.set_transcript_prefix(seed.transcript_prefix);
+            transcript.set_summary(seed.summary, seed.summary_model);
             transcript.set_duration_secs(seed.previous_duration_secs);
             Some((seed.previous_duration_secs, seed.base_offset_secs))
         }

@@ -52,6 +52,17 @@ pub struct Transcript {
     /// of `lines` in the `## Transcript` section. See
     /// [`Transcript::set_transcript_prefix`].
     transcript_prefix: Option<String>,
+    /// AI-generated summary (stage 0.11 enhance), rendered as its own
+    /// `## Summary` section between Notes and Transcript. Generated text
+    /// NEVER mixes into `notes` (the user's words are sacred); it lives
+    /// here, labeled with the model that produced it via `summary_model`.
+    /// Empty = no section rendered at all, which keeps every pre-enhance
+    /// file byte-identical across a rewrite.
+    summary: String,
+    /// The `summary_model:` frontmatter value naming what generated
+    /// `summary` (e.g. "claude"). Only rendered while `summary` is
+    /// non-empty.
+    summary_model: Option<String>,
 }
 
 impl Transcript {
@@ -67,7 +78,17 @@ impl Transcript {
             lines: Vec::new(),
             transcript_override: None,
             transcript_prefix: None,
+            summary: String::new(),
+            summary_model: None,
         }
+    }
+
+    /// Sets the AI-generated `## Summary` section and the model label it
+    /// carries (stage 0.11 enhance). An empty `text` clears both -- the
+    /// section disappears from the rendered file entirely.
+    pub fn set_summary(&mut self, text: String, model: Option<String>) {
+        self.summary_model = if text.trim().is_empty() { None } else { model };
+        self.summary = text;
     }
 
     pub fn set_title(&mut self, title: String) {
@@ -220,10 +241,21 @@ impl Transcript {
         if let Some(secs) = self.audio_from_secs {
             out.push_str(&format!("audio_from: {secs}\n"));
         }
+        let summary = self.summary.trim();
+        if !summary.is_empty()
+            && let Some(model) = &self.summary_model
+        {
+            out.push_str(&format!("summary_model: {model}\n"));
+        }
         out.push_str("---\n\n## Notes\n\n");
         let notes = self.notes.trim();
         if !notes.is_empty() {
             out.push_str(notes);
+            out.push_str("\n\n");
+        }
+        if !summary.is_empty() {
+            out.push_str("## Summary\n\n");
+            out.push_str(summary);
             out.push_str("\n\n");
         }
         out.push_str("## Transcript\n\n");
@@ -368,6 +400,13 @@ pub struct SessionData {
     /// [`Transcript::set_asr`] instead of silently resetting it to the
     /// default.
     pub asr: String,
+    /// The `## Summary` section body (stage 0.11 enhance), empty when the
+    /// file has none. Carried through rewrites the same way `asr` is, via
+    /// [`Transcript::set_summary`].
+    pub summary: String,
+    /// The `summary_model:` frontmatter value; only ever `Some` while
+    /// `summary` is non-empty.
+    pub summary_model: Option<String>,
     /// See [`Transcript::set_audio_from_secs`]'s docs: `None` for the
     /// overwhelming majority of files (audio, if any, covers the whole
     /// timeline), `Some(secs)` only for a session continued after its audio
@@ -424,11 +463,32 @@ pub fn parse_session(path: &Path) -> Result<SessionData> {
         find_last_exact_line(body, "## Transcript")
             .ok_or_else(|| anyhow!("not a transcript file: missing ## Transcript section"))?;
 
+    // The `## Summary` section (stage 0.11 enhance) sits between Notes and
+    // Transcript. Located by the LAST exact `## Summary` line before the
+    // transcript section -- same heuristic (and same documented limitation)
+    // as the `## Transcript` lookup above: the machine-written section
+    // header always follows the notes, so it wins over a passing mention in
+    // them.
+    let pre_transcript = &body[..transcript_line_start];
+    let summary_split = find_last_exact_line(pre_transcript, "## Summary");
+
+    let notes_end = summary_split
+        .map(|(summary_line_start, _)| summary_line_start)
+        .unwrap_or(transcript_line_start);
     let notes = match find_first_exact_line(body, "## Notes") {
-        Some((_, notes_content_start)) => body[notes_content_start..transcript_line_start]
-            .trim()
-            .to_string(),
+        Some((_, notes_content_start)) => body[notes_content_start..notes_end].trim().to_string(),
         None => String::new(),
+    };
+
+    let summary = summary_split
+        .map(|(_, summary_content_start)| {
+            body[summary_content_start..transcript_line_start].trim().to_string()
+        })
+        .unwrap_or_default();
+    let summary_model = if summary.is_empty() {
+        None
+    } else {
+        fields.get("summary_model").cloned()
     };
 
     let transcript = body[transcript_content_start..].trim().to_string();
@@ -440,6 +500,8 @@ pub fn parse_session(path: &Path) -> Result<SessionData> {
         transcript,
         asr,
         audio_from_secs,
+        summary,
+        summary_model,
     })
 }
 
@@ -555,6 +617,80 @@ mod tests {
 
     fn t0() -> DateTime<Local> {
         Local.with_ymd_and_hms(2026, 8, 14, 14, 30, 0).unwrap()
+    }
+
+    mod summary_section {
+        use super::*;
+
+        #[test]
+        fn round_trips_summary_and_its_model_label() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("call.md");
+            let mut t = Transcript::new(t0());
+            t.set_title("Weekly sync".into());
+            t.set_notes("- my rough notes".into());
+            t.set_summary("## Decisions\n\n- ship it".into(), Some("claude".into()));
+            t.add(Speaker::Me, 3.0, "hi".into());
+            t.save(&path).unwrap();
+
+            let parsed = parse_session(&path).unwrap();
+            assert_eq!(parsed.notes, "- my rough notes");
+            assert_eq!(parsed.summary, "## Decisions\n\n- ship it");
+            assert_eq!(parsed.summary_model.as_deref(), Some("claude"));
+            assert_eq!(parsed.transcript, "[00:00:03] Me: hi");
+
+            // Byte-stable across a re-render from the parsed data.
+            let mut again = Transcript::new(t0());
+            again.set_raw_date(parsed.date);
+            again.set_title(parsed.title);
+            again.set_notes(parsed.notes);
+            again.set_summary(parsed.summary, parsed.summary_model);
+            again.set_raw_transcript(parsed.transcript);
+            let rendered = std::fs::read_to_string(&path).unwrap();
+            assert_eq!(again.render(), rendered);
+        }
+
+        #[test]
+        fn a_file_without_summary_parses_to_empty_and_renders_no_section() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("call.md");
+            let mut t = Transcript::new(t0());
+            t.set_notes("plain note".into());
+            t.save(&path).unwrap();
+
+            let rendered = std::fs::read_to_string(&path).unwrap();
+            assert!(!rendered.contains("## Summary"), "{rendered}");
+            assert!(!rendered.contains("summary_model"), "{rendered}");
+
+            let parsed = parse_session(&path).unwrap();
+            assert_eq!(parsed.summary, "");
+            assert_eq!(parsed.summary_model, None);
+            assert_eq!(parsed.notes, "plain note");
+        }
+
+        #[test]
+        fn clearing_the_summary_removes_the_section_and_the_label() {
+            let mut t = Transcript::new(t0());
+            t.set_summary("old summary".into(), Some("codex".into()));
+            t.set_summary(String::new(), None);
+            let md = t.render();
+            assert!(!md.contains("## Summary"));
+            assert!(!md.contains("summary_model"));
+        }
+
+        #[test]
+        fn notes_mentioning_the_summary_heading_inline_stay_notes() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("call.md");
+            let mut t = Transcript::new(t0());
+            t.set_notes("about the ## Summary heading in passing".into());
+            t.set_summary("real generated text".into(), Some("claude".into()));
+            t.save(&path).unwrap();
+
+            let parsed = parse_session(&path).unwrap();
+            assert_eq!(parsed.notes, "about the ## Summary heading in passing");
+            assert_eq!(parsed.summary, "real generated text");
+        }
     }
 
     #[test]

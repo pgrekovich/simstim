@@ -14,8 +14,11 @@ vi.mock("@/lib/ipc", () => ({
     notes: "",
     transcript: "",
     audio_path: null,
+    summary: "",
+    summary_model: null,
   }),
   retranscribeSession: vi.fn().mockResolvedValue(undefined),
+  enhanceSession: vi.fn().mockResolvedValue(""),
 }));
 
 // SessionView feeds `<audio src>` through `convertFileSrc`; a real Tauri
@@ -32,6 +35,8 @@ const baseData: SessionData = {
   notes: "",
   transcript: "",
   audio_path: null,
+  summary: "",
+  summary_model: null,
 };
 
 beforeEach(() => {
@@ -39,6 +44,7 @@ beforeEach(() => {
   vi.mocked(ipc.updateActiveSession).mockClear();
   vi.mocked(ipc.readSession).mockClear();
   vi.mocked(ipc.retranscribeSession).mockClear();
+  vi.mocked(ipc.enhanceSession).mockClear().mockResolvedValue("");
 });
 
 describe("SessionView: stop-transition flush (Task 6 review fix)", () => {
@@ -191,6 +197,8 @@ describe("SessionView: audio playback and re-transcribe (Task 4, stage-0.7)", ()
         initialData={{
           ...baseData,
           audio_path: "/tmp/call.flac",
+          summary: "",
+          summary_model: null,
           transcript: "[00:01:05] Me: hello there\n",
         }}
         liveLines={[]}
@@ -343,6 +351,8 @@ describe("SessionView: audio playback and re-transcribe (Task 4, stage-0.7)", ()
       notes: "",
       transcript: "[00:00:03] Me: new whisper text\n",
       audio_path: "/tmp/call.flac",
+      summary: "",
+      summary_model: null,
     });
     render(
       <SessionView
@@ -351,6 +361,8 @@ describe("SessionView: audio playback and re-transcribe (Task 4, stage-0.7)", ()
         initialData={{
           ...baseData,
           audio_path: "/tmp/call.flac",
+          summary: "",
+          summary_model: null,
           transcript: "[00:00:03] Me: old parakeet text\n",
         }}
         liveLines={[]}
@@ -376,6 +388,8 @@ describe("SessionView: audio playback and re-transcribe (Task 4, stage-0.7)", ()
       notes: "",
       transcript: "[00:00:03] Me: new whisper text\n",
       audio_path: "/tmp/call.flac",
+      summary: "",
+      summary_model: null,
     });
     render(
       <SessionView
@@ -384,6 +398,8 @@ describe("SessionView: audio playback and re-transcribe (Task 4, stage-0.7)", ()
         initialData={{
           ...baseData,
           audio_path: "/tmp/call.flac",
+          summary: "",
+          summary_model: null,
           transcript: "[00:00:03] Me: old parakeet text\n",
         }}
         liveLines={[]}
@@ -433,5 +449,90 @@ describe("SessionView: notes/transcript tabs (stage 0.10)", () => {
       .getByPlaceholderText("your notes...")
       .closest('[data-slot="tabs-content"]');
     expect(notesPanel).toHaveAttribute("data-state", "inactive");
+  });
+});
+
+describe("SessionView: enhance (stage 0.11)", () => {
+  it("enhances, re-reads the file and shows the summary labeled with its model", async () => {
+    vi.mocked(ipc.enhanceSession).mockResolvedValue("- **ship v2 friday**");
+    vi.mocked(ipc.readSession).mockResolvedValue({
+      title: "Weekly sync",
+      date: "",
+      notes: "rough",
+      transcript: "[00:00:01] Me: hi",
+      audio_path: null,
+      summary: "- **ship v2 friday**",
+      summary_model: "claude",
+    });
+
+    render(
+      <SessionView
+        path="/tmp/call.md"
+        isActive={false}
+        initialData={{ ...baseData, notes: "rough", transcript: "[00:00:01] Me: hi" }}
+        liveLines={[]}
+        interimMe=""
+        interimThem=""
+        retranscribingJob={null}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /^enhance$/i }));
+    await waitFor(() => expect(ipc.enhanceSession).toHaveBeenCalledExactlyOnceWith("/tmp/call.md"));
+
+    await screen.findByText("Summary");
+    expect(screen.getByText("by claude")).toBeInTheDocument();
+    expect(screen.getByText("- **ship v2 friday**")).toBeInTheDocument();
+    // With a summary present the button reads Re-enhance.
+    expect(screen.getByRole("button", { name: /re-enhance/i })).toBeInTheDocument();
+  });
+
+  it("disables Enhance while recording and without a transcript", () => {
+    const { unmount } = render(
+      <SessionView
+        path="/tmp/call.md"
+        isActive
+        initialData={{ ...baseData, transcript: "[00:00:01] Me: hi" }}
+        liveLines={["[00:00:01] Me: hi"]}
+        interimMe=""
+        interimThem=""
+        retranscribingJob={null}
+      />
+    );
+    expect(screen.getByRole("button", { name: /^enhance$/i })).toBeDisabled();
+    unmount();
+
+    render(
+      <SessionView
+        path="/tmp/call.md"
+        isActive={false}
+        initialData={{ ...baseData, transcript: "" }}
+        liveLines={[]}
+        interimMe=""
+        interimThem=""
+        retranscribingJob={null}
+      />
+    );
+    expect(screen.getByRole("button", { name: /^enhance$/i })).toBeDisabled();
+  });
+
+  it("surfaces the backend's rejection inline", async () => {
+    vi.mocked(ipc.enhanceSession).mockRejectedValue(
+      "Claude Code isn't installed (no `claude` on this Mac)"
+    );
+    render(
+      <SessionView
+        path="/tmp/call.md"
+        isActive={false}
+        initialData={{ ...baseData, transcript: "[00:00:01] Me: hi" }}
+        liveLines={[]}
+        interimMe=""
+        interimThem=""
+        retranscribingJob={null}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /^enhance$/i }));
+    await screen.findByText(/isn't installed/i);
   });
 });

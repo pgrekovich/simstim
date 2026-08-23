@@ -53,6 +53,11 @@ pub struct SessionDataOut {
     /// when neither exists -- `keep_audio` was off, or the session predates
     /// stage-0.7's audio sink entirely.
     pub audio_path: Option<String>,
+    /// The `## Summary` section body (stage 0.11 enhance), empty when the
+    /// file has none.
+    pub summary: String,
+    /// What generated `summary` ("claude" / "codex"), `None` without one.
+    pub summary_model: Option<String>,
 }
 
 /// Scans `dir` for `.md` files and parses each one's frontmatter. Files that
@@ -118,6 +123,8 @@ pub fn read_session_at(path: &Path, finalizing: Option<&Path>) -> Result<Session
         notes: data.notes,
         transcript: data.transcript,
         audio_path,
+        summary: data.summary,
+        summary_model: data.summary_model,
     })
 }
 
@@ -204,6 +211,7 @@ fn rewrite_session(path: &Path, title: &str, notes: &str) -> Result<()> {
     if let Some(audio_from_secs) = meta.audio_from_secs {
         transcript.set_audio_from_secs(audio_from_secs);
     }
+    transcript.set_summary(existing.summary.clone(), existing.summary_model.clone());
     transcript.set_raw_transcript(existing.transcript.clone());
     transcript.save(path)
 }
@@ -276,8 +284,37 @@ pub fn rewrite_transcript_at(path: &Path, new_transcript: &str, asr_id: &str) ->
     if let Some(audio_from_secs) = meta.audio_from_secs {
         transcript.set_audio_from_secs(audio_from_secs);
     }
+    transcript.set_summary(existing.summary.clone(), existing.summary_model.clone());
     transcript.set_asr(asr_id);
     transcript.set_raw_transcript(final_transcript);
+    transcript.save(path)
+}
+
+/// Rewrites `path` with a new `## Summary` section (stage 0.11 enhance),
+/// preserving title, notes, date, duration, asr and the transcript exactly
+/// -- the third sibling of `rewrite_session` (title/notes) and
+/// `rewrite_transcript_at` (transcript), replacing only its own section.
+/// `model` labels the section via the `summary_model:` frontmatter field.
+pub fn set_summary_at(path: &Path, summary: &str, model: &str) -> Result<()> {
+    let existing = parse_session(path)?;
+    let meta = parse_meta(path)?;
+    let started_at = DateTime::parse_from_rfc3339(&existing.date)
+        .map(|dt| dt.with_timezone(&Local))
+        .unwrap_or_else(|_| Local::now());
+
+    let mut transcript = Transcript::new(started_at);
+    transcript.set_raw_date(existing.date.clone());
+    transcript.set_title(existing.title.clone());
+    transcript.set_notes(existing.notes.clone());
+    transcript.set_asr(meta.asr.clone());
+    if let Some(duration_secs) = meta.duration_secs {
+        transcript.set_duration_secs(duration_secs);
+    }
+    if let Some(audio_from_secs) = meta.audio_from_secs {
+        transcript.set_audio_from_secs(audio_from_secs);
+    }
+    transcript.set_summary(summary.to_string(), Some(model.to_string()));
+    transcript.set_raw_transcript(existing.transcript.clone());
     transcript.save(path)
 }
 
@@ -584,6 +621,64 @@ mod tests {
             assert_eq!(hits[0].total_matches, 11);
             assert_eq!(hits[0].snippets.len(), 3, "capped at MAX_SNIPPETS");
             assert_eq!(hits[0].snippets[0].section, "title");
+        }
+    }
+
+    mod summary_preservation {
+        use super::*;
+
+        fn note_with_summary(dir: &Path) -> PathBuf {
+            let path = dir.join("call.md");
+            let mut t = Transcript::new(t(9, 0, 0));
+            t.set_title("Sync".into());
+            t.set_notes("rough notes".into());
+            t.set_summary("- shipped v2".into(), Some("claude".into()));
+            t.add(Speaker::Me, 3.0, "hello".into());
+            t.save(&path).unwrap();
+            path
+        }
+
+        #[test]
+        fn set_summary_at_replaces_only_the_summary() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = note_with_summary(dir.path());
+
+            set_summary_at(&path, "- new summary", "codex").unwrap();
+
+            let data = parse_session(&path).unwrap();
+            assert_eq!(data.summary, "- new summary");
+            assert_eq!(data.summary_model.as_deref(), Some("codex"));
+            assert_eq!(data.notes, "rough notes", "notes are sacred");
+            assert_eq!(data.title, "Sync");
+            assert_eq!(data.transcript, "[00:00:03] Me: hello");
+        }
+
+        #[test]
+        fn a_title_notes_edit_keeps_the_summary() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = note_with_summary(dir.path());
+
+            save_session_at(&path, "Renamed", "edited notes", None).unwrap();
+
+            let data = parse_session(&path).unwrap();
+            assert_eq!(data.summary, "- shipped v2");
+            assert_eq!(data.summary_model.as_deref(), Some("claude"));
+            assert_eq!(data.title, "Renamed");
+            assert_eq!(data.notes, "edited notes");
+        }
+
+        #[test]
+        fn a_retranscribe_rewrite_keeps_the_summary() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = note_with_summary(dir.path());
+
+            rewrite_transcript_at(&path, "[00:00:03] Me: whisper text", "whisper-large-v3")
+                .unwrap();
+
+            let data = parse_session(&path).unwrap();
+            assert_eq!(data.summary, "- shipped v2");
+            assert_eq!(data.transcript, "[00:00:03] Me: whisper text");
+            assert_eq!(data.asr, "whisper-large-v3");
         }
     }
 

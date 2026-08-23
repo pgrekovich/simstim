@@ -24,13 +24,16 @@ vi.mock("@/lib/ipc", () => ({
     retranscribe_model: "w1",
     auto_retranscribe: false,
     delete_audio_after_retranscribe: false,
+    enhance_provider: "claude",
+    enhance_models: {},
+    auto_enhance: false,
     detect_calls: true,
     auto_stop_after_call: false,
   }),
   listSessions: vi.fn().mockResolvedValue([]),
   readSession: vi
     .fn()
-    .mockResolvedValue({ title: "", date: "", notes: "", transcript: "", audio_path: null }),
+    .mockResolvedValue({ title: "", date: "", notes: "", transcript: "", audio_path: null, summary: "", summary_model: null }),
   startRecording: vi.fn().mockResolvedValue("/tmp/active.md"),
   stopRecording: vi.fn().mockResolvedValue("/tmp/active.md"),
   saveSession: vi.fn().mockResolvedValue(undefined),
@@ -54,6 +57,11 @@ vi.mock("@/lib/ipc", () => ({
   createSession: vi.fn().mockResolvedValue("/tmp/new.md"),
   searchSessions: vi.fn().mockResolvedValue([]),
   deleteSession: vi.fn().mockResolvedValue(undefined),
+  enhanceSession: vi.fn().mockResolvedValue(""),
+  setEnhanceProvider: vi.fn().mockResolvedValue(undefined),
+  setEnhanceModel: vi.fn().mockResolvedValue(undefined),
+  setAutoEnhance: vi.fn().mockResolvedValue(undefined),
+  listEnhanceProviders: vi.fn().mockResolvedValue([]),
   showMainWindow: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -120,6 +128,9 @@ beforeEach(() => {
     retranscribe_model: "w1",
     auto_retranscribe: false,
     delete_audio_after_retranscribe: false,
+    enhance_provider: "claude",
+    enhance_models: {},
+    auto_enhance: false,
     detect_calls: true,
     auto_stop_after_call: false,
   });
@@ -208,6 +219,9 @@ describe("App: call detection via the banner window (stage 1.1)", () => {
       retranscribe_model: "w1",
       auto_retranscribe: false,
       delete_audio_after_retranscribe: false,
+      enhance_provider: "claude",
+    enhance_models: {},
+    auto_enhance: false,
       detect_calls: true,
       auto_stop_after_call: true,
     });
@@ -234,6 +248,9 @@ describe("App: call detection via the banner window (stage 1.1)", () => {
       retranscribe_model: "w1",
       auto_retranscribe: false,
       delete_audio_after_retranscribe: false,
+      enhance_provider: "claude",
+    enhance_models: {},
+    auto_enhance: false,
       detect_calls: true,
       auto_stop_after_call: true,
     });
@@ -385,9 +402,11 @@ describe("App: active-session notes survive a switch-away-and-back (final review
           notes: "notes from the other call",
           transcript: "",
           audio_path: null,
+          summary: "",
+          summary_model: null,
         };
       }
-      return { title: "Untitled", date: "", notes: "", transcript: "", audio_path: null };
+      return { title: "Untitled", date: "", notes: "", transcript: "", audio_path: null, summary: "", summary_model: null };
     });
 
     render(<App />);
@@ -441,6 +460,8 @@ describe("App: record continues into the open note (behavior fix)", () => {
       notes: "old notes",
       transcript: "[00:00:01] Me: hi",
       audio_path: null,
+      summary: "",
+      summary_model: null,
     });
     vi.mocked(ipc.startRecording).mockResolvedValue("/tmp/other.md");
 
@@ -483,6 +504,8 @@ describe("App: record continues into the open note (behavior fix)", () => {
       notes: "old notes",
       transcript: "",
       audio_path: null,
+      summary: "",
+      summary_model: null,
     });
     vi.mocked(ipc.startRecording).mockResolvedValue("/tmp/other.md");
 
@@ -535,6 +558,8 @@ describe("App: refreshes a re-transcribed session after a background done event 
       notes: "old notes",
       transcript: "[00:00:01] Me: original parakeet text",
       audio_path: null,
+      summary: "",
+      summary_model: null,
     });
 
     render(<App />);
@@ -552,6 +577,8 @@ describe("App: refreshes a re-transcribed session after a background done event 
       notes: "old notes",
       transcript: "[00:00:01] Me: rewritten by whisper",
       audio_path: null,
+      summary: "",
+      summary_model: null,
     });
 
     emit("retranscribe-progress", {
@@ -576,6 +603,8 @@ describe("App: refreshes a re-transcribed session after a background done event 
       notes: "old notes",
       transcript: "[00:00:01] Me: hi",
       audio_path: null,
+      summary: "",
+      summary_model: null,
     });
 
     render(<App />);
@@ -615,6 +644,8 @@ describe("App: refreshes a re-transcribed session after a background done event 
       notes: "old notes",
       transcript: "[00:00:01] Me: original parakeet text",
       audio_path: "/tmp/other.flac",
+      summary: "",
+      summary_model: null,
     });
 
     render(<App />);
@@ -629,6 +660,8 @@ describe("App: refreshes a re-transcribed session after a background done event 
       notes: "old notes",
       transcript: "[00:00:01] Me: rewritten by whisper",
       audio_path: "/tmp/other.flac",
+      summary: "",
+      summary_model: null,
     });
 
     emit("retranscribe-progress", {
@@ -653,6 +686,8 @@ describe("App: refreshes a re-transcribed session after a background done event 
       notes: "old notes",
       transcript: "[00:00:01] Me: hi",
       audio_path: "/tmp/other.flac",
+      summary: "",
+      summary_model: null,
     });
 
     render(<App />);
@@ -694,6 +729,8 @@ describe("App: surfaces terminal re-transcribe errors from background jobs (stag
       notes: "",
       transcript: "[00:00:01] Me: hi",
       audio_path: null,
+      summary: "",
+      summary_model: null,
     });
 
     render(<App />);
@@ -733,6 +770,8 @@ describe("App: surfaces terminal re-transcribe errors from background jobs (stag
       notes: "",
       transcript: "[00:00:01] Me: hi",
       audio_path: null,
+      summary: "",
+      summary_model: null,
     });
 
     render(<App />);
@@ -766,6 +805,8 @@ describe("App: surfaces terminal re-transcribe errors from background jobs (stag
       notes: "",
       transcript: "[00:00:01] Me: hi",
       audio_path: "/tmp/viewed.flac",
+      summary: "",
+      summary_model: null,
     });
     // Never resolves: mirrors the real backend, where the promise only
     // settles once the job's own terminal event has already been decided --
@@ -813,6 +854,8 @@ describe("App: surfaces terminal re-transcribe errors from background jobs (stag
       notes: "",
       transcript: "[00:00:01] Me: hi",
       audio_path: "/tmp/viewed.flac",
+      summary: "",
+      summary_model: null,
     });
     // Rejects immediately, exactly like one of the up-front validation
     // checks -- no progress event ever accompanies this.
@@ -930,6 +973,8 @@ describe("App: deleting a note from the sidebar (stage 0.10)", () => {
       notes: "",
       transcript: "",
       audio_path: null,
+      summary: "",
+      summary_model: null,
     });
 
     render(<App />);
@@ -1036,6 +1081,8 @@ describe("App: search (stage 0.10)", () => {
       notes: "",
       transcript: "[00:00:04] Me: about the budget",
       audio_path: null,
+      summary: "",
+      summary_model: null,
     });
 
     render(<App />);
@@ -1148,5 +1195,49 @@ describe("App: note actions menu (stage 0.10)", () => {
     render(<App />);
     await screen.findByText("New Note");
     expect(screen.queryByRole("button", { name: /note actions/i })).toBeNull();
+  });
+});
+
+describe("App: background auto-enhance completion (stage 0.11)", () => {
+  const one: SessionMeta[] = [
+    { path: "/tmp/sync.md", title: "Weekly sync", date: new Date().toISOString(), duration_secs: null },
+  ];
+
+  it("refreshes the open note when its background enhance lands", async () => {
+    vi.mocked(ipc.listSessions).mockResolvedValue(one);
+    vi.mocked(ipc.readSession).mockResolvedValue({
+      title: "Weekly sync", date: "", notes: "", transcript: "[00:00:01] Me: hi",
+      audio_path: null, summary: "", summary_model: null,
+    });
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /weekly sync/i }));
+    await waitFor(() => expect(document.body.textContent).toContain("hi"));
+
+    vi.mocked(ipc.readSession).mockResolvedValue({
+      title: "Weekly sync", date: "", notes: "", transcript: "[00:00:01] Me: hi",
+      audio_path: null, summary: "- fresh auto summary", summary_model: "claude",
+    });
+    emit("enhance-done", { path: "/tmp/sync.md", ok: true, message: null });
+
+    await waitFor(() =>
+      expect(document.body.textContent).toContain("- fresh auto summary"),
+    );
+    expect(document.body.textContent).toContain("by claude");
+  });
+
+  it("surfaces a background enhance failure through the status line", async () => {
+    vi.mocked(ipc.listSessions).mockResolvedValue(one);
+    render(<App />);
+    await screen.findByRole("button", { name: /weekly sync/i });
+
+    emit("enhance-done", {
+      path: "/tmp/sync.md",
+      ok: false,
+      message: "Claude Code took longer than 5 minutes and was stopped",
+    });
+    await waitFor(() =>
+      expect(document.body.textContent).toContain("took longer than 5 minutes"),
+    );
   });
 });

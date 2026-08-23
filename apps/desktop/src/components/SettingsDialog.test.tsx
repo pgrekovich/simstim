@@ -18,6 +18,13 @@ vi.mock("@/lib/ipc", () => ({
   setAutoRetranscribe: vi.fn().mockResolvedValue(undefined),
   setDeleteAudioAfterRetranscribe: vi.fn().mockResolvedValue(undefined),
   setDetectCalls: vi.fn().mockResolvedValue(undefined),
+  setEnhanceProvider: vi.fn().mockResolvedValue(undefined),
+  setEnhanceModel: vi.fn().mockResolvedValue(undefined),
+  setAutoEnhance: vi.fn().mockResolvedValue(undefined),
+  listEnhanceProviders: vi.fn().mockResolvedValue([
+    { id: "claude", name: "Claude Code", available: true, version: "2.0.0 (Claude Code)" },
+    { id: "codex", name: "Codex", available: false, version: null },
+  ]),
   setAutoStopAfterCall: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -38,6 +45,9 @@ const baseConfig: AppConfig = {
   retranscribe_model: "whisper-large-v3-turbo-q8",
   auto_retranscribe: false,
   delete_audio_after_retranscribe: false,
+  enhance_provider: "claude",
+  enhance_models: {},
+  auto_enhance: false,
   detect_calls: true,
   auto_stop_after_call: false,
 };
@@ -638,5 +648,55 @@ describe("SettingsDialog: model manager (stage 0.8 Task 2)", () => {
     fireEvent.click(trashButton);
     expect(ipc.deleteModel).not.toHaveBeenCalled();
     await within(reopenedRow).findByRole("button", { name: /delete 874 mb\?/i });
+  });
+});
+
+describe("SettingsDialog: AI enhance provider (stage 0.11)", () => {
+  async function openAiSection() {
+    render(<SettingsDialog open onOpenChange={() => {}} />);
+    fireEvent.click(await screen.findByRole("button", { name: /^ai$/i }));
+  }
+
+  it("lists probed providers with availability and picks one via the radio", async () => {
+    await openAiSection();
+
+    await screen.findByText("2.0.0 (Claude Code)");
+    expect(screen.getByText(/not installed \(no `codex` CLI found\)/i)).toBeInTheDocument();
+
+    const claudeRadio = screen.getByRole("radio", { name: "Claude Code" });
+    expect(claudeRadio).toBeChecked();
+    const codexRadio = screen.getByRole("radio", { name: "Codex" });
+    expect(codexRadio).toBeDisabled();
+  });
+
+  it("persists a provider switch", async () => {
+    vi.mocked(ipc.listEnhanceProviders).mockResolvedValue([
+      { id: "claude", name: "Claude Code", available: true, version: "2.0.0" },
+      { id: "codex", name: "Codex", available: true, version: "codex-cli 0.149.0" },
+    ]);
+    await openAiSection();
+
+    const codexRadio = await screen.findByRole("radio", { name: "Codex" });
+    fireEvent.click(codexRadio);
+    await waitFor(() =>
+      expect(ipc.setEnhanceProvider).toHaveBeenCalledExactlyOnceWith("codex"),
+    );
+    expect(codexRadio).toBeChecked();
+  });
+});
+
+describe("SettingsDialog: enhance model override (stage 0.11)", () => {
+  it("persists a model pick and clears it back to Default", async () => {
+    render(<SettingsDialog open onOpenChange={() => {}} />);
+    fireEvent.click(await screen.findByRole("button", { name: /^ai$/i }));
+
+    const select = await screen.findByRole("combobox", { name: /claude code model/i });
+    fireEvent.change(select, { target: { value: "fable" } });
+    await waitFor(() =>
+      expect(ipc.setEnhanceModel).toHaveBeenCalledExactlyOnceWith("claude", "fable"),
+    );
+
+    fireEvent.change(select, { target: { value: "" } });
+    await waitFor(() => expect(ipc.setEnhanceModel).toHaveBeenLastCalledWith("claude", ""));
   });
 });

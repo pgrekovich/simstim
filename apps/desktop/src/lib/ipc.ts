@@ -54,6 +54,22 @@ export interface AppConfig {
    * `setDeleteAudioAfterRetranscribe`.
    */
   delete_audio_after_retranscribe: boolean;
+  /**
+   * Which CLI `enhance_session` runs (stage 0.11): `"claude" | "codex"`.
+   * The user's own subscription does the work; no API keys.
+   */
+  enhance_provider: string;
+  /**
+   * Per-provider model override, keyed by provider id (e.g.
+   * `{"claude": "fable"}`). Missing/empty = the CLI's own default.
+   */
+  enhance_models: Record<string, string>;
+  /**
+   * Whether a finished recording auto-enhances (stage 0.11): fires after
+   * the call stops (after the auto re-transcribe when that's on) and after
+   * any successful re-transcribe. Defaults to `false`.
+   */
+  auto_enhance: boolean;
   /** Whether known mic-using call apps may surface a recording suggestion. */
   detect_calls: boolean;
   /** Whether an associated recording stops after app I/O release and remote-channel silence. */
@@ -134,6 +150,18 @@ export interface SessionData {
    * (Task 4).
    */
   audio_path: string | null;
+  /** The `## Summary` section body (stage 0.11 enhance), `""` without one. */
+  summary: string;
+  /** What generated `summary` ("claude" / "codex"), `null` without one. */
+  summary_model: string | null;
+}
+
+/** Mirrors `enhance::EnhanceProviderInfo`: one row of the Settings AI section. */
+export interface EnhanceProviderInfo {
+  id: string;
+  name: string;
+  available: boolean;
+  version: string | null;
 }
 
 /** Mirrors `models::ModelInfo` (apps/desktop/src-tauri/src/models.rs). */
@@ -341,6 +369,48 @@ export function setAutoStopAfterCall(autoStopAfterCall: boolean): Promise<void> 
 
 export function listSessions(): Promise<SessionMeta[]> {
   return invoke("list_sessions");
+}
+
+/**
+ * Enhances a note with the configured AI CLI (stage 0.11): the user's rough
+ * notes lead, the transcript backs them, and the result replaces the note's
+ * `## Summary` section (never the notes). Mirrors `enhance::enhance_session`.
+ * Rejects the recording/finalizing session, an empty transcript, a missing
+ * provider CLI, and a second enhance while one is running. Resolves with the
+ * generated summary text once it's on disk.
+ */
+export function enhanceSession(path: string): Promise<string> {
+  return invoke("enhance_session", { path });
+}
+
+/** Which AI CLIs are installed and runnable. Mirrors `enhance::list_enhance_providers`. */
+export function listEnhanceProviders(): Promise<EnhanceProviderInfo[]> {
+  return invoke("list_enhance_providers");
+}
+
+/** Sets and persists which CLI `enhanceSession` runs. Mirrors `config::set_enhance_provider`. */
+export function setEnhanceProvider(provider: string): Promise<void> {
+  return invoke("set_enhance_provider", { provider });
+}
+
+/** Mirrors `enhance::EnhanceDonePayload`, the `enhance-done` event a BACKGROUND (auto) enhance ends with. */
+export interface EnhanceDonePayload {
+  path: string;
+  ok: boolean;
+  message: string | null;
+}
+
+/** Sets and persists whether a finished recording auto-enhances. Mirrors `config::set_auto_enhance`. */
+export function setAutoEnhance(autoEnhance: boolean): Promise<void> {
+  return invoke("set_auto_enhance", { autoEnhance });
+}
+
+/**
+ * Sets one provider's model override (stage 0.11); an empty string clears
+ * it back to the CLI's default. Mirrors `config::set_enhance_model`.
+ */
+export function setEnhanceModel(provider: string, model: string): Promise<void> {
+  return invoke("set_enhance_model", { provider, model });
 }
 
 /** Mirrors `sessions::SearchSnippet`: one matching line inside a SearchHit. */

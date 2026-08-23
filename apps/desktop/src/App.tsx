@@ -29,6 +29,7 @@ import {
   type AppConfig,
   type CallDetectedPayload,
   type CallEndedPayload,
+  type EnhanceDonePayload,
   type ModelInfo,
   type RetranscribeProgress,
   type SearchHit,
@@ -560,6 +561,31 @@ function App() {
       });
     return () => {
       cancelled = true;
+    };
+  }, [selectedPath, activePath]);
+
+  // A background (auto) enhance finished (stage 0.11): refresh the open
+  // note so the new summary appears without a manual switch-away-and-back,
+  // and surface failures through the status line -- an auto job has no
+  // awaiting promise to reject.
+  useEffect(() => {
+    const unlisten = listen<EnhanceDonePayload>("enhance-done", (event) => {
+      const { path, ok, message } = event.payload;
+      if (!ok) {
+        setStatus({ kind: "error", message: message ?? "enhance failed" });
+        return;
+      }
+      if (path === selectedPath && path !== activePath) {
+        readSession(path)
+          .then((data) => {
+            setSessionData(data);
+            setReloadTick((t) => t + 1);
+          })
+          .catch(() => {});
+      }
+    });
+    return () => {
+      unlisten.then((f) => f());
     };
   }, [selectedPath, activePath]);
 

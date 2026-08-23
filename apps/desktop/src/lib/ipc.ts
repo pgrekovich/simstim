@@ -64,6 +64,12 @@ export interface AppConfig {
    * `{"claude": "fable"}`). Missing/empty = the CLI's own default.
    */
   enhance_models: Record<string, string>;
+  /**
+   * Whether a finished recording auto-enhances (stage 0.11): fires after
+   * the call stops (after the auto re-transcribe when that's on) and after
+   * any successful re-transcribe. Defaults to `false`.
+   */
+  auto_enhance: boolean;
   /** Whether known mic-using call apps may surface a recording suggestion. */
   detect_calls: boolean;
   /** Whether an associated recording stops after app I/O release and remote-channel silence. */
@@ -385,6 +391,18 @@ export function listEnhanceProviders(): Promise<EnhanceProviderInfo[]> {
 /** Sets and persists which CLI `enhanceSession` runs. Mirrors `config::set_enhance_provider`. */
 export function setEnhanceProvider(provider: string): Promise<void> {
   return invoke("set_enhance_provider", { provider });
+}
+
+/** Mirrors `enhance::EnhanceDonePayload`, the `enhance-done` event a BACKGROUND (auto) enhance ends with. */
+export interface EnhanceDonePayload {
+  path: string;
+  ok: boolean;
+  message: string | null;
+}
+
+/** Sets and persists whether a finished recording auto-enhances. Mirrors `config::set_auto_enhance`. */
+export function setAutoEnhance(autoEnhance: boolean): Promise<void> {
+  return invoke("set_auto_enhance", { autoEnhance });
 }
 
 /**

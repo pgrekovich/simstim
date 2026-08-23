@@ -20,6 +20,7 @@ import {
   setAutoStopAfterCall,
   setDetectCalls,
   setDeleteAudioAfterRetranscribe,
+  setAutoEnhance,
   setEnhanceModel,
   setEnhanceProvider,
   setKeepAudio,
@@ -211,6 +212,7 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
   const [activeSection, setActiveSection] = useState<string>(NAV_SECTIONS[0].id);
   const [enhanceProviders, setEnhanceProviders] = useState<EnhanceProviderInfo[]>([]);
   const [enhanceProviderError, setEnhanceProviderError] = useState<string | null>(null);
+  const [autoEnhanceError, setAutoEnhanceError] = useState<string | null>(null);
   const [choosingDir, setChoosingDir] = useState(false);
   const [themeError, setThemeError] = useState<string | null>(null);
   const [folderError, setFolderError] = useState<string | null>(null);
@@ -278,6 +280,20 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
       .then(setEnhanceProviders)
       .catch(() => {});
   }, [isOpen, refresh]);
+
+  /** Toggles auto-enhance (stage 0.11). Optimistic with rollback like the rest. */
+  async function handleSetAutoEnhance(autoEnhance: boolean) {
+    const previous = config?.auto_enhance;
+    if (previous === undefined || autoEnhance === previous) return;
+    setAutoEnhanceError(null);
+    setConfig((prev) => (prev ? { ...prev, auto_enhance: autoEnhance } : prev));
+    try {
+      await setAutoEnhance(autoEnhance);
+    } catch (err) {
+      setConfig((prev) => (prev ? { ...prev, auto_enhance: previous } : prev));
+      setAutoEnhanceError(String(err));
+    }
+  }
 
   /**
    * Persists one provider's model override on blur/Enter (stage 0.11).
@@ -1025,6 +1041,19 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                         />
                       </Row>
                     ))}
+                    <Row
+                      label="Enhance automatically after each call"
+                      htmlFor="auto-enhance"
+                      description={'Fires once the call stops (after the automatic re-transcribe when that is on) and after any successful re-transcribe. With empty notes it writes a summary with key points and action items.'}
+                      error={autoEnhanceError}
+                    >
+                      <Checkbox
+                        id="auto-enhance"
+                        checked={config?.auto_enhance ?? false}
+                        disabled={!config}
+                        onCheckedChange={(checked) => handleSetAutoEnhance(checked === true)}
+                      />
+                    </Row>
                     {enhanceProviders.length === 0 && (
                       <Row
                         label="No providers probed yet"

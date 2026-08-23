@@ -340,7 +340,11 @@ async fn stop_recording(app: AppHandle) -> Result<String, String> {
         let path = result.map_err(|error| error.to_string())?;
         let path = path.display().to_string();
         let cfg = Config::load();
-        retranscribe::maybe_auto_retranscribe(app, path.clone(), &cfg);
+        retranscribe::maybe_auto_retranscribe(app.clone(), path.clone(), &cfg);
+        // After maybe_auto_retranscribe: if it just enqueued this path, the
+        // involves() check inside defers the enhance to that job's
+        // completion (the summary should come from the better transcript).
+        enhance::maybe_auto_enhance(app, path.clone());
         Ok(path)
     })
     .await
@@ -561,6 +565,7 @@ pub fn run() {
             config::set_auto_stop_after_call,
             config::set_enhance_provider,
             config::set_enhance_model,
+            config::set_auto_enhance,
             enhance::list_enhance_providers,
             enhance::enhance_session,
             detect::set_detect_calls,

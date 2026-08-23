@@ -129,9 +129,11 @@ pub async fn list_enhance_providers() -> Vec<EnhanceProviderInfo> {
 }
 
 /// The Granola contract, spelled out (owner decision, stage 0.11): the
-/// user's rough notes lead, the transcript backs them up. Kept as a plain
-/// function of the inputs so tests can pin its shape without running any
-/// CLI.
+/// user's rough notes lead, the transcript backs them up. With EMPTY notes
+/// (owner decision: the auto-enhance case for a call nobody took notes on)
+/// the ask flips to a fixed structure: short summary, key points, action
+/// items. Kept as a plain function of the inputs so tests can pin its shape
+/// without running any CLI.
 fn build_prompt(title: &str, notes: &str, transcript: &str) -> String {
     let notes_block = if notes.trim().is_empty() {
         "(the user took no notes during this call)".to_string()
@@ -143,8 +145,11 @@ fn build_prompt(title: &str, notes: &str, transcript: &str) -> String {
          \n\
          The user's own rough notes are the PRIMARY signal: they show what mattered\n\
          to the user. The transcript is backing material to fill in details,\n\
-         decisions, numbers and names the rough notes only hint at. If the notes are\n\
-         empty, produce a concise structured summary of the call instead.\n\
+         decisions, numbers and names the rough notes only hint at.\n\
+         \n\
+         If the user took NO notes, produce instead: a 2-4 sentence summary of the\n\
+         call, then a \"Key points\" section with the decisions, numbers and names\n\
+         that matter, then \"Action items\" (only if the call produced any).\n\
          \n\
          Rules:\n\
          - Write in the language the notes and transcript are in.\n\
@@ -319,56 +324,109 @@ pub async fn enhance_session(
     path: String,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let md_path = Path::new(&path);
-        let state = app.state::<AppState>();
-        let enhance = app.state::<EnhanceState>();
-        let cfg = Config::load();
-        let spec = PROVIDERS
-            .iter()
-            .find(|s| s.id == cfg.enhance_provider)
-            .ok_or_else(|| format!("unknown enhance provider: {}", cfg.enhance_provider))?;
-        let model = cfg
-            .enhance_models
-            .get(spec.id)
-            .map(|m| m.trim())
-            .filter(|m| !m.is_empty())
-            .map(str::to_string);
+    tauri::async_runtime::spawn_blocking(move || enhance_path_blocking(&app, &path))
+        .await
+        .map_err(|e| format!("enhance task failed: {e}"))?
+}
 
-        let existing = simstim_transcript::parse_session(md_path).map_err(|e| e.to_string())?;
-        {
-            let mut running = enhance.0.lock().unwrap();
-            validate_enhance(
-                md_path,
-                state.active_output_path().as_deref(),
-                state.finalizing_match(md_path).as_deref(),
-                running.as_deref(),
-                &existing.transcript,
-            )?;
-            *running = Some(path.clone());
+/// The whole blocking enhance pipeline (parse -> validate -> subprocess ->
+/// atomic write), shared between the manual command above and the
+/// auto-enhance trigger below. Must run inside `spawn_blocking`.
+fn enhance_path_blocking<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    path: &str,
+) -> Result<String, String> {
+    let md_path = Path::new(path);
+    let state = app.state::<AppState>();
+    let enhance = app.state::<EnhanceState>();
+    let cfg = Config::load();
+    let spec = PROVIDERS
+        .iter()
+        .find(|s| s.id == cfg.enhance_provider)
+        .ok_or_else(|| format!("unknown enhance provider: {}", cfg.enhance_provider))?;
+    let model = cfg
+        .enhance_models
+        .get(spec.id)
+        .map(|m| m.trim())
+        .filter(|m| !m.is_empty())
+        .map(str::to_string);
+
+    let existing = simstim_transcript::parse_session(md_path).map_err(|e| e.to_string())?;
+    {
+        let mut running = enhance.0.lock().unwrap();
+        validate_enhance(
+            md_path,
+            state.active_output_path().as_deref(),
+            state.finalizing_match(md_path).as_deref(),
+            running.as_deref(),
+            &existing.transcript,
+        )?;
+        *running = Some(path.to_string());
+    }
+    // The slot is held; release it on EVERY exit path below.
+    let result = (|| {
+        let prompt = build_prompt(&existing.title, &existing.notes, &existing.transcript);
+        let summary = run_provider(spec, model.as_deref(), &prompt)?;
+        // Re-check the single-writer rule right before the write: the
+        // user could have started recording into this same note while
+        // the provider was thinking.
+        if state.active_output_path().as_deref() == Some(md_path) {
+            return Err(
+                "this session started recording while enhancing; the summary was discarded"
+                    .to_string(),
+            );
         }
-        // The slot is held; release it on EVERY exit path below.
-        let result = (|| {
-            let prompt = build_prompt(&existing.title, &existing.notes, &existing.transcript);
-            let summary = run_provider(spec, model.as_deref(), &prompt)?;
-            // Re-check the single-writer rule right before the write: the
-            // user could have started recording into this same note while
-            // the provider was thinking.
-            if state.active_output_path().as_deref() == Some(md_path) {
-                return Err(
-                    "this session started recording while enhancing; the summary was discarded"
-                        .to_string(),
-                );
-            }
-            crate::sessions::set_summary_at(md_path, &summary, &summary_label(spec, model.as_deref()))
-                .map_err(|e| e.to_string())?;
-            Ok(summary)
-        })();
-        *enhance.0.lock().unwrap() = None;
-        result
-    })
-    .await
-    .map_err(|e| format!("enhance task failed: {e}"))?
+        crate::sessions::set_summary_at(md_path, &summary, &summary_label(spec, model.as_deref()))
+            .map_err(|e| e.to_string())?;
+        Ok(summary)
+    })();
+    *enhance.0.lock().unwrap() = None;
+    result
+}
+
+/// `enhance-done` event payload: how a BACKGROUND (auto) enhance ended.
+/// Mirrors `EnhanceDonePayload` in `ipc.ts`. The manual command reports
+/// through its own promise instead and never emits this.
+#[derive(Debug, Clone, Serialize)]
+struct EnhanceDonePayload {
+    path: String,
+    ok: bool,
+    message: Option<String>,
+}
+
+/// Fires an auto-enhance for `path` if the setting is on (stage 0.11,
+/// owner request: "call ends -> finished note, hands-free"). Called from
+/// two places:
+///
+/// - `stop_recording`'s finalization tail. If an auto re-transcribe was
+///   just enqueued for this same path, the check below defers to it -- the
+///   summary should be built from the BETTER transcript, and the
+///   re-transcribe completion re-triggers this.
+/// - `retranscribe::run_job` after a successful pass (by which point the
+///   queue no longer involves this path, so the check passes): a rewritten
+///   transcript makes any existing summary stale, so it regenerates.
+///
+/// Fire-and-forget: the outcome lands as an `enhance-done` event, never a
+/// blocked stop. Failures (provider missing, another enhance running) are
+/// reported through the same event rather than dropped.
+pub(crate) fn maybe_auto_enhance<R: tauri::Runtime>(app: tauri::AppHandle<R>, path: String) {
+    let cfg = Config::load();
+    if !cfg.auto_enhance {
+        return;
+    }
+    if app.state::<crate::retranscribe::RetranscribeState>().involves(&path) {
+        return;
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        use tauri::Emitter;
+        let result = enhance_path_blocking(&app, &path);
+        let payload = EnhanceDonePayload {
+            path,
+            ok: result.is_ok(),
+            message: result.err(),
+        };
+        let _ = app.emit("enhance-done", payload);
+    });
 }
 
 #[cfg(test)]

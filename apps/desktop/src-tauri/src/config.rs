@@ -147,6 +147,13 @@ pub struct Config {
     /// to hardcode a list here, so this is free-form and passed through.
     #[serde(default)]
     pub enhance_models: std::collections::HashMap<String, String>,
+    /// Whether a finished recording auto-enhances (stage 0.11): fires once
+    /// the call stops -- after the automatic re-transcribe when that's on
+    /// too -- and after any successful re-transcribe (a rewritten
+    /// transcript makes the old summary stale). Off by default, like every
+    /// other automation here.
+    #[serde(default)]
+    pub auto_enhance: bool,
     /// Whether mic activity from known calling apps may surface a recording
     /// suggestion. Detection never starts capture itself.
     #[serde(default = "default_detect_calls")]
@@ -170,6 +177,7 @@ impl Default for Config {
             delete_audio_after_retranscribe: default_delete_audio_after_retranscribe(),
             enhance_provider: default_enhance_provider(),
             enhance_models: Default::default(),
+            auto_enhance: false,
             detect_calls: default_detect_calls(),
             auto_stop_after_call: default_auto_stop_after_call(),
         }
@@ -210,6 +218,15 @@ pub fn set_enhance_provider(provider: String) -> Result<(), String> {
     }
     let mut cfg = Config::load();
     cfg.enhance_provider = provider;
+    cfg.save().map_err(|e| e.to_string())
+}
+
+/// Sets and persists whether a finished recording auto-enhances (stage
+/// 0.11).
+#[tauri::command]
+pub fn set_auto_enhance(auto_enhance: bool) -> Result<(), String> {
+    let mut cfg = Config::load();
+    cfg.auto_enhance = auto_enhance;
     cfg.save().map_err(|e| e.to_string())
 }
 
@@ -371,6 +388,7 @@ mod tests {
             delete_audio_after_retranscribe: true,
             enhance_provider: "codex".to_string(),
             enhance_models: [("claude".to_string(), "fable".to_string())].into(),
+            auto_enhance: true,
             detect_calls: false,
             auto_stop_after_call: true,
         };

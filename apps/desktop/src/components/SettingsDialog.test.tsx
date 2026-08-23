@@ -20,6 +20,7 @@ vi.mock("@/lib/ipc", () => ({
   setDetectCalls: vi.fn().mockResolvedValue(undefined),
   setEnhanceProvider: vi.fn().mockResolvedValue(undefined),
   setEnhanceModel: vi.fn().mockResolvedValue(undefined),
+  setAutoEnhance: vi.fn().mockResolvedValue(undefined),
   listEnhanceProviders: vi.fn().mockResolvedValue([
     { id: "claude", name: "Claude Code", available: true, version: "2.0.0 (Claude Code)" },
     { id: "codex", name: "Codex", available: false, version: null },
@@ -46,6 +47,7 @@ const baseConfig: AppConfig = {
   delete_audio_after_retranscribe: false,
   enhance_provider: "claude",
   enhance_models: {},
+  auto_enhance: false,
   detect_calls: true,
   auto_stop_after_call: false,
 };

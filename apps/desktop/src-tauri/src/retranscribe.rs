@@ -1169,6 +1169,13 @@ async fn run_job<R: tauri::Runtime>(
 
     advance_queue(app.clone());
 
+    // A successful pass rewrote the transcript, which makes any existing
+    // summary stale: re-run the auto-enhance if the owner opted in (the
+    // queue no longer involves this path here, so it actually fires).
+    if final_result.is_ok() {
+        crate::enhance::maybe_auto_enhance(app.clone(), path.clone());
+    }
+
     final_result
 }
 

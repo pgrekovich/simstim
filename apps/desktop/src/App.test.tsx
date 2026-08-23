@@ -26,6 +26,7 @@ vi.mock("@/lib/ipc", () => ({
     delete_audio_after_retranscribe: false,
     enhance_provider: "claude",
     enhance_models: {},
+    auto_enhance: false,
     detect_calls: true,
     auto_stop_after_call: false,
   }),
@@ -59,6 +60,7 @@ vi.mock("@/lib/ipc", () => ({
   enhanceSession: vi.fn().mockResolvedValue(""),
   setEnhanceProvider: vi.fn().mockResolvedValue(undefined),
   setEnhanceModel: vi.fn().mockResolvedValue(undefined),
+  setAutoEnhance: vi.fn().mockResolvedValue(undefined),
   listEnhanceProviders: vi.fn().mockResolvedValue([]),
   showMainWindow: vi.fn().mockResolvedValue(undefined),
 }));
@@ -128,6 +130,7 @@ beforeEach(() => {
     delete_audio_after_retranscribe: false,
     enhance_provider: "claude",
     enhance_models: {},
+    auto_enhance: false,
     detect_calls: true,
     auto_stop_after_call: false,
   });
@@ -218,6 +221,7 @@ describe("App: call detection via the banner window (stage 1.1)", () => {
       delete_audio_after_retranscribe: false,
       enhance_provider: "claude",
     enhance_models: {},
+    auto_enhance: false,
       detect_calls: true,
       auto_stop_after_call: true,
     });
@@ -246,6 +250,7 @@ describe("App: call detection via the banner window (stage 1.1)", () => {
       delete_audio_after_retranscribe: false,
       enhance_provider: "claude",
     enhance_models: {},
+    auto_enhance: false,
       detect_calls: true,
       auto_stop_after_call: true,
     });
@@ -1190,5 +1195,49 @@ describe("App: note actions menu (stage 0.10)", () => {
     render(<App />);
     await screen.findByText("New Note");
     expect(screen.queryByRole("button", { name: /note actions/i })).toBeNull();
+  });
+});
+
+describe("App: background auto-enhance completion (stage 0.11)", () => {
+  const one: SessionMeta[] = [
+    { path: "/tmp/sync.md", title: "Weekly sync", date: new Date().toISOString(), duration_secs: null },
+  ];
+
+  it("refreshes the open note when its background enhance lands", async () => {
+    vi.mocked(ipc.listSessions).mockResolvedValue(one);
+    vi.mocked(ipc.readSession).mockResolvedValue({
+      title: "Weekly sync", date: "", notes: "", transcript: "[00:00:01] Me: hi",
+      audio_path: null, summary: "", summary_model: null,
+    });
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /weekly sync/i }));
+    await waitFor(() => expect(document.body.textContent).toContain("hi"));
+
+    vi.mocked(ipc.readSession).mockResolvedValue({
+      title: "Weekly sync", date: "", notes: "", transcript: "[00:00:01] Me: hi",
+      audio_path: null, summary: "- fresh auto summary", summary_model: "claude",
+    });
+    emit("enhance-done", { path: "/tmp/sync.md", ok: true, message: null });
+
+    await waitFor(() =>
+      expect(document.body.textContent).toContain("- fresh auto summary"),
+    );
+    expect(document.body.textContent).toContain("by claude");
+  });
+
+  it("surfaces a background enhance failure through the status line", async () => {
+    vi.mocked(ipc.listSessions).mockResolvedValue(one);
+    render(<App />);
+    await screen.findByRole("button", { name: /weekly sync/i });
+
+    emit("enhance-done", {
+      path: "/tmp/sync.md",
+      ok: false,
+      message: "Claude Code took longer than 5 minutes and was stopped",
+    });
+    await waitFor(() =>
+      expect(document.body.textContent).toContain("took longer than 5 minutes"),
+    );
   });
 });

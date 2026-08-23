@@ -155,11 +155,16 @@ describe("SessionView: audio playback and re-transcribe (Task 4, stage-0.7)", ()
       />
     );
 
+    // The custom AudioPlayer bar (stage 0.10) wraps a hidden <audio>
+    // element: no native `controls` chrome, playback drives through the
+    // bar's own play button and seek slider.
     const audio = document.querySelector("audio");
     expect(audio).not.toBeNull();
-    expect(audio).toHaveAttribute("controls");
+    expect(audio).not.toHaveAttribute("controls");
     expect(audio).toHaveAttribute("preload", "metadata");
     expect(audio?.getAttribute("src")).toBe("asset://localhost//tmp/2026-08-15 call.flac");
+    expect(screen.getByRole("button", { name: /^play$/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /playback speed/i })).toHaveTextContent("1x");
   });
 
   it("disables the re-transcribe button while the session is recording", () => {
@@ -394,5 +399,39 @@ describe("SessionView: audio playback and re-transcribe (Task 4, stage-0.7)", ()
 
     await screen.findByText(/new whisper text/);
     expect(screen.queryByText(/old parakeet text/)).toBeNull();
+  });
+});
+
+describe("SessionView: notes/transcript tabs (stage 0.10)", () => {
+  it("defaults to the Notes tab with the transcript content hidden, and switches on click", () => {
+    render(
+      <SessionView
+        path="/tmp/call.md"
+        isActive={false}
+        initialData={{ ...baseData, transcript: "[00:00:03] Me: hello tabs\n" }}
+        liveLines={[]}
+        interimMe=""
+        interimThem=""
+        retranscribingJob={null}
+      />
+    );
+
+    const notesTab = screen.getByRole("tab", { name: "Notes" });
+    const transcriptTab = screen.getByRole("tab", { name: "Transcript" });
+    expect(notesTab).toHaveAttribute("data-state", "active");
+
+    // Force-mounted but CSS-hidden while inactive (keeps audio playing
+    // across switches): assert the state attribute the hiding hangs on.
+    const transcriptPanel = screen.getByText("hello tabs").closest('[data-slot="tabs-content"]');
+    expect(transcriptPanel).toHaveAttribute("data-state", "inactive");
+
+    // Radix tab triggers activate on mousedown, not click.
+    fireEvent.mouseDown(transcriptTab);
+    expect(transcriptTab).toHaveAttribute("data-state", "active");
+    expect(transcriptPanel).toHaveAttribute("data-state", "active");
+    const notesPanel = screen
+      .getByPlaceholderText("your notes...")
+      .closest('[data-slot="tabs-content"]');
+    expect(notesPanel).toHaveAttribute("data-state", "inactive");
   });
 });

@@ -1,7 +1,9 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { AudioPlayer, type AudioPlayerHandle } from "@/components/AudioPlayer";
 import { Button } from "@/components/ui/button";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { TranscriptView } from "@/components/TranscriptView";
 import {
   readSession,
@@ -203,7 +205,7 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
   // ever read while the SAME click's promise is still in flight.
   const [clicking, setClicking] = useState(false);
   const [retranscribeError, setRetranscribeError] = useState<string | null>(null);
-  const audioRef = useRef<HTMLAudioElement>(null);
+  const playerRef = useRef<AudioPlayerHandle>(null);
   const jobRunningHere = retranscribingJob?.path === path;
   // App's toolbar renders an empty `#topbar-title-slot`; the title input is
   // portaled into it so it reads as the document's name up there while every
@@ -339,16 +341,13 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Click-to-seek (Task 4): seeks the audio element to the clicked
-  // transcript line's offset and starts playback. Only ever wired up by the
-  // JSX below when `initialData.audio_path` is set, so `audioRef.current`
-  // being null here would mean the player was unmounted out from under an
-  // in-flight click -- defensive, not expected in practice.
+  // Click-to-seek (Task 4): seeks the player to the clicked transcript
+  // line's offset and starts playback. Only ever wired up by the JSX below
+  // when `initialData.audio_path` is set, so `playerRef.current` being null
+  // here would mean the player was unmounted out from under an in-flight
+  // click -- defensive, not expected in practice.
   function handleSeek(offsetSecs: number) {
-    const audio = audioRef.current;
-    if (!audio) return;
-    audio.currentTime = offsetSecs;
-    void audio.play();
+    playerRef.current?.seek(offsetSecs);
   }
 
   // Starts an offline re-transcribe of this session's audio and, once it
@@ -457,54 +456,79 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
   );
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-4">
+    <div className="flex h-full min-h-0 flex-col gap-3">
       {titleSlot ? createPortal(titleInput, titleSlot) : (
         <div className="flex shrink-0 items-center gap-2">{titleInput}</div>
       )}
 
-      {audioPath && (
-        <div className="flex shrink-0 items-center gap-2">
-          <audio
-            ref={audioRef}
-            controls
-            preload="metadata"
-            src={convertFileSrc(audioPath)}
-            className="h-10 min-w-0 flex-1"
+      {/* Notes first, transcript behind a tab (Granola's own restraint:
+          the notepad is the primary surface, the transcript is backing
+          material). Both contents are force-mounted and CSS-hidden when
+          inactive rather than unmounted: unmounting would kill audio
+          playback on a tab switch and reset TranscriptView's scroll. */}
+      <Tabs defaultValue="notes" className="min-h-0 flex-1 gap-3">
+        <TabsList className="self-center">
+          <TabsTrigger value="notes">Notes</TabsTrigger>
+          <TabsTrigger value="transcript">Transcript</TabsTrigger>
+        </TabsList>
+
+        <TabsContent
+          value="notes"
+          forceMount
+          className="min-h-0 flex-1 data-[state=inactive]:hidden"
+        >
+          <textarea
+            value={notes}
+            onChange={handleNotesChange}
+            onBlur={commitNotes}
+            placeholder="your notes..."
+            className="h-full w-full resize-none rounded-md border bg-transparent p-3 text-sm outline-none placeholder:text-muted-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
           />
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="shrink-0"
-            disabled={isActive || retranscribeBusy}
-            onClick={handleRetranscribe}
-          >
-            {retranscribeBusy ? "Re-transcribing..." : "Re-transcribe"}
-          </Button>
-        </div>
-      )}
+        </TabsContent>
 
-      {retranscribeStatusText && (
-        <p className="shrink-0 text-xs text-muted-foreground">{retranscribeStatusText}</p>
-      )}
-      {retranscribeError && (
-        <p className="shrink-0 text-sm text-destructive">{retranscribeError}</p>
-      )}
+        <TabsContent
+          value="transcript"
+          forceMount
+          className="flex min-h-0 flex-1 flex-col gap-3 data-[state=inactive]:hidden"
+        >
+          <TranscriptView
+            lines={transcriptLines}
+            interimMe={isActive ? interimMe : undefined}
+            interimThem={isActive ? interimThem : undefined}
+            onSeek={audioPath ? handleSeek : undefined}
+          />
 
-      <textarea
-        value={notes}
-        onChange={handleNotesChange}
-        onBlur={commitNotes}
-        placeholder="your notes..."
-        className="min-h-32 w-full shrink-0 resize-y rounded-md border bg-transparent p-3 text-sm outline-none placeholder:text-muted-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
-      />
+          {retranscribeStatusText && (
+            <p className="shrink-0 text-xs text-muted-foreground">{retranscribeStatusText}</p>
+          )}
+          {retranscribeError && (
+            <p className="shrink-0 text-sm text-destructive">{retranscribeError}</p>
+          )}
 
-      <TranscriptView
-        lines={transcriptLines}
-        interimMe={isActive ? interimMe : undefined}
-        interimThem={isActive ? interimThem : undefined}
-        onSeek={audioPath ? handleSeek : undefined}
-      />
+          {/* Pinned under the transcript, a single compact row: this bottom
+              slot is where a chat-with-the-transcript input will later
+              live, so the player must stay stackable, not a full-width
+              native embed. */}
+          {audioPath && (
+            <AudioPlayer
+              ref={playerRef}
+              src={convertFileSrc(audioPath)}
+              trailing={
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="shrink-0"
+                  disabled={isActive || retranscribeBusy}
+                  onClick={handleRetranscribe}
+                >
+                  {retranscribeBusy ? "Re-transcribing..." : "Re-transcribe"}
+                </Button>
+              }
+            />
+          )}
+        </TabsContent>
+      </Tabs>
     </div>
   );
 });

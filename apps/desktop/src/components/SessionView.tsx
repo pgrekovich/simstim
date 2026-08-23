@@ -1,4 +1,5 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { Button } from "@/components/ui/button";
 import { TranscriptView } from "@/components/TranscriptView";
@@ -204,6 +205,17 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
   const [retranscribeError, setRetranscribeError] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
   const jobRunningHere = retranscribingJob?.path === path;
+  // App's toolbar renders an empty `#topbar-title-slot`; the title input is
+  // portaled into it so it reads as the document's name up there while every
+  // bit of save/flush routing stays in this component (whose keyed
+  // remount-per-path lifecycle the title state depends on). Looked up in an
+  // effect, not during render: the slot is a sibling subtree, and reading
+  // the DOM mid-render would race React mounting it. Falls back to inline
+  // rendering when the slot doesn't exist (component-level tests).
+  const [titleSlot, setTitleSlot] = useState<HTMLElement | null>(null);
+  useEffect(() => {
+    setTitleSlot(document.getElementById("topbar-title-slot"));
+  }, []);
 
   // "Latest value" mirrors of the controlled state above, read from
   // callbacks (blur handlers, the debounce timeout, the unmount cleanup)
@@ -428,19 +440,37 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
       ? "starting..."
       : null;
 
+  const titleInput = (
+    <input
+      value={title}
+      onChange={handleTitleChange}
+      onKeyDown={handleTitleKeyDown}
+      onBlur={commitTitle}
+      placeholder="Untitled"
+      className={
+        titleSlot
+          ? // Toolbar scale: the input IS the window title up there.
+            "w-full min-w-0 bg-transparent text-sm font-medium outline-none placeholder:text-muted-foreground"
+          : "min-w-0 flex-1 bg-transparent text-xl font-semibold outline-none placeholder:text-muted-foreground"
+      }
+    />
+  );
+
   return (
     <div className="flex h-full min-h-0 flex-col gap-4">
-      <div className="flex shrink-0 items-center gap-2">
-        <input
-          value={title}
-          onChange={handleTitleChange}
-          onKeyDown={handleTitleKeyDown}
-          onBlur={commitTitle}
-          placeholder="Untitled"
-          className="min-w-0 flex-1 bg-transparent text-xl font-semibold outline-none placeholder:text-muted-foreground"
-        />
+      {titleSlot ? createPortal(titleInput, titleSlot) : (
+        <div className="flex shrink-0 items-center gap-2">{titleInput}</div>
+      )}
 
-        {audioPath && (
+      {audioPath && (
+        <div className="flex shrink-0 items-center gap-2">
+          <audio
+            ref={audioRef}
+            controls
+            preload="metadata"
+            src={convertFileSrc(audioPath)}
+            className="h-10 min-w-0 flex-1"
+          />
           <Button
             type="button"
             variant="outline"
@@ -451,17 +481,7 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
           >
             {retranscribeBusy ? "Re-transcribing..." : "Re-transcribe"}
           </Button>
-        )}
-      </div>
-
-      {audioPath && (
-        <audio
-          ref={audioRef}
-          controls
-          preload="metadata"
-          src={convertFileSrc(audioPath)}
-          className="h-10 w-full shrink-0"
-        />
+        </div>
       )}
 
       {retranscribeStatusText && (

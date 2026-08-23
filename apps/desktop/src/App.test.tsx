@@ -52,6 +52,7 @@ vi.mock("@/lib/ipc", () => ({
   deleteModel: vi.fn().mockResolvedValue(undefined),
   retranscribeSession: vi.fn().mockResolvedValue(undefined),
   createSession: vi.fn().mockResolvedValue("/tmp/new.md"),
+  searchSessions: vi.fn().mockResolvedValue([]),
   deleteSession: vi.fn().mockResolvedValue(undefined),
   showMainWindow: vi.fn().mockResolvedValue(undefined),
 }));
@@ -63,6 +64,11 @@ vi.mock("@tauri-apps/api/event", () => ({
 vi.mock("@tauri-apps/plugin-dialog", () => ({
   open: vi.fn(),
   ask: vi.fn().mockResolvedValue(false),
+}));
+
+vi.mock("@tauri-apps/plugin-opener", () => ({
+  openPath: vi.fn().mockResolvedValue(undefined),
+  revealItemInDir: vi.fn().mockResolvedValue(undefined),
 }));
 
 // SessionView feeds a session's `<audio src>` through `convertFileSrc` when
@@ -92,6 +98,16 @@ function emit(name: string, payload: unknown) {
   act(() => {
     handler({ payload });
   });
+}
+
+/**
+ * The control that starts a recording depends on the screen: the empty
+ * state (nothing selected) offers a "Start Recording" row and hides the
+ * topbar; once a session is open (or recording), the topbar's "Record"
+ * button exists instead. One matcher covers tests starting from either.
+ */
+function findStartControl() {
+  return screen.findByRole("button", { name: /^(start recording|record$)/i });
 }
 
 beforeEach(() => {
@@ -143,7 +159,7 @@ describe("App: call detection via the banner window (stage 1.1)", () => {
 
   it("surfaces the main window instead of starting while recording", async () => {
     render(<App />);
-    fireEvent.click(await screen.findByRole("button", { name: /^record$/i }));
+    fireEvent.click(await findStartControl());
     await screen.findByRole("button", { name: /stop/i });
 
     await emitBannerStart();
@@ -222,7 +238,7 @@ describe("App: call detection via the banner window (stage 1.1)", () => {
       auto_stop_after_call: true,
     });
     render(<App />);
-    fireEvent.click(await screen.findByRole("button", { name: /^record$/i }));
+    fireEvent.click(await findStartControl());
     await screen.findByRole("button", { name: /stop/i });
 
     emit("call-ended", {
@@ -241,7 +257,7 @@ describe("App: hot-mic fix (final review Critical finding)", () => {
     );
     render(<App />);
 
-    fireEvent.click(await screen.findByRole("button", { name: /^record$/i }));
+    fireEvent.click(await findStartControl());
     const stopButton = await screen.findByRole("button", { name: /stop/i });
     fireEvent.click(stopButton);
 
@@ -256,7 +272,7 @@ describe("App: hot-mic fix (final review Critical finding)", () => {
   it("keeps the record control wired to Stop when a session-error lands mid-recording", async () => {
     render(<App />);
 
-    const recordButton = await screen.findByRole("button", { name: /^record$/i });
+    const recordButton = await findStartControl();
     fireEvent.click(recordButton);
     await waitFor(() => expect(ipc.startRecording).toHaveBeenCalledTimes(1));
 
@@ -289,7 +305,7 @@ describe("App: a saving session must not block the next call (owner bug: missed 
       () => new Promise<string>((resolve) => { finishStop = resolve; }),
     );
     render(<App />);
-    fireEvent.click(await screen.findByRole("button", { name: /^record$/i }));
+    fireEvent.click(await findStartControl());
     fireEvent.click(await screen.findByRole("button", { name: /stop/i }));
     await waitFor(() => expect(ipc.stopRecording).toHaveBeenCalledTimes(1));
     expect(screen.getByText("saving")).toBeVisible();
@@ -302,7 +318,7 @@ describe("App: a saving session must not block the next call (owner bug: missed 
     fireEvent.click(screen.getByRole("button", { name: /new note/i }));
     await waitFor(() => expect(ipc.createSession).toHaveBeenCalledTimes(1));
 
-    fireEvent.click(await screen.findByRole("button", { name: /^record$/i }));
+    fireEvent.click(await findStartControl());
     await waitFor(() => expect(ipc.startRecording).toHaveBeenCalledTimes(2));
     expect(vi.mocked(ipc.startRecording).mock.calls[1][0]).toBe("/tmp/new.md");
     await screen.findByRole("button", { name: /stop/i });
@@ -338,13 +354,13 @@ describe("App: a saving session must not block the next call (owner bug: missed 
       () => new Promise<string>((_resolve, reject) => { failStop = reject; }),
     );
     render(<App />);
-    fireEvent.click(await screen.findByRole("button", { name: /^record$/i }));
+    fireEvent.click(await findStartControl());
     fireEvent.click(await screen.findByRole("button", { name: /stop/i }));
     await waitFor(() => expect(ipc.stopRecording).toHaveBeenCalledTimes(1));
 
     fireEvent.click(screen.getByRole("button", { name: /new note/i }));
     await waitFor(() => expect(ipc.createSession).toHaveBeenCalledTimes(1));
-    fireEvent.click(await screen.findByRole("button", { name: /^record$/i }));
+    fireEvent.click(await findStartControl());
     await screen.findByRole("button", { name: /stop/i });
 
     // A save failure means the old call's file may be incomplete; the owner
@@ -376,7 +392,7 @@ describe("App: active-session notes survive a switch-away-and-back (final review
 
     render(<App />);
 
-    const recordButton = await screen.findByRole("button", { name: /^record$/i });
+    const recordButton = await findStartControl();
     fireEvent.click(recordButton);
     await waitFor(() => expect(ipc.startRecording).toHaveBeenCalledTimes(1));
     await screen.findByRole("button", { name: /stop/i });
@@ -408,7 +424,7 @@ describe("App: record continues into the open note (behavior fix)", () => {
   it("passes null to start_recording when no session is selected", async () => {
     render(<App />);
 
-    const recordButton = await screen.findByRole("button", { name: /^record$/i });
+    const recordButton = await findStartControl();
     fireEvent.click(recordButton);
 
     await waitFor(() => expect(ipc.startRecording).toHaveBeenCalledWith(null));
@@ -434,7 +450,7 @@ describe("App: record continues into the open note (behavior fix)", () => {
     fireEvent.click(otherRow);
     await screen.findByDisplayValue("old notes");
 
-    const recordButton = await screen.findByRole("button", { name: /^record$/i });
+    const recordButton = await findStartControl();
     fireEvent.click(recordButton);
 
     await waitFor(() => expect(ipc.startRecording).toHaveBeenCalledWith("/tmp/other.md"));
@@ -481,7 +497,7 @@ describe("App: record continues into the open note (behavior fix)", () => {
     fireEvent.change(notes, { target: { value: "quick note before recording" } });
     expect(ipc.saveSession).not.toHaveBeenCalled();
 
-    const recordButton = await screen.findByRole("button", { name: /^record$/i });
+    const recordButton = await findStartControl();
     fireEvent.click(recordButton);
 
     await waitFor(() => expect(ipc.startRecording).toHaveBeenCalledTimes(1));
@@ -839,7 +855,7 @@ describe("App: surfaces terminal re-transcribe errors from background jobs (stag
     // one at all.
     render(<App />);
 
-    const recordButton = await screen.findByRole("button", { name: /^record$/i });
+    const recordButton = await findStartControl();
     fireEvent.click(recordButton);
     await waitFor(() => expect(ipc.startRecording).toHaveBeenCalledTimes(1));
     // Flips status.kind from "loading-model" to "recording".
@@ -872,7 +888,7 @@ describe("App: sidebar refresh on model-ready (final review Important finding)",
   it("refreshes the session list exactly once when the model finishes loading, not on every later line", async () => {
     render(<App />);
 
-    const recordButton = await screen.findByRole("button", { name: /^record$/i });
+    const recordButton = await findStartControl();
     fireEvent.click(recordButton);
     await waitFor(() => expect(ipc.startRecording).toHaveBeenCalledTimes(1));
 
@@ -918,7 +934,7 @@ describe("App: deleting a note from the sidebar (stage 0.10)", () => {
 
     render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: /doomed call/i }));
-    await waitFor(() => expect(document.body.textContent).not.toContain("select a session"));
+    await waitFor(() => expect(document.body.textContent).not.toContain("Start Recording"));
 
     const callsBefore = vi.mocked(ipc.listSessions).mock.calls.length;
     fireEvent.click(screen.getByRole("button", { name: /move to trash/i }));
@@ -933,7 +949,7 @@ describe("App: deleting a note from the sidebar (stage 0.10)", () => {
     // The deleted note was selected: the pane must fall back to the empty
     // state, and the sidebar must re-scan the folder.
     await waitFor(() =>
-      expect(document.body.textContent).toContain("select a session or start recording"),
+      expect(document.body.textContent).toContain("Start Recording"),
     );
     await waitFor(() =>
       expect(vi.mocked(ipc.listSessions).mock.calls.length).toBeGreaterThan(callsBefore),
@@ -966,5 +982,171 @@ describe("App: deleting a note from the sidebar (stage 0.10)", () => {
     await waitFor(() =>
       expect(document.body.textContent).toContain("being re-transcribed"),
     );
+  });
+});
+
+describe("App: search (stage 0.10)", () => {
+  const all: SessionMeta[] = [
+    { path: "/tmp/sync.md", title: "Weekly sync", date: new Date().toISOString(), duration_secs: null },
+    { path: "/tmp/standup.md", title: "Standup", date: new Date().toISOString(), duration_secs: null },
+  ];
+  const hit = {
+    ...all[0],
+    snippets: [
+      { section: "transcript" as const, text: "[00:00:04] Me: about the budget" },
+    ],
+    total_matches: 1,
+  };
+
+  it("shows debounced hits with highlighted snippets in the main pane, and restores everything when cleared", async () => {
+    vi.mocked(ipc.listSessions).mockResolvedValue(all);
+    vi.mocked(ipc.searchSessions).mockClear().mockResolvedValue([hit]);
+
+    render(<App />);
+    await screen.findByRole("button", { name: /standup/i });
+
+    const input = screen.getByRole("searchbox", { name: /search sessions/i });
+    fireEvent.change(input, { target: { value: "budget" } });
+
+    // Debounced: one IPC call for the settled query; the sidebar filters
+    // down and the main pane shows the hit in context with a highlight.
+    await waitFor(() =>
+      expect(ipc.searchSessions).toHaveBeenCalledExactlyOnceWith("budget"),
+    );
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: /standup/i })).toBeNull(),
+    );
+    expect(screen.getByText(/1 note matches/i)).toBeInTheDocument();
+    const mark = document.querySelector("mark");
+    expect(mark?.textContent).toBe("budget");
+
+    // Clearing restores the unfiltered list with no extra search call.
+    fireEvent.change(input, { target: { value: "" } });
+    await screen.findByRole("button", { name: /standup/i });
+    expect(ipc.searchSessions).toHaveBeenCalledTimes(1);
+    expect(document.querySelector("mark")).toBeNull();
+  });
+
+  it("opens a result on click: clears the search and shows that session", async () => {
+    vi.mocked(ipc.listSessions).mockResolvedValue(all);
+    vi.mocked(ipc.searchSessions).mockClear().mockResolvedValue([hit]);
+    vi.mocked(ipc.readSession).mockResolvedValue({
+      title: "Weekly sync",
+      date: "",
+      notes: "",
+      transcript: "[00:00:04] Me: about the budget",
+      audio_path: null,
+    });
+
+    render(<App />);
+    fireEvent.change(screen.getByRole("searchbox", { name: /search sessions/i }), {
+      target: { value: "budget" },
+    });
+    await screen.findByText(/1 note matches/i);
+
+    // The result card lives in the main pane; the sidebar row for the same
+    // session also matches by name, so pick the card via its snippet.
+    const card = screen
+      .getAllByRole("button", { name: /weekly sync/i })
+      .find((b) => b.textContent?.includes("about the budget"));
+    expect(card).toBeDefined();
+    fireEvent.click(card!);
+
+    // Search cleared, session opened.
+    await waitFor(() =>
+      expect(screen.queryByText(/1 note matches/i)).toBeNull(),
+    );
+    expect(
+      (screen.getByRole("searchbox", { name: /search sessions/i }) as HTMLInputElement).value,
+    ).toBe("");
+    await waitFor(() =>
+      expect(document.body.textContent).toContain("about the budget"),
+    );
+  });
+});
+
+describe("App: empty state and global hotkeys (stage 0.10)", () => {
+  it("shows the shortcut menu when nothing is selected, and its rows work", async () => {
+    render(<App />);
+    await screen.findByText("New Note");
+
+    // Settings first: the New Note row selects the created note, which
+    // replaces this menu with the session view.
+    fireEvent.click(screen.getByRole("button", { name: /settings.*⌘/i }));
+    await screen.findByRole("dialog");
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    fireEvent.click(screen.getByRole("button", { name: /new note.*⌘.*n/i }));
+    await waitFor(() => expect(ipc.createSession).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(screen.queryByText("Start Recording")).toBeNull());
+  });
+
+  it("⌘N creates a note, ⌘⇧N starts recording, ⌘F focuses search", async () => {
+    render(<App />);
+    await screen.findByText("New Note");
+
+    fireEvent.keyDown(window, { key: "n", metaKey: true });
+    await waitFor(() => expect(ipc.createSession).toHaveBeenCalledTimes(1));
+    // The whole new-note flow must settle (`busy` back to false) before the
+    // record hotkey can pass its gating.
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /^record$/i })).toBeEnabled(),
+    );
+
+    fireEvent.keyDown(window, { key: "n", metaKey: true, shiftKey: true });
+    await waitFor(() => expect(ipc.startRecording).toHaveBeenCalledTimes(1));
+
+    fireEvent.keyDown(window, { key: "f", metaKey: true });
+    expect(document.activeElement).toBe(
+      screen.getByRole("searchbox", { name: /search sessions/i }),
+    );
+  });
+
+  it("⌘⇧N does nothing while already recording", async () => {
+    render(<App />);
+    fireEvent.click(await findStartControl());
+    await screen.findByRole("button", { name: /stop/i });
+    expect(ipc.startRecording).toHaveBeenCalledTimes(1);
+
+    fireEvent.keyDown(window, { key: "n", metaKey: true, shiftKey: true });
+    // Give any (wrong) async start a tick to land before asserting.
+    await new Promise((r) => setTimeout(r, 20));
+    expect(ipc.startRecording).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("App: note actions menu (stage 0.10)", () => {
+  const one: SessionMeta[] = [
+    { path: "/tmp/sync.md", title: "Weekly sync", date: new Date().toISOString(), duration_secs: null },
+  ];
+
+  it("offers Open file and Show in Finder for the open note", async () => {
+    const opener = await import("@tauri-apps/plugin-opener");
+    vi.mocked(ipc.listSessions).mockResolvedValue(one);
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /weekly sync/i }));
+    const trigger = await screen.findByRole("button", { name: /note actions/i });
+
+    fireEvent.pointerDown(trigger);
+    fireEvent.click(trigger);
+    fireEvent.click(await screen.findByText("Open file"));
+    await waitFor(() =>
+      expect(opener.openPath).toHaveBeenCalledExactlyOnceWith("/tmp/sync.md"),
+    );
+
+    fireEvent.pointerDown(trigger);
+    fireEvent.click(trigger);
+    fireEvent.click(await screen.findByText("Show in Finder"));
+    await waitFor(() =>
+      expect(opener.revealItemInDir).toHaveBeenCalledExactlyOnceWith("/tmp/sync.md"),
+    );
+  });
+
+  it("hides the menu when nothing is selected", async () => {
+    render(<App />);
+    await screen.findByText("New Note");
+    expect(screen.queryByRole("button", { name: /note actions/i })).toBeNull();
   });
 });

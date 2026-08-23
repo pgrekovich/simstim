@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { Sidebar } from "@/components/Sidebar";
 import type { SessionMeta } from "@/lib/ipc";
@@ -22,6 +22,9 @@ describe("Sidebar: recording indicator", () => {
         onSelect={vi.fn()}
         onNewSession={vi.fn()}
         onDelete={vi.fn()}
+        searchQuery=""
+        onSearchChange={vi.fn()}
+        onOpenSettings={vi.fn()}
       />
     );
 
@@ -45,6 +48,9 @@ describe("Sidebar: recording indicator", () => {
         onSelect={vi.fn()}
         onNewSession={vi.fn()}
         onDelete={vi.fn()}
+        searchQuery=""
+        onSearchChange={vi.fn()}
+        onOpenSettings={vi.fn()}
       />
     );
 
@@ -64,6 +70,9 @@ describe("Sidebar: recording indicator", () => {
         onSelect={vi.fn()}
         onNewSession={vi.fn()}
         onDelete={vi.fn()}
+        searchQuery=""
+        onSearchChange={vi.fn()}
+        onOpenSettings={vi.fn()}
       />
     );
 
@@ -82,6 +91,9 @@ describe("Sidebar: selected styling", () => {
         onSelect={vi.fn()}
         onNewSession={vi.fn()}
         onDelete={vi.fn()}
+        searchQuery=""
+        onSearchChange={vi.fn()}
+        onOpenSettings={vi.fn()}
       />
     );
 
@@ -109,6 +121,9 @@ describe("Sidebar: selected styling", () => {
         onSelect={vi.fn()}
         onNewSession={vi.fn()}
         onDelete={vi.fn()}
+        searchQuery=""
+        onSearchChange={vi.fn()}
+        onOpenSettings={vi.fn()}
       />
     );
 
@@ -136,6 +151,9 @@ describe("Sidebar: new note button", () => {
         onSelect={vi.fn()}
         onNewSession={onNewSession}
         onDelete={vi.fn()}
+        searchQuery=""
+        onSearchChange={vi.fn()}
+        onOpenSettings={vi.fn()}
       />
     );
 
@@ -157,6 +175,9 @@ describe("Sidebar: delete button", () => {
         onSelect={onSelect}
         onNewSession={vi.fn()}
         onDelete={onDelete}
+        searchQuery=""
+        onSearchChange={vi.fn()}
+        onOpenSettings={vi.fn()}
       />
     );
 
@@ -176,10 +197,75 @@ describe("Sidebar: delete button", () => {
         onSelect={vi.fn()}
         onNewSession={vi.fn()}
         onDelete={vi.fn()}
+        searchQuery=""
+        onSearchChange={vi.fn()}
+        onOpenSettings={vi.fn()}
       />
     );
 
     // Only Session B's row (not recording) gets one.
     expect(screen.getAllByRole("button", { name: /move to trash/i })).toHaveLength(1);
+  });
+});
+
+describe("Sidebar: search and settings (stage 0.10)", () => {
+  it("reports every keystroke through onSearchChange", () => {
+    const onSearchChange = vi.fn();
+    render(
+      <Sidebar
+        sessions={makeSessions()}
+        selectedPath={null}
+        activePath={null}
+        onSelect={vi.fn()}
+        onNewSession={vi.fn()}
+        onDelete={vi.fn()}
+        searchQuery=""
+        onSearchChange={onSearchChange}
+        onOpenSettings={vi.fn()}
+      />
+    );
+
+    const input = screen.getByRole("searchbox", { name: /search sessions/i });
+    fireEvent.change(input, { target: { value: "budget" } });
+    expect(onSearchChange).toHaveBeenCalledExactlyOnceWith("budget");
+  });
+
+  it("says 'no matches' for an empty result of an active search, not 'no sessions yet'", () => {
+    render(
+      <Sidebar
+        sessions={[]}
+        selectedPath={null}
+        activePath={null}
+        onSelect={vi.fn()}
+        onNewSession={vi.fn()}
+        onDelete={vi.fn()}
+        searchQuery="quarterly"
+        onSearchChange={vi.fn()}
+        onOpenSettings={vi.fn()}
+      />
+    );
+
+    expect(screen.getByText("no matches")).toBeInTheDocument();
+    expect(screen.queryByText("no sessions yet")).toBeNull();
+  });
+
+  it("opens settings from the footer button", () => {
+    const onOpenSettings = vi.fn();
+    render(
+      <Sidebar
+        sessions={[]}
+        selectedPath={null}
+        activePath={null}
+        onSelect={vi.fn()}
+        onNewSession={vi.fn()}
+        onDelete={vi.fn()}
+        searchQuery=""
+        onSearchChange={vi.fn()}
+        onOpenSettings={onOpenSettings}
+      />
+    );
+
+    screen.getByRole("button", { name: /settings/i }).click();
+    expect(onOpenSettings).toHaveBeenCalledTimes(1);
   });
 });

@@ -1,5 +1,6 @@
-import { Plus, Trash2 } from "lucide-react";
+import { Plus, Search, Settings, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import type { SessionMeta } from "@/lib/ipc";
 
@@ -12,6 +13,12 @@ interface SidebarProps {
   onNewSession: () => void;
   /** Row-hover trash button; App owns the confirm dialog and the IPC call. */
   onDelete: (path: string) => void;
+  /** Current search text; `sessions` is already the filtered result for it. */
+  searchQuery: string;
+  /** Keystroke-level; App debounces the actual `searchSessions` IPC call. */
+  onSearchChange: (query: string) => void;
+  /** Footer Settings button; App owns the dialog. */
+  onOpenSettings: () => void;
 }
 
 interface SessionGroup {
@@ -69,16 +76,24 @@ export function Sidebar({
   onSelect,
   onNewSession,
   onDelete,
+  searchQuery,
+  onSearchChange,
+  onOpenSettings,
 }: SidebarProps) {
   const groups = groupSessions(sessions);
+  const searching = searchQuery.trim() !== "";
 
   return (
     <aside className="flex h-full w-60 shrink-0 flex-col border-r bg-sidebar text-sidebar-foreground">
-      {/* h-12 matches App's main header exactly (it renders `h-12` too), so
-          the two bottom borders meet as ONE continuous line across the
-          sidebar seam. Vertical padding instead of a fixed height put this
-          border 4px below the header's and visibly broke that line. */}
-      <div className="flex h-12 shrink-0 items-center border-b border-sidebar-border px-2">
+      {/* The window's title bar is an overlay (tauri.conf.json
+          `titleBarStyle: Overlay`), so the sidebar background runs to the
+          very top and the traffic lights float over this strip. It doubles
+          as the drag handle for that region. */}
+      <div data-tauri-drag-region className="h-10 shrink-0" />
+      {/* Borderless on purpose: the sidebar reads as one seamless surface
+          from the traffic lights down; only the main pane keeps a header
+          rule, and it terminates at the sidebar edge. */}
+      <div className="flex h-12 shrink-0 items-center px-2">
         {/* Surfaces are alpha over `foreground` rather than the sidebar-accent
             token: in the light theme that token (0.97) sits so close to the
             sidebar background (0.985) that hover and selection are invisible.
@@ -94,10 +109,32 @@ export function Sidebar({
         </Button>
       </div>
 
+      <div className="px-2 pb-1 pt-2">
+        <div className="relative">
+          <Search
+            aria-hidden="true"
+            className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground"
+          />
+          <Input
+            id="session-search"
+            type="search"
+            placeholder="Search"
+            aria-label="Search sessions"
+            value={searchQuery}
+            onChange={(e) => onSearchChange(e.target.value)}
+            // h-8 + the quieter alpha fill instead of Input's default h-9
+            // bordered look: this is a filter box inside a rail, not a form
+            // field. Same alpha-over-foreground trick as the row hovers so
+            // one value reads correctly in both themes.
+            className="h-8 rounded-md border-transparent bg-foreground/[0.05] pl-8 text-sm shadow-none focus-visible:border-ring focus-visible:bg-transparent"
+          />
+        </div>
+      </div>
+
       <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
         {sessions.length === 0 ? (
           <p className="px-2 py-4 text-center text-xs text-muted-foreground">
-            no sessions yet
+            {searching ? "no matches" : "no sessions yet"}
           </p>
         ) : (
           groups.map((group) => (
@@ -179,6 +216,17 @@ export function Sidebar({
             </div>
           ))
         )}
+      </div>
+
+      <div className="border-t border-sidebar-border px-2 py-2">
+        <Button
+          variant="ghost"
+          className="w-full justify-start gap-2 transition-colors duration-150 hover:bg-foreground/[0.06] active:bg-foreground/[0.11]"
+          onClick={onOpenSettings}
+        >
+          <Settings className="size-4" />
+          Settings
+        </Button>
       </div>
     </aside>
   );

@@ -1,9 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { ask } from "@tauri-apps/plugin-dialog";
-import { Settings } from "lucide-react";
+import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
+import { Ellipsis, FileText, Folder } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { RecordButton } from "@/components/RecordButton";
+import { EmptyState } from "@/components/EmptyState";
+import { SearchResults } from "@/components/SearchResults";
 import { SessionView, type SessionViewHandle } from "@/components/SessionView";
 import { Sidebar } from "@/components/Sidebar";
 import { SettingsDialog } from "@/components/SettingsDialog";
@@ -12,6 +21,7 @@ import {
   deleteSession,
   getConfig,
   listSessions,
+  searchSessions,
   readSession,
   showMainWindow,
   startRecording,
@@ -21,6 +31,7 @@ import {
   type CallEndedPayload,
   type ModelInfo,
   type RetranscribeProgress,
+  type SearchHit,
   type SessionData,
   type SessionErrorPayload,
   type SessionMeta,
@@ -108,6 +119,9 @@ function App() {
 
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
+  /** `null` = not searching, show `sessions`; else the filtered hits. */
+  const [searchResults, setSearchResults] = useState<SearchHit[] | null>(null);
   // The path returned by `start_recording`, while a session is actively
   // being recorded (cleared on stop). Used to decide whether the content
   // pane should show the live in-memory `lines` instead of reading the file
@@ -277,6 +291,34 @@ function App() {
       return null;
     }
   }, []);
+
+  // Search (stage 0.10): a non-blank query swaps the sidebar's list for
+  // `search_sessions`' full-text result. Debounced per keystroke; keyed on
+  // `sessions` too, so every sidebar refresh (a stop landing, a delete, a
+  // window focus) re-runs the active search instead of leaving stale hits.
+  // The `cancelled` guard keeps an older, slower search from clobbering a
+  // newer one's result after the debounce timer already swapped queries.
+  useEffect(() => {
+    if (searchQuery.trim() === "") {
+      setSearchResults(null);
+      return;
+    }
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      searchSessions(searchQuery)
+        .then((hits) => {
+          if (!cancelled) setSearchResults(hits);
+        })
+        .catch(() => {
+          // A transient scan failure keeps the previous hits on screen,
+          // same policy as refreshSessions.
+        });
+    }, 150);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [searchQuery, sessions]);
 
   // Refresh triggers (Global Constraints / Task 5 brief): mount, window
   // focus, recording start/stop (handled in handleStart/handleStop below),
@@ -675,6 +717,51 @@ function App() {
   // untouched: this is just another (inactive) session file that happens to
   // start selected, not a substitute for `handleStart`. Recording always
   // creates its own file via `start_recording`, independent of this one.
+  // Global hotkeys (stage 0.10): ⌘N new note, ⌘⇧N start recording, ⌘,
+  // settings, ⌘F focus search. The listener is attached exactly once; it
+  // reads the CURRENT handlers through a ref refreshed on every render, so
+  // it never closes over stale state (`busy`, `sessionActive`, ...) the way
+  // a once-captured closure would.
+  const hotkeysRef = useRef({
+    newNote: () => {},
+    startRecording: () => {},
+    openSettings: () => {},
+  });
+  useEffect(() => {
+    hotkeysRef.current = {
+      newNote: () => void handleNewSession(),
+      startRecording: () => {
+        // Same gating as the Record button and the EmptyState row.
+        if (busy || sessionActive || !modelReady) return;
+        void handleStart();
+      },
+      openSettings: () => setSettingsOpen(true),
+    };
+  });
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (!e.metaKey || e.altKey || e.ctrlKey || e.repeat) return;
+      const key = e.key.toLowerCase();
+      if (key === "n" && e.shiftKey) {
+        e.preventDefault();
+        hotkeysRef.current.startRecording();
+      } else if (key === "n") {
+        e.preventDefault();
+        hotkeysRef.current.newNote();
+      } else if (key === "," && !e.shiftKey) {
+        e.preventDefault();
+        hotkeysRef.current.openSettings();
+      } else if (key === "f" && !e.shiftKey) {
+        e.preventDefault();
+        const search = document.getElementById("session-search") as HTMLInputElement | null;
+        search?.focus();
+        search?.select();
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
   async function handleDeleteSession(path: string) {
     const title = sessions.find((s) => s.path === path)?.title ?? "this note";
     // A native confirm, not a silent delete: the files leave the folder.
@@ -729,6 +816,11 @@ function App() {
   // exists ("saved to ...", an error, or an active recording) it takes
   // priority, so a stale model-download reminder never masks it.
   const showModelHint = !sessionActive && !modelReady && status.kind === "idle";
+  // The empty-state screen (nothing selected, no search, not recording)
+  // hides the topbar entirely -- a lone Record button floating over the
+  // shortcut menu reads as clutter -- so its branch renders a bare drag
+  // strip instead, and the status line surfaces inside EmptyState.
+  const showTopbar = sessionActive || searchResults !== null || selectedPath !== null;
   const statusText = showModelHint
     ? "model not downloaded"
     : status.kind === "loading-model"
@@ -746,29 +838,45 @@ function App() {
   return (
     <div className="flex h-screen">
       <Sidebar
-        sessions={sessions}
+        sessions={searchResults ?? sessions}
         selectedPath={selectedPath}
         activePath={activePath}
-        onSelect={setSelectedPath}
+        onSelect={(path) => {
+          setSelectedPath(path);
+          // Picking a row while searching is opening a result: clear the
+          // query so the session view replaces the results pane.
+          if (searchQuery !== "") setSearchQuery("");
+        }}
         onNewSession={handleNewSession}
         onDelete={handleDeleteSession}
+        searchQuery={searchQuery}
+        onSearchChange={setSearchQuery}
+        onOpenSettings={() => setSettingsOpen(true)}
       />
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex h-12 shrink-0 items-center gap-3 border-b px-4">
-          <RecordButton
-            size="compact"
-            recording={sessionActive}
-            disabled={busy || (!sessionActive && !modelReady)}
-            startedAt={recordingStartedAt}
-            onClick={sessionActive ? handleStop : () => void handleStart()}
-          />
+        {!showTopbar && <div data-tauri-drag-region className="h-10 shrink-0" />}
+        {/* Sits at the very window top, level with the traffic lights
+            (overlay title bar), and doubles as that region's drag handle --
+            buttons inside still receive their own clicks. */}
+        {showTopbar && (
+        <header
+          data-tauri-drag-region
+          className="flex h-12 shrink-0 items-center gap-3 border-b px-4"
+        >
+          {/* The mounted SessionView portals its editable title input in
+              here (see SessionView's title-slot logic), so the title reads
+              as the document's name in the toolbar while ALL of the
+              save/flush routing stays inside SessionView, where its
+              remount-per-path lifecycle lives. Empty (and invisible) when
+              nothing is selected or search owns the main pane. */}
+          <div id="topbar-title-slot" className="flex min-w-0 flex-1 items-center" />
 
           <span
             className={
               status.kind === "error"
-                ? "min-w-0 flex-1 truncate text-sm text-destructive"
-                : "min-w-0 flex-1 truncate text-sm text-muted-foreground"
+                ? "min-w-0 max-w-[50%] shrink-0 truncate text-sm text-destructive"
+                : "min-w-0 max-w-[50%] shrink-0 truncate text-sm text-muted-foreground"
             }
           >
             {statusText}
@@ -780,21 +888,61 @@ function App() {
             </Button>
           )}
 
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label="Settings"
-            onClick={() => setSettingsOpen(true)}
-          >
-            <Settings />
-          </Button>
+          <RecordButton
+            size="compact"
+            recording={sessionActive}
+            disabled={busy || (!sessionActive && !modelReady)}
+            startedAt={recordingStartedAt}
+            onClick={sessionActive ? handleStop : () => void handleStart()}
+          />
+
+          {/* File actions for the open note. Hidden while search owns the
+              main pane: the selection is invisible there, so acting on it
+              would be acting on something the user can't see. */}
+          {selectedPath !== null && searchResults === null && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon" aria-label="Note actions">
+                  <Ellipsis />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onSelect={() => void openPath(selectedPath)}>
+                  <FileText />
+                  Open file
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => void revealItemInDir(selectedPath)}>
+                  <Folder />
+                  Show in Finder
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
         </header>
+        )}
 
         <div className="flex min-h-0 flex-1 flex-col p-6">
-          {selectedPath === null ? (
-            <p className="flex h-full items-center justify-center text-center text-sm text-muted-foreground">
-              select a session or start recording
-            </p>
+          {searchResults !== null ? (
+            // An active search owns the main pane: hits in context, query
+            // highlighted (stage 0.10). Opening a hit clears the search, so
+            // the session view below takes over.
+            <SearchResults
+              hits={searchResults}
+              query={searchQuery}
+              onOpen={(path) => {
+                setSelectedPath(path);
+                setSearchQuery("");
+              }}
+            />
+          ) : selectedPath === null ? (
+            <EmptyState
+              onNewNote={handleNewSession}
+              onStartRecording={() => void handleStart()}
+              onOpenSettings={() => setSettingsOpen(true)}
+              recordingDisabled={busy || sessionActive || !modelReady}
+              notice={statusText || undefined}
+              noticeIsError={status.kind === "error"}
+            />
           ) : viewingActiveSession ? (
             <SessionView
               ref={activeSessionViewRef}

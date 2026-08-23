@@ -343,6 +343,35 @@ export function listSessions(): Promise<SessionMeta[]> {
   return invoke("list_sessions");
 }
 
+/** Mirrors `sessions::SearchSnippet`: one matching line inside a SearchHit. */
+export interface SearchSnippet {
+  /** Where the line came from, so the results pane can label it. */
+  section: "title" | "notes" | "transcript";
+  /** The whole matching line, verbatim; the UI windows and highlights it. */
+  text: string;
+}
+
+/**
+ * Mirrors `sessions::SearchHit` (SessionMeta is serde-flattened into it):
+ * one matching session with its first few matching lines.
+ */
+export interface SearchHit extends SessionMeta {
+  /** First few matching lines (backend caps them); shown highlighted. */
+  snippets: SearchSnippet[];
+  /** Total occurrences across the whole file, beyond the shown snippets. */
+  total_matches: number;
+}
+
+/**
+ * Full-text search over the output folder (stage 0.10): case-insensitive
+ * substring match against each session's title, notes and transcript.
+ * Mirrors `sessions::search_sessions` (apps/desktop/src-tauri/src/sessions.rs).
+ * A blank query returns the same list as `listSessions`, with empty snippets.
+ */
+export function searchSessions(query: string): Promise<SearchHit[]> {
+  return invoke("search_sessions", { query });
+}
+
 export function readSession(path: string): Promise<SessionData> {
   return invoke("read_session", { path });
 }

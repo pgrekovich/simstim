@@ -565,6 +565,7 @@ pub fn run() {
             models::download_model,
             models::delete_model,
             sessions::list_sessions,
+            sessions::search_sessions,
             sessions::read_session,
             sessions::save_session,
             sessions::create_session,

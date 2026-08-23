@@ -313,6 +313,83 @@ fn create_session_at(dir: &Path, now: DateTime<Local>) -> Result<PathBuf> {
     Ok(path)
 }
 
+/// One matching line inside a [`SearchHit`]. Mirrors `SearchSnippet` in
+/// `ipc.ts`.
+#[derive(Debug, Clone, Serialize)]
+pub struct SearchSnippet {
+    /// `"title" | "notes" | "transcript"` -- where this line came from, so
+    /// the results pane can label it.
+    pub section: &'static str,
+    /// The whole matching line, verbatim; the frontend windows and
+    /// highlights it.
+    pub text: String,
+}
+
+/// One matching session in a search result. Mirrors `SearchHit` in `ipc.ts`
+/// (which `extends SessionMeta` -- hence the serde flatten).
+#[derive(Debug, Clone, Serialize)]
+pub struct SearchHit {
+    #[serde(flatten)]
+    pub meta: SessionMeta,
+    /// The first few matching lines (capped at [`MAX_SNIPPETS`]); the
+    /// results pane shows these with the query highlighted.
+    pub snippets: Vec<SearchSnippet>,
+    /// Total occurrences across the whole file, so the pane can say
+    /// "7 matches" even though only the first snippets are shown.
+    pub total_matches: usize,
+}
+
+/// Snippets per session are capped: the results pane is an index into the
+/// note, not a replacement for opening it.
+const MAX_SNIPPETS: usize = 3;
+
+/// Full-text search over the output folder (stage 0.10): case-insensitive
+/// substring match against each session's title, notes and transcript --
+/// the `.md` files ARE the database and grep semantics are exactly what the
+/// owner expects of them. Returns matching lines as snippets so the UI can
+/// show WHERE each hit is, not just that the note matched. A blank query
+/// returns everything (empty snippets), same order as `list_sessions_in`
+/// (date desc). Reads every listed file on each call; at hundreds of
+/// transcripts that's still a handful of milliseconds, and the frontend
+/// debounces keystrokes.
+pub fn search_sessions_in(dir: &Path, query: &str) -> Vec<SearchHit> {
+    let needle = query.trim().to_lowercase();
+    let all = list_sessions_in(dir);
+    if needle.is_empty() {
+        return all
+            .into_iter()
+            .map(|meta| SearchHit { meta, snippets: Vec::new(), total_matches: 0 })
+            .collect();
+    }
+    all.into_iter()
+        .filter_map(|meta| {
+            // parse_session, not a raw file read: matching against
+            // frontmatter internals (`asr: whisper-...`) would surface
+            // noise hits for model-name-like queries.
+            let data = parse_session(Path::new(&meta.path)).ok()?;
+            let mut snippets = Vec::new();
+            let mut total = 0usize;
+            if meta.title.to_lowercase().contains(&needle) {
+                total += meta.title.to_lowercase().matches(&needle).count();
+                snippets.push(SearchSnippet { section: "title", text: meta.title.clone() });
+            }
+            for (section, body) in [("notes", &data.notes), ("transcript", &data.transcript)] {
+                for line in body.lines() {
+                    let lower = line.to_lowercase();
+                    let count = lower.matches(&needle).count();
+                    if count > 0 {
+                        total += count;
+                        if snippets.len() < MAX_SNIPPETS {
+                            snippets.push(SearchSnippet { section, text: line.trim().to_string() });
+                        }
+                    }
+                }
+            }
+            (total > 0).then_some(SearchHit { meta, snippets, total_matches: total })
+        })
+        .collect()
+}
+
 /// Rejections for `delete_session`, split from the deletion itself so
 /// they're unit-testable with plain `Option<&Path>`/`bool` values (the same
 /// shape as `retranscribe::check_not_active`, and the same reasoning as
@@ -359,6 +436,11 @@ pub fn delete_session_at(md_path: &Path) -> Result<()> {
 #[tauri::command]
 pub fn list_sessions() -> Vec<SessionMeta> {
     list_sessions_in(&Config::load().output_dir)
+}
+
+#[tauri::command]
+pub fn search_sessions(query: String) -> Vec<SearchHit> {
+    search_sessions_in(&Config::load().output_dir, &query)
 }
 
 #[tauri::command]
@@ -415,6 +497,94 @@ mod tests {
 
     fn t(hour: u32, min: u32, sec: u32) -> DateTime<Local> {
         Local.with_ymd_and_hms(2026, 8, 14, hour, min, sec).unwrap()
+    }
+
+    mod search_sessions {
+        use super::*;
+
+        /// Two sessions: one titled "Weekly sync" whose transcript mentions
+        /// "budget", one titled "Standup" (Russian transcript).
+        fn folder() -> tempfile::TempDir {
+            let dir = tempfile::tempdir().unwrap();
+
+            let mut weekly = Transcript::new(t(14, 0, 0));
+            weekly.set_title("Weekly sync".into());
+            weekly.add(Speaker::Me, 4.0, "let's talk about the budget".into());
+            weekly.save(&dir.path().join("weekly.md")).unwrap();
+
+            let mut standup = Transcript::new(t(9, 0, 0));
+            standup.set_title("Standup".into());
+            standup.add(Speaker::Them, 2.0, "Привет, начинаем стендап".into());
+            standup.save(&dir.path().join("standup.md")).unwrap();
+
+            dir
+        }
+
+        #[test]
+        fn blank_query_returns_everything_in_list_order() {
+            let dir = folder();
+            let all = search_sessions_in(dir.path(), "   ");
+            assert_eq!(all.len(), 2);
+            assert_eq!(all[0].meta.title, "Weekly sync", "date desc, newest first");
+            assert!(all[0].snippets.is_empty(), "no query, no snippets");
+        }
+
+        #[test]
+        fn a_title_match_yields_a_title_snippet() {
+            let dir = folder();
+            let hits = search_sessions_in(dir.path(), "wEEkly");
+            assert_eq!(hits.len(), 1);
+            assert_eq!(hits[0].meta.title, "Weekly sync");
+            assert_eq!(hits[0].snippets[0].section, "title");
+            assert_eq!(hits[0].snippets[0].text, "Weekly sync");
+            assert_eq!(hits[0].total_matches, 1);
+        }
+
+        #[test]
+        fn a_transcript_match_yields_the_matching_line_as_a_snippet() {
+            let dir = folder();
+            let hits = search_sessions_in(dir.path(), "budget");
+            assert_eq!(hits.len(), 1);
+            assert_eq!(hits[0].snippets.len(), 1);
+            assert_eq!(hits[0].snippets[0].section, "transcript");
+            assert!(
+                hits[0].snippets[0].text.contains("let's talk about the budget"),
+                "{}",
+                hits[0].snippets[0].text
+            );
+        }
+
+        #[test]
+        fn matches_cyrillic_content_case_insensitively() {
+            let dir = folder();
+            let hits = search_sessions_in(dir.path(), "СТЕНДАП");
+            assert_eq!(hits.len(), 1);
+            assert_eq!(hits[0].meta.title, "Standup");
+        }
+
+        #[test]
+        fn returns_nothing_for_a_query_no_file_contains() {
+            let dir = folder();
+            assert!(search_sessions_in(dir.path(), "quarterly").is_empty());
+        }
+
+        #[test]
+        fn snippets_cap_at_three_while_total_matches_keeps_counting() {
+            let dir = tempfile::tempdir().unwrap();
+            let mut long = Transcript::new(t(11, 0, 0));
+            long.set_title("Budget marathon".into());
+            for i in 0..5 {
+                long.add(Speaker::Me, i as f64, format!("budget point {i}, over budget"));
+            }
+            long.save(&dir.path().join("long.md")).unwrap();
+
+            let hits = search_sessions_in(dir.path(), "budget");
+            assert_eq!(hits.len(), 1);
+            // 1 in the title + 5 lines x 2 occurrences each.
+            assert_eq!(hits[0].total_matches, 11);
+            assert_eq!(hits[0].snippets.len(), 3, "capped at MAX_SNIPPETS");
+            assert_eq!(hits[0].snippets[0].section, "title");
+        }
     }
 
     mod delete_session {

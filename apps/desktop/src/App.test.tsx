@@ -24,13 +24,15 @@ vi.mock("@/lib/ipc", () => ({
     retranscribe_model: "w1",
     auto_retranscribe: false,
     delete_audio_after_retranscribe: false,
+    enhance_provider: "claude",
+    enhance_models: {},
     detect_calls: true,
     auto_stop_after_call: false,
   }),
   listSessions: vi.fn().mockResolvedValue([]),
   readSession: vi
     .fn()
-    .mockResolvedValue({ title: "", date: "", notes: "", transcript: "", audio_path: null }),
+    .mockResolvedValue({ title: "", date: "", notes: "", transcript: "", audio_path: null, summary: "", summary_model: null }),
   startRecording: vi.fn().mockResolvedValue("/tmp/active.md"),
   stopRecording: vi.fn().mockResolvedValue("/tmp/active.md"),
   saveSession: vi.fn().mockResolvedValue(undefined),
@@ -54,6 +56,10 @@ vi.mock("@/lib/ipc", () => ({
   createSession: vi.fn().mockResolvedValue("/tmp/new.md"),
   searchSessions: vi.fn().mockResolvedValue([]),
   deleteSession: vi.fn().mockResolvedValue(undefined),
+  enhanceSession: vi.fn().mockResolvedValue(""),
+  setEnhanceProvider: vi.fn().mockResolvedValue(undefined),
+  setEnhanceModel: vi.fn().mockResolvedValue(undefined),
+  listEnhanceProviders: vi.fn().mockResolvedValue([]),
   showMainWindow: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -120,6 +126,8 @@ beforeEach(() => {
     retranscribe_model: "w1",
     auto_retranscribe: false,
     delete_audio_after_retranscribe: false,
+    enhance_provider: "claude",
+    enhance_models: {},
     detect_calls: true,
     auto_stop_after_call: false,
   });
@@ -208,6 +216,8 @@ describe("App: call detection via the banner window (stage 1.1)", () => {
       retranscribe_model: "w1",
       auto_retranscribe: false,
       delete_audio_after_retranscribe: false,
+      enhance_provider: "claude",
+    enhance_models: {},
       detect_calls: true,
       auto_stop_after_call: true,
     });
@@ -234,6 +244,8 @@ describe("App: call detection via the banner window (stage 1.1)", () => {
       retranscribe_model: "w1",
       auto_retranscribe: false,
       delete_audio_after_retranscribe: false,
+      enhance_provider: "claude",
+    enhance_models: {},
       detect_calls: true,
       auto_stop_after_call: true,
     });
@@ -385,9 +397,11 @@ describe("App: active-session notes survive a switch-away-and-back (final review
           notes: "notes from the other call",
           transcript: "",
           audio_path: null,
+          summary: "",
+          summary_model: null,
         };
       }
-      return { title: "Untitled", date: "", notes: "", transcript: "", audio_path: null };
+      return { title: "Untitled", date: "", notes: "", transcript: "", audio_path: null, summary: "", summary_model: null };
     });
 
     render(<App />);
@@ -441,6 +455,8 @@ describe("App: record continues into the open note (behavior fix)", () => {
       notes: "old notes",
       transcript: "[00:00:01] Me: hi",
       audio_path: null,
+      summary: "",
+      summary_model: null,
     });
     vi.mocked(ipc.startRecording).mockResolvedValue("/tmp/other.md");
 
@@ -483,6 +499,8 @@ describe("App: record continues into the open note (behavior fix)", () => {
       notes: "old notes",
       transcript: "",
       audio_path: null,
+      summary: "",
+      summary_model: null,
     });
     vi.mocked(ipc.startRecording).mockResolvedValue("/tmp/other.md");
 
@@ -535,6 +553,8 @@ describe("App: refreshes a re-transcribed session after a background done event 
       notes: "old notes",
       transcript: "[00:00:01] Me: original parakeet text",
       audio_path: null,
+      summary: "",
+      summary_model: null,
     });
 
     render(<App />);
@@ -552,6 +572,8 @@ describe("App: refreshes a re-transcribed session after a background done event 
       notes: "old notes",
       transcript: "[00:00:01] Me: rewritten by whisper",
       audio_path: null,
+      summary: "",
+      summary_model: null,
     });
 
     emit("retranscribe-progress", {
@@ -576,6 +598,8 @@ describe("App: refreshes a re-transcribed session after a background done event 
       notes: "old notes",
       transcript: "[00:00:01] Me: hi",
       audio_path: null,
+      summary: "",
+      summary_model: null,
     });
 
     render(<App />);
@@ -615,6 +639,8 @@ describe("App: refreshes a re-transcribed session after a background done event 
       notes: "old notes",
       transcript: "[00:00:01] Me: original parakeet text",
       audio_path: "/tmp/other.flac",
+      summary: "",
+      summary_model: null,
     });
 
     render(<App />);
@@ -629,6 +655,8 @@ describe("App: refreshes a re-transcribed session after a background done event 
       notes: "old notes",
       transcript: "[00:00:01] Me: rewritten by whisper",
       audio_path: "/tmp/other.flac",
+      summary: "",
+      summary_model: null,
     });
 
     emit("retranscribe-progress", {
@@ -653,6 +681,8 @@ describe("App: refreshes a re-transcribed session after a background done event 
       notes: "old notes",
       transcript: "[00:00:01] Me: hi",
       audio_path: "/tmp/other.flac",
+      summary: "",
+      summary_model: null,
     });
 
     render(<App />);
@@ -694,6 +724,8 @@ describe("App: surfaces terminal re-transcribe errors from background jobs (stag
       notes: "",
       transcript: "[00:00:01] Me: hi",
       audio_path: null,
+      summary: "",
+      summary_model: null,
     });
 
     render(<App />);
@@ -733,6 +765,8 @@ describe("App: surfaces terminal re-transcribe errors from background jobs (stag
       notes: "",
       transcript: "[00:00:01] Me: hi",
       audio_path: null,
+      summary: "",
+      summary_model: null,
     });
 
     render(<App />);
@@ -766,6 +800,8 @@ describe("App: surfaces terminal re-transcribe errors from background jobs (stag
       notes: "",
       transcript: "[00:00:01] Me: hi",
       audio_path: "/tmp/viewed.flac",
+      summary: "",
+      summary_model: null,
     });
     // Never resolves: mirrors the real backend, where the promise only
     // settles once the job's own terminal event has already been decided --
@@ -813,6 +849,8 @@ describe("App: surfaces terminal re-transcribe errors from background jobs (stag
       notes: "",
       transcript: "[00:00:01] Me: hi",
       audio_path: "/tmp/viewed.flac",
+      summary: "",
+      summary_model: null,
     });
     // Rejects immediately, exactly like one of the up-front validation
     // checks -- no progress event ever accompanies this.
@@ -930,6 +968,8 @@ describe("App: deleting a note from the sidebar (stage 0.10)", () => {
       notes: "",
       transcript: "",
       audio_path: null,
+      summary: "",
+      summary_model: null,
     });
 
     render(<App />);
@@ -1036,6 +1076,8 @@ describe("App: search (stage 0.10)", () => {
       notes: "",
       transcript: "[00:00:04] Me: about the budget",
       audio_path: null,
+      summary: "",
+      summary_model: null,
     });
 
     render(<App />);

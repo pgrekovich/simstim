@@ -1,4 +1,6 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
+import { Sparkles } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { createPortal } from "react-dom";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { AudioPlayer, type AudioPlayerHandle } from "@/components/AudioPlayer";
@@ -6,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { TranscriptView } from "@/components/TranscriptView";
 import {
+  enhanceSession,
   readSession,
   retranscribeSession,
   saveSession,
@@ -195,6 +198,13 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
   // App-driven `reloadTick` remount after a background job) re-seeds it fresh
   // from a real `read_session` disk read.
   const [transcript, setTranscript] = useState(initialData.transcript);
+  // Seeded once like title/notes/transcript above, refreshed from a disk
+  // re-read after a successful enhance (same pattern handleRetranscribe
+  // uses for the transcript).
+  const [summary, setSummary] = useState(initialData.summary);
+  const [summaryModel, setSummaryModel] = useState(initialData.summary_model);
+  const [enhancing, setEnhancing] = useState(false);
+  const [enhanceError, setEnhanceError] = useState<string | null>(null);
   // Local-only optimistic flag: disables the button the instant it's
   // clicked, before the backend's first `retranscribe-progress` event has
   // had a chance to land and update `retranscribingJob` (a window of at
@@ -399,6 +409,30 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
     }
   }
 
+  // Enhance (stage 0.11): the user's rough notes lead, the transcript backs
+  // them, and the configured AI CLI writes the result into `## Summary`.
+  // Flushes pending edits FIRST so what the model reads from disk is what's
+  // on screen, then re-reads the file afterward so the summary shown is
+  // exactly what landed on disk.
+  async function handleEnhance() {
+    if (isActive || enhancing) return;
+    setEnhancing(true);
+    setEnhanceError(null);
+    try {
+      await commitNotes();
+      await commitTitle();
+      await enhanceSession(path);
+      const data = await readSession(path);
+      setSummary(data.summary);
+      setSummaryModel(data.summary_model);
+    } catch (err) {
+      console.error("failed to enhance session", err);
+      setEnhanceError(String(err));
+    } finally {
+      setEnhancing(false);
+    }
+  }
+
   function handleTitleChange(e: React.ChangeEvent<HTMLInputElement>) {
     const value = e.target.value;
     setTitle(value);
@@ -475,15 +509,60 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
         <TabsContent
           value="notes"
           forceMount
-          className="min-h-0 flex-1 data-[state=inactive]:hidden"
+          className="flex min-h-0 flex-1 flex-col gap-3 data-[state=inactive]:hidden"
         >
           <textarea
             value={notes}
             onChange={handleNotesChange}
             onBlur={commitNotes}
             placeholder="your notes..."
-            className="h-full w-full resize-none rounded-md border bg-transparent p-3 text-sm outline-none placeholder:text-muted-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
+            className={cn(
+              "w-full resize-none rounded-md border bg-transparent p-3 text-sm outline-none placeholder:text-muted-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50",
+              // With a summary on screen the notepad yields most of the
+              // height to it; alone, it owns the tab.
+              summary ? "h-40 shrink-0" : "min-h-0 flex-1"
+            )}
           />
+
+          {summary && (
+            <div className="flex min-h-0 flex-1 flex-col overflow-y-auto rounded-md border bg-card p-3">
+              <div className="flex items-baseline gap-2 pb-2">
+                <h3 className="text-sm font-semibold">Summary</h3>
+                {summaryModel && (
+                  <span className="text-xs text-muted-foreground">
+                    by {summaryModel}
+                  </span>
+                )}
+              </div>
+              {/* Generated text, visually its own block -- it never mixes
+                  into the notes above (the user's words are sacred). */}
+              <div className="whitespace-pre-wrap text-sm leading-relaxed text-foreground/90">
+                {summary}
+              </div>
+            </div>
+          )}
+
+          {enhanceError && (
+            <p className="shrink-0 text-sm text-destructive">{enhanceError}</p>
+          )}
+
+          <div className="flex shrink-0 items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={isActive || enhancing || transcriptLines.length === 0}
+              onClick={handleEnhance}
+            >
+              <Sparkles className="size-3.5" />
+              {enhancing ? "Enhancing..." : summary ? "Re-enhance" : "Enhance"}
+            </Button>
+            {enhancing && (
+              <span className="text-xs text-muted-foreground">
+                sending notes and transcript to your AI CLI...
+              </span>
+            )}
+          </div>
         </TabsContent>
 
         <TabsContent

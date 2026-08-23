@@ -954,6 +954,8 @@ function App() {
                 date: "",
                 transcript: "",
                 audio_path: null,
+                summary: "",
+                summary_model: null,
               }}
               liveLines={lines}
               interimMe={interimMe}

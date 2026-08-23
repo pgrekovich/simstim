@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
-import { AudioLines, Mic, Settings2, Trash2 } from "lucide-react";
+import { AudioLines, Mic, Settings2, Sparkles, Trash2 } from "lucide-react";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
@@ -12,6 +12,7 @@ import {
   deleteModel,
   downloadModel,
   getConfig,
+  listEnhanceProviders,
   listModels,
   setActiveModel,
   setAudioFormat,
@@ -19,12 +20,15 @@ import {
   setAutoStopAfterCall,
   setDetectCalls,
   setDeleteAudioAfterRetranscribe,
+  setEnhanceModel,
+  setEnhanceProvider,
   setKeepAudio,
   setOutputDir,
   setRetranscribeModel,
   setTheme,
   type AppConfig,
   type DownloadProgress,
+  type EnhanceProviderInfo,
   type ModelInfo,
 } from "@/lib/ipc";
 import { applyTheme } from "@/lib/theme";
@@ -87,11 +91,37 @@ function totalDiskUsed(list: ModelInfo[]): number {
   return list.reduce((sum, model) => (model.downloaded ? sum + freedBytes(model) : sum), 0);
 }
 
+
+/**
+ * Model choices offered per provider (cached 2026-08-23; sources: `claude
+ * --help` aliases, learn.chatgpt.com/docs/models). The backend passes the
+ * value through verbatim, so this list going stale only limits the menu,
+ * never correctness; "" = the CLI's own default.
+ */
+const ENHANCE_MODEL_OPTIONS: Record<string, { value: string; label: string }[]> = {
+  claude: [
+    { value: "", label: "Default" },
+    { value: "fable", label: "Fable" },
+    { value: "opus", label: "Opus" },
+    { value: "sonnet", label: "Sonnet" },
+    { value: "claude-haiku-4-5", label: "Haiku" },
+  ],
+  codex: [
+    { value: "", label: "Default" },
+    { value: "gpt-5.6-sol", label: "GPT-5.6 Sol" },
+    { value: "gpt-5.6-terra", label: "GPT-5.6 Terra" },
+    { value: "gpt-5.6-luna", label: "GPT-5.6 Luna" },
+    { value: "gpt-5.5", label: "GPT-5.5" },
+    { value: "gpt-5.3-codex-spark", label: "GPT-5.3 Codex Spark (Pro)" },
+  ],
+};
+
 /** The left-rail pages; a nav click swaps which section is visible. */
 const NAV_SECTIONS = [
   { id: "settings-general", label: "General", icon: Settings2 },
   { id: "settings-recording", label: "Recording", icon: Mic },
   { id: "settings-transcription", label: "Transcription", icon: AudioLines },
+  { id: "settings-ai", label: "AI", icon: Sparkles },
 ] as const;
 
 /**
@@ -179,6 +209,8 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [activeSection, setActiveSection] = useState<string>(NAV_SECTIONS[0].id);
+  const [enhanceProviders, setEnhanceProviders] = useState<EnhanceProviderInfo[]>([]);
+  const [enhanceProviderError, setEnhanceProviderError] = useState<string | null>(null);
   const [choosingDir, setChoosingDir] = useState(false);
   const [themeError, setThemeError] = useState<string | null>(null);
   const [folderError, setFolderError] = useState<string | null>(null);
@@ -239,7 +271,55 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
   useEffect(() => {
     if (!isOpen) return;
     refresh().catch(() => {});
+    // Provider availability re-probes on every open too: installing the
+    // claude/codex CLI while the app runs should be picked up without a
+    // restart.
+    listEnhanceProviders()
+      .then(setEnhanceProviders)
+      .catch(() => {});
   }, [isOpen, refresh]);
+
+  /**
+   * Persists one provider's model override on blur/Enter (stage 0.11).
+   * Optimistic with rollback like the rest; an empty value clears the
+   * override back to the CLI's default.
+   */
+  async function handleSetEnhanceModel(provider: string, model: string) {
+    const previous = config?.enhance_models?.[provider] ?? "";
+    const next = model.trim();
+    if (previous === next || !config) return;
+    setEnhanceProviderError(null);
+    setConfig((prev) =>
+      prev ? { ...prev, enhance_models: { ...prev.enhance_models, [provider]: next } } : prev
+    );
+    try {
+      await setEnhanceModel(provider, next);
+    } catch (err) {
+      setConfig((prev) =>
+        prev
+          ? { ...prev, enhance_models: { ...prev.enhance_models, [provider]: previous } }
+          : prev
+      );
+      setEnhanceProviderError(String(err));
+    }
+  }
+
+  /**
+   * Picks which CLI `enhanceSession` runs (stage 0.11). Optimistic with
+   * rollback, same as every other row here.
+   */
+  async function handleSetEnhanceProvider(provider: string) {
+    const previous = config?.enhance_provider;
+    if (provider === previous || previous === undefined) return;
+    setEnhanceProviderError(null);
+    setConfig((prev) => (prev ? { ...prev, enhance_provider: provider } : prev));
+    try {
+      await setEnhanceProvider(provider);
+    } catch (err) {
+      setConfig((prev) => (prev ? { ...prev, enhance_provider: previous } : prev));
+      setEnhanceProviderError(String(err));
+    }
+  }
 
   // Belt-and-suspenders on top of `refresh()`'s own reset: the dialog is
   // mounted for the app's whole lifetime and only ever hides via `isOpen`
@@ -826,7 +906,7 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                               checked={config?.retranscribe_model === model.id}
                               disabled={busy}
                               onChange={() => handleSetRetranscribeModel(model.id)}
-                              className="size-4 shrink-0 accent-primary"
+                              className="size-4 shrink-0 cursor-default appearance-none rounded-full border-[1.5px] border-muted-foreground/60 transition-all checked:border-[5px] checked:border-primary disabled:opacity-40"
                             />
                           )}
                           <div className="flex min-w-0 flex-col">
@@ -892,6 +972,66 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                 })}
               </ul>
             </div>
+                </section>
+
+                <section
+                  id="settings-ai"
+                  className={cn("flex flex-col gap-2", activeSection !== "settings-ai" && "hidden")}
+                >
+                  <h3 className="px-1 text-sm font-semibold text-muted-foreground">AI</h3>
+                  <p className="px-1 text-xs text-muted-foreground">
+                    Enhance runs an AI CLI you already have installed and pay for -- no API
+                    keys, nothing configured here ever phones home. Only the note's text and
+                    transcript are sent, and only when you click Enhance.
+                  </p>
+                  <Group>
+                    {enhanceProviders.map((provider) => (
+                      <Row
+                        key={provider.id}
+                        label={provider.name}
+                        description={
+                          provider.available
+                            ? provider.version ?? "installed"
+                            : `not installed (no \`${provider.id}\` CLI found)`
+                        }
+                        error={
+                          config?.enhance_provider === provider.id ? enhanceProviderError : null
+                        }
+                      >
+                        {provider.available && (
+                          <select
+                            aria-label={`${provider.name} model`}
+                            value={config?.enhance_models?.[provider.id] ?? ""}
+                            onChange={(e) => handleSetEnhanceModel(provider.id, e.target.value)}
+                            className="h-7 rounded-md border border-input bg-transparent px-2 text-xs outline-none focus-visible:border-ring"
+                          >
+                            {(ENHANCE_MODEL_OPTIONS[provider.id] ?? [{ value: "", label: "Default" }]).map(
+                              (option) => (
+                                <option key={option.value} value={option.value}>
+                                  {option.label}
+                                </option>
+                              )
+                            )}
+                          </select>
+                        )}
+                        <input
+                          type="radio"
+                          name="enhance-provider"
+                          aria-label={provider.name}
+                          checked={config?.enhance_provider === provider.id}
+                          disabled={!provider.available}
+                          onChange={() => handleSetEnhanceProvider(provider.id)}
+                          className="size-4 shrink-0 cursor-default appearance-none rounded-full border-[1.5px] border-muted-foreground/60 transition-all checked:border-[5px] checked:border-primary disabled:opacity-40"
+                        />
+                      </Row>
+                    ))}
+                    {enhanceProviders.length === 0 && (
+                      <Row
+                        label="No providers probed yet"
+                        description="Install the claude or codex CLI and reopen Settings."
+                      />
+                    )}
+                  </Group>
                 </section>
               </div>
             </div>

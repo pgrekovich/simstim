@@ -16,7 +16,9 @@ call = one plain `.md` file in a folder you own.
   whisper re-transcribes the stored audio afterward, better.
 * **Knows when you're on a call.** A quiet banner offers to record when a
   known call app takes the mic. It never records by itself.
-* **No accounts, no telemetry, no upsell.**
+* **Free forever.** No accounts, no Pro tier, no telemetry, no upsell:
+  there is no server to pay for, so nothing here can ever grow a login
+  or a paywall.
 
 > simstim (Gibson, Neuromancer): replaying someone's recorded sensory
 > experience. This app replays your calls as text.

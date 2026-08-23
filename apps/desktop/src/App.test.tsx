@@ -266,7 +266,7 @@ describe("App: hot-mic fix (final review Critical finding)", () => {
     expect(screen.queryByRole("button", { name: /stop/i })).not.toBeInTheDocument();
 
     act(() => finishStop("/tmp/active.md"));
-    expect(await screen.findByText(/saved to/)).toBeVisible();
+    expect(await screen.findByText(/^saved$/)).toBeVisible();
   });
 
   it("keeps the record control wired to Stop when a session-error lands mid-recording", async () => {
@@ -327,7 +327,7 @@ describe("App: a saving session must not block the next call (owner bug: missed 
     // live recording as "saved" (the record control must stay a Stop).
     finishStop("/tmp/active.md");
     expect(screen.getByRole("button", { name: /stop/i })).toBeVisible();
-    expect(screen.queryByText(/saved to/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^saved$/)).not.toBeInTheDocument();
   });
 
   it("starts a detected call from the banner while the previous session is still saving", async () => {
@@ -345,7 +345,7 @@ describe("App: a saving session must not block the next call (owner bug: missed 
   it("still reports the finished save when nothing newer replaced the status", async () => {
     const finishStop = await enterSavingState();
     finishStop("/tmp/active.md");
-    expect(await screen.findByText(/saved to/)).toBeVisible();
+    expect(await screen.findByText(/^saved$/)).toBeVisible();
   });
 
   it("surfaces a failed background save as an error even after a new recording started", async () => {
@@ -879,7 +879,7 @@ describe("App: surfaces terminal re-transcribe errors from background jobs (stag
     fireEvent.click(stopButton);
     await waitFor(() => expect(ipc.stopRecording).toHaveBeenCalledTimes(1));
 
-    // The stashed error surfaces now, instead of "saved to ..." or nothing.
+    // The stashed error surfaces now, instead of "saved" or nothing.
     await screen.findByText(/whisper model not downloaded/i);
   });
 });

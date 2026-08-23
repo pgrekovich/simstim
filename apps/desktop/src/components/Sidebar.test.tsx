@@ -102,9 +102,9 @@ describe("Sidebar: selected styling", () => {
 
     // Exact classList tokens, not substring matching: the hover variants
     // carry the same base names at different opacities.
-    expect(rowB.classList.contains("bg-foreground/[0.09]")).toBe(true);
+    expect(rowB.classList.contains("bg-foreground/[0.12]")).toBe(true);
     expect(rowB.classList.contains("font-medium")).toBe(true);
-    expect(rowA.classList.contains("bg-foreground/[0.09]")).toBe(false);
+    expect(rowA.classList.contains("bg-foreground/[0.12]")).toBe(false);
     expect(rowA.classList.contains("font-medium")).toBe(false);
     // No left rule on any row: a border on a rounded row reads as a bracket.
     expect(rowA.className).not.toContain("border-l");
@@ -133,10 +133,10 @@ describe("Sidebar: selected styling", () => {
     // Regression test: a lower-opacity hover shared with the selected row
     // would win the cascade on hover and visibly dim it instead of
     // reinforcing it, so each state carries its own hover step.
-    expect(rowB.classList.contains("hover:bg-foreground/[0.12]")).toBe(true);
-    expect(rowB.classList.contains("hover:bg-foreground/[0.05]")).toBe(false);
-    expect(rowA.classList.contains("hover:bg-foreground/[0.05]")).toBe(true);
-    expect(rowA.classList.contains("hover:bg-foreground/[0.12]")).toBe(false);
+    expect(rowB.classList.contains("hover:bg-foreground/[0.16]")).toBe(true);
+    expect(rowB.classList.contains("hover:bg-foreground/[0.07]")).toBe(false);
+    expect(rowA.classList.contains("hover:bg-foreground/[0.07]")).toBe(true);
+    expect(rowA.classList.contains("hover:bg-foreground/[0.16]")).toBe(false);
   });
 });
 

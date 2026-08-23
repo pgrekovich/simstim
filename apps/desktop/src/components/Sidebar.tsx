@@ -101,7 +101,7 @@ export function Sidebar({
             correctly in both. */}
         <Button
           variant="ghost"
-          className="w-full justify-start gap-2 transition-colors duration-150 hover:bg-foreground/[0.06] active:bg-foreground/[0.11]"
+          className="w-full justify-start gap-2 transition-colors duration-150 hover:bg-foreground/[0.08] active:bg-foreground/[0.15]"
           onClick={onNewSession}
         >
           <Plus className="size-4" />
@@ -122,11 +122,11 @@ export function Sidebar({
             aria-label="Search sessions"
             value={searchQuery}
             onChange={(e) => onSearchChange(e.target.value)}
-            // h-8 + the quieter alpha fill instead of Input's default h-9
-            // bordered look: this is a filter box inside a rail, not a form
-            // field. Same alpha-over-foreground trick as the row hovers so
-            // one value reads correctly in both themes.
-            className="h-8 rounded-md border-transparent bg-foreground/[0.05] pl-8 text-sm shadow-none focus-visible:border-ring focus-visible:bg-transparent"
+            // h-8 + alpha fill AND a real border: fill alone washed out on
+            // the sidebar surface (owner contrast review). Same
+            // alpha-over-foreground trick as the row hovers so one value
+            // reads correctly in both themes.
+            className="h-8 rounded-md border-input bg-foreground/[0.06] pl-8 text-sm shadow-none focus-visible:border-ring focus-visible:bg-transparent"
           />
         </div>
       </div>
@@ -154,15 +154,15 @@ export function Sidebar({
                       type="button"
                       onClick={() => onSelect(session.path)}
                       className={cn(
-                        "flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors duration-150",
+                        "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors duration-150",
                         // Selection reads as a filled pill plus weight, with no
                         // left rule: a border on a rounded row renders as a
                         // detached bracket. Each state gets its own hover so the
                         // selected row deepens on hover instead of being dimmed
                         // by a lower-opacity tint winning the cascade.
                         selected
-                          ? "bg-foreground/[0.09] font-medium text-foreground hover:bg-foreground/[0.12]"
-                          : "text-foreground/75 hover:bg-foreground/[0.05] hover:text-foreground active:bg-foreground/[0.09]"
+                          ? "bg-foreground/[0.12] font-medium text-foreground hover:bg-foreground/[0.16]"
+                          : "text-foreground/75 hover:bg-foreground/[0.07] hover:text-foreground active:bg-foreground/[0.12]"
                       )}
                     >
                       <span className="flex min-w-0 flex-1 items-center gap-1.5">
@@ -205,7 +205,7 @@ export function Sidebar({
                         // pointer-events gating, not just opacity: an
                         // invisible-but-clickable overlay would steal clicks
                         // aimed at the timestamp area of the row button.
-                        className="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 cursor-pointer rounded p-1 text-muted-foreground opacity-0 transition-opacity duration-150 hover:text-destructive focus-visible:pointer-events-auto focus-visible:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100"
+                        className="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground opacity-0 transition-opacity duration-150 hover:text-destructive focus-visible:pointer-events-auto focus-visible:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100"
                       >
                         <Trash2 className="size-3.5" />
                       </button>
@@ -221,7 +221,7 @@ export function Sidebar({
       <div className="border-t border-sidebar-border px-2 py-2">
         <Button
           variant="ghost"
-          className="w-full justify-start gap-2 transition-colors duration-150 hover:bg-foreground/[0.06] active:bg-foreground/[0.11]"
+          className="w-full justify-start gap-2 transition-colors duration-150 hover:bg-foreground/[0.08] active:bg-foreground/[0.15]"
           onClick={onOpenSettings}
         >
           <Settings className="size-4" />

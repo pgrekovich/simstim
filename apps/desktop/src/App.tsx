@@ -43,7 +43,6 @@ import {
   type RetranscribeJob,
 } from "@/lib/retranscribeStatus";
 import { initTheme } from "@/lib/theme";
-import { truncateMiddle } from "@/lib/utils";
 
 /**
  * The engine (VAD + ASR) loads in a worker thread after `start_recording`
@@ -830,7 +829,7 @@ function App() {
         : status.kind === "saving"
           ? "saving"
         : status.kind === "saved"
-          ? `saved to ${truncateMiddle(status.path)}`
+          ? "saved"
           : status.kind === "error"
             ? status.message
             : "";

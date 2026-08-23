@@ -114,7 +114,7 @@ export function SearchResults({ hits, query, onOpen }: SearchResultsProps) {
             key={hit.path}
             type="button"
             onClick={() => onOpen(hit.path)}
-            className="block w-full cursor-pointer rounded-lg border bg-card px-4 py-3 text-left transition-colors duration-150 hover:bg-foreground/[0.04] active:bg-foreground/[0.07]"
+            className="block w-full rounded-lg border bg-card px-4 py-3 text-left transition-colors duration-150 hover:bg-foreground/[0.06] active:bg-foreground/[0.10]"
           >
             <div className="flex items-baseline justify-between gap-3">
               <span className="min-w-0 truncate text-sm font-medium">

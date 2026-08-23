@@ -44,7 +44,7 @@ function Row({
       type="button"
       onClick={onClick}
       disabled={disabled}
-      className="flex w-full cursor-pointer items-center justify-between gap-8 rounded-md px-3 py-2.5 text-left transition-colors duration-150 hover:bg-foreground/[0.04] active:bg-foreground/[0.07] disabled:cursor-not-allowed disabled:opacity-50"
+      className="flex w-full items-center justify-between gap-8 rounded-md px-3 py-2.5 text-left transition-colors duration-150 hover:bg-foreground/[0.06] active:bg-foreground/[0.10] disabled:cursor-not-allowed disabled:opacity-50"
     >
       <span className="text-sm">{label}</span>
       <Keys chars={keys} />

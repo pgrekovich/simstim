@@ -74,7 +74,11 @@ export function Sidebar({
 
   return (
     <aside className="flex h-full w-60 shrink-0 flex-col border-r bg-sidebar text-sidebar-foreground">
-      <div className="border-b border-sidebar-border px-2 py-2">
+      {/* h-12 matches App's main header exactly (it renders `h-12` too), so
+          the two bottom borders meet as ONE continuous line across the
+          sidebar seam. Vertical padding instead of a fixed height put this
+          border 4px below the header's and visibly broke that line. */}
+      <div className="flex h-12 shrink-0 items-center border-b border-sidebar-border px-2">
         {/* Surfaces are alpha over `foreground` rather than the sidebar-accent
             token: in the light theme that token (0.97) sits so close to the
             sidebar background (0.985) that hover and selection are invisible.

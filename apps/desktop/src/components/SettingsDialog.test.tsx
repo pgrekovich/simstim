@@ -599,7 +599,9 @@ describe("SettingsDialog: model manager (stage 0.8 Task 2)", () => {
 
     render(<SettingsDialog open onOpenChange={() => {}} />);
 
-    await screen.findByText("Recording");
+    // "Live model", not "Recording": that word now names both a nav-rail
+    // item and a settings section.
+    await screen.findByRole("heading", { name: "Live model" });
     // Recording: only parakeet, 487_000_000 bytes -> 487 MB.
     // Re-transcribe: only whisperQ8 is downloaded, 874_188_075 bytes -> 874 MB
     // (the not-downloaded large-v3 contributes nothing). Each total names its

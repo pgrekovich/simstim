@@ -1,13 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
-import { Trash2 } from "lucide-react";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { AudioLines, Mic, Settings2, Trash2 } from "lucide-react";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Label } from "@/components/ui/label";
@@ -92,6 +87,48 @@ function totalDiskUsed(list: ModelInfo[]): number {
   return list.reduce((sum, model) => (model.downloaded ? sum + freedBytes(model) : sum), 0);
 }
 
+/** The left-rail pages; a nav click swaps which section is visible. */
+const NAV_SECTIONS = [
+  { id: "settings-general", label: "General", icon: Settings2 },
+  { id: "settings-recording", label: "Recording", icon: Mic },
+  { id: "settings-transcription", label: "Transcription", icon: AudioLines },
+] as const;
+
+/**
+ * One Raycast-style settings row: label + helper text on the left, the
+ * control pinned right. Rows stack inside a bordered group card with
+ * hairlines between them (`divide-y` on the card).
+ */
+function Row({
+  label,
+  htmlFor,
+  description,
+  error,
+  children,
+}: {
+  label: ReactNode;
+  htmlFor?: string;
+  description?: ReactNode;
+  error?: string | null;
+  children?: ReactNode;
+}) {
+  return (
+    <div className="flex items-start justify-between gap-6 py-3 first:pt-3.5 last:pb-3.5">
+      <div className="flex min-w-0 flex-col gap-0.5">
+        <Label htmlFor={htmlFor}>{label}</Label>
+        {description && <span className="text-xs text-muted-foreground">{description}</span>}
+        {error && <span className="text-xs text-destructive">{error}</span>}
+      </div>
+      {children && <div className="flex shrink-0 items-center gap-1.5 pt-0.5">{children}</div>}
+    </div>
+  );
+}
+
+/** A bordered group of rows, the section's visual unit. */
+function Group({ children }: { children: ReactNode }) {
+  return <div className="divide-y rounded-lg border bg-card px-4">{children}</div>;
+}
+
 interface SettingsDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -141,6 +178,7 @@ function ModelProgress({ progress }: { progress: DownloadProgress | undefined })
 export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: SettingsDialogProps) {
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [models, setModels] = useState<ModelInfo[]>([]);
+  const [activeSection, setActiveSection] = useState<string>(NAV_SECTIONS[0].id);
   const [choosingDir, setChoosingDir] = useState(false);
   const [themeError, setThemeError] = useState<string | null>(null);
   const [folderError, setFolderError] = useState<string | null>(null);
@@ -508,179 +546,184 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
 
   return (
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
-      {/* The dialog outgrew a single screen once models arrived, so it is a
-          fixed-height column: a static header, then a scrolling body. Without
-          the max height the content simply overflowed the window and the top
-          and bottom were clipped with no way to reach them. */}
-      <DialogContent className="flex max-h-[85vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-xl">
-        <DialogHeader className="border-b px-6 py-4">
-          <DialogTitle>Settings</DialogTitle>
-        </DialogHeader>
-
-        <div className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto px-6 py-5">
-          <section className="flex flex-col gap-2">
-            <h3 className="text-sm font-semibold">Appearance</h3>
-            <div className="flex gap-1.5">
-              {THEME_OPTIONS.map((option) => (
-                <Button
-                  key={option.value}
-                  variant={config?.theme === option.value ? "default" : "outline"}
-                  size="sm"
-                  onClick={() => handleSetTheme(option.value)}
-                >
-                  {option.label}
-                </Button>
-              ))}
-            </div>
-            {themeError && <span className="text-xs text-destructive">{themeError}</span>}
-          </section>
-
-          <section className="flex flex-col gap-2">
-            <h3 className="text-sm font-semibold">Call detection</h3>
-            <div className="flex items-start gap-2">
-              <Checkbox
-                id="detect-calls"
-                checked={config?.detect_calls ?? false}
-                disabled={!config}
-                onCheckedChange={(checked) => handleSetDetectCalls(checked === true)}
-              />
-              <div className="flex flex-col gap-0.5">
-                <Label htmlFor="detect-calls">Suggest recording when a call starts</Label>
-                <span className="text-xs text-muted-foreground">
-                  Watches microphone activity from known calling apps. Recording still needs your click.
-                </span>
-              </div>
-            </div>
-            {detectCallsError && <span className="text-xs text-destructive">{detectCallsError}</span>}
-
-            <div className="ml-6 flex items-start gap-2 pt-1">
-              <Checkbox
-                id="auto-stop-after-call"
-                checked={config?.auto_stop_after_call ?? false}
-                disabled={!config || !config.detect_calls}
-                onCheckedChange={(checked) => handleSetAutoStopAfterCall(checked === true)}
-              />
-              <div className="flex flex-col gap-0.5">
-                <Label htmlFor="auto-stop-after-call">Stop automatically when the call ends</Label>
-                <span className="text-xs text-muted-foreground">
-                  Waits for the call app to release audio and for the remote channel to stay silent.
-                </span>
-              </div>
-            </div>
-            {autoStopAfterCallError && (
-              <span className="ml-6 text-xs text-destructive">{autoStopAfterCallError}</span>
-            )}
-          </section>
-
-          <section className="flex flex-col gap-2">
-            <h3 className="text-sm font-semibold">Output</h3>
-            <Label>Output folder</Label>
-            <div className="flex items-center gap-2">
-              <span
-                className="min-w-0 flex-1 truncate rounded-md border bg-input/30 px-2 py-1.5 font-mono text-sm"
-                style={{ direction: "rtl", textAlign: "left" }}
-                title={config?.output_dir ?? ""}
-              >
-                {config?.output_dir ?? "..."}
-              </span>
-              <Button variant="outline" size="sm" disabled={choosingDir} onClick={handleChooseFolder}>
-                Choose folder
-              </Button>
-            </div>
-            {folderError && <span className="text-xs text-destructive">{folderError}</span>}
-
-            <div className="flex items-start gap-2 pt-2">
-              <Checkbox
-                id="keep-audio"
-                checked={config?.keep_audio ?? false}
-                disabled={!config}
-                onCheckedChange={(checked) => handleSetKeepAudio(checked === true)}
-              />
-              <div className="flex flex-col gap-0.5">
-                <Label htmlFor="keep-audio">Keep call audio</Label>
-                <span className="text-xs text-muted-foreground">
-                  Stores a stereo audio file next to each transcript. Re-transcribing needs it.
-                </span>
-              </div>
-            </div>
-            {keepAudioError && <span className="text-xs text-destructive">{keepAudioError}</span>}
-
-            {/* Stage 0.9 (fix-review correction): only the AUTO toggle below
-                needs `keep_audio` on -- it fires right after a recording
-                stops, so it's useless without an audio file having just been
-                kept. The delete toggle just below it is NOT gated the same
-                way: `retranscribe_session` applies delete-after to ANY
-                successful re-transcribe, including a MANUAL one on an old
-                session that still has audio from back when `keep_audio` was
-                on, even if it's off right now. */}
-            <div className="flex items-start gap-2 pt-2">
-              <Checkbox
-                id="auto-retranscribe"
-                checked={config?.auto_retranscribe ?? false}
-                disabled={!config || !config.keep_audio}
-                onCheckedChange={(checked) => handleSetAutoRetranscribe(checked === true)}
-              />
-              <div className="flex flex-col gap-0.5">
-                <Label htmlFor="auto-retranscribe">Re-transcribe automatically after stopping</Label>
-                <span className="text-xs text-muted-foreground">
-                  Runs the selected whisper model on the finished call in the background.
-                </span>
-                {config && !config.keep_audio && (
-                  <span className="text-xs text-muted-foreground">Needs call audio</span>
+      {/* Full-window settings (stage 0.10, Raycast-style): a left rail of
+          sections and a scrolling content column, sized like the main
+          window so there's room for the features to come. Each nav item is
+          its own page; inactive sections are CSS-hidden, not unmounted, so
+          a download's progress keeps rendering wherever you navigate. */}
+      <DialogContent className="top-0 left-0 flex h-full w-full max-w-none translate-x-0 translate-y-0 flex-col gap-0 rounded-none border-0 p-0 sm:max-w-none">
+        <div className="flex min-h-0 flex-1">
+          <nav className="flex w-52 shrink-0 flex-col border-r bg-sidebar p-3">
+            {/* Same overlay-title-bar drag strip as the main window: the
+                traffic lights float over this corner. */}
+            <div data-tauri-drag-region className="h-10 shrink-0" />
+            <DialogTitle className="px-2 pb-3 text-base font-semibold">Settings</DialogTitle>
+            {NAV_SECTIONS.map(({ id, label, icon: Icon }) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => setActiveSection(id)}
+                className={cn(
+                  "flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors duration-150",
+                  activeSection === id
+                    ? "bg-foreground/[0.12] font-medium text-foreground"
+                    : "text-foreground/75 hover:bg-foreground/[0.07] hover:text-foreground"
                 )}
-              </div>
-            </div>
-            {autoRetranscribeError && (
-              <span className="text-xs text-destructive">{autoRetranscribeError}</span>
-            )}
+              >
+                <Icon className="size-4 text-muted-foreground" />
+                {label}
+              </button>
+            ))}
+          </nav>
 
-            <div className="flex items-start gap-2 pt-2">
-              <Checkbox
-                id="delete-audio-after-retranscribe"
-                checked={config?.delete_audio_after_retranscribe ?? false}
-                disabled={!config}
-                onCheckedChange={(checked) => handleSetDeleteAudioAfterRetranscribe(checked === true)}
-              />
-              <div className="flex flex-col gap-0.5">
-                <Label htmlFor="delete-audio-after-retranscribe">
-                  Delete the audio after re-transcribing
-                </Label>
-                <span className="text-xs text-muted-foreground">
-                  Removes the recording once a re-transcribe succeeds - manual or automatic, it
-                  always applies, regardless of whether "Keep call audio" is currently on (an old
-                  session recorded with it on can still be re-transcribed manually) - and that
-                  call can never be re-transcribed again.
-                </span>
-              </div>
-            </div>
-            {deleteAudioAfterError && (
-              <span className="text-xs text-destructive">{deleteAudioAfterError}</span>
-            )}
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+            <div data-tauri-drag-region className="h-10 shrink-0" />
+            <div className="min-h-0 flex-1 overflow-y-auto">
+              <div className="mx-auto flex max-w-2xl flex-col gap-8 px-8 pb-10 pt-2">
+                <section id="settings-general" className={cn("flex flex-col gap-2", activeSection !== "settings-general" && "hidden")}>
+                  <h3 className="px-1 text-sm font-semibold text-muted-foreground">General</h3>
+                  <Group>
+                    <Row label="Theme" error={themeError}>
+                      {THEME_OPTIONS.map((option) => (
+                        <Button
+                          key={option.value}
+                          variant={config?.theme === option.value ? "default" : "outline"}
+                          size="sm"
+                          onClick={() => handleSetTheme(option.value)}
+                        >
+                          {option.label}
+                        </Button>
+                      ))}
+                    </Row>
+                    <Row
+                      label="Output folder"
+                      description={
+                        <span
+                          className="block max-w-72 truncate font-mono"
+                          style={{ direction: "rtl", textAlign: "left" }}
+                          title={config?.output_dir ?? ""}
+                        >
+                          {config?.output_dir ?? "..."}
+                        </span>
+                      }
+                      error={folderError}
+                    >
+                      <Button variant="outline" size="sm" disabled={choosingDir} onClick={handleChooseFolder}>
+                        Choose folder
+                      </Button>
+                    </Row>
+                  </Group>
+                </section>
 
-            <div className="flex flex-col gap-1.5 pt-1">
-              <Label>Audio format</Label>
-              <div className="flex gap-1.5">
-                {AUDIO_FORMAT_OPTIONS.map((option) => (
-                  <Button
-                    key={option.value}
-                    variant={config?.audio_format === option.value ? "default" : "outline"}
-                    size="sm"
-                    disabled={!config || !config.keep_audio}
-                    onClick={() => handleSetAudioFormat(option.value)}
-                  >
-                    {option.label}
-                  </Button>
-                ))}
-              </div>
-              <span className="text-xs text-muted-foreground">
-                AAC: about 17 MB per hour, small quality loss (default). FLAC: lossless, about 137 MB per hour.
-              </span>
-              {audioFormatError && <span className="text-xs text-destructive">{audioFormatError}</span>}
-            </div>
-          </section>
+                <section id="settings-recording" className={cn("flex flex-col gap-2", activeSection !== "settings-recording" && "hidden")}>
+                  <h3 className="px-1 text-sm font-semibold text-muted-foreground">Recording</h3>
+                  <Group>
+                    <Row
+                      label="Keep call audio"
+                      htmlFor="keep-audio"
+                      description="Stores a stereo audio file next to each transcript. Re-transcribing needs it."
+                      error={keepAudioError}
+                    >
+                      <Checkbox
+                        id="keep-audio"
+                        checked={config?.keep_audio ?? false}
+                        disabled={!config}
+                        onCheckedChange={(checked) => handleSetKeepAudio(checked === true)}
+                      />
+                    </Row>
+                    <Row
+                      label="Audio format"
+                      description="AAC: about 17 MB per hour, small quality loss (default). FLAC: lossless, about 137 MB per hour."
+                      error={audioFormatError}
+                    >
+                      {AUDIO_FORMAT_OPTIONS.map((option) => (
+                        <Button
+                          key={option.value}
+                          variant={config?.audio_format === option.value ? "default" : "outline"}
+                          size="sm"
+                          disabled={!config || !config.keep_audio}
+                          onClick={() => handleSetAudioFormat(option.value)}
+                        >
+                          {option.label}
+                        </Button>
+                      ))}
+                    </Row>
+                  </Group>
+                  <Group>
+                    <Row
+                      label="Suggest recording when a call starts"
+                      htmlFor="detect-calls"
+                      description="Watches microphone activity from known calling apps. Recording still needs your click."
+                      error={detectCallsError}
+                    >
+                      <Checkbox
+                        id="detect-calls"
+                        checked={config?.detect_calls ?? false}
+                        disabled={!config}
+                        onCheckedChange={(checked) => handleSetDetectCalls(checked === true)}
+                      />
+                    </Row>
+                    <Row
+                      label="Stop automatically when the call ends"
+                      htmlFor="auto-stop-after-call"
+                      description="Waits for the call app to release audio and for the remote channel to stay silent."
+                      error={autoStopAfterCallError}
+                    >
+                      <Checkbox
+                        id="auto-stop-after-call"
+                        checked={config?.auto_stop_after_call ?? false}
+                        disabled={!config || !config.detect_calls}
+                        onCheckedChange={(checked) => handleSetAutoStopAfterCall(checked === true)}
+                      />
+                    </Row>
+                  </Group>
+                </section>
 
-          <section className="flex flex-col gap-3">
-            <h3 className="text-sm font-semibold">Models</h3>
+                <section id="settings-transcription" className={cn("flex flex-col gap-2", activeSection !== "settings-transcription" && "hidden")}>
+                  <h3 className="px-1 text-sm font-semibold text-muted-foreground">Transcription</h3>
+                  {/* Stage 0.9 (fix-review correction): only the AUTO toggle
+                      needs `keep_audio` on -- it fires right after a recording
+                      stops, so it's useless without an audio file having just
+                      been kept. The delete toggle is NOT gated the same way:
+                      `retranscribe_session` applies delete-after to ANY
+                      successful re-transcribe, including a MANUAL one on an
+                      old session that still has audio from back when
+                      `keep_audio` was on, even if it's off right now. */}
+                  <Group>
+                    <Row
+                      label="Re-transcribe automatically after stopping"
+                      htmlFor="auto-retranscribe"
+                      description={
+                        <>
+                          Runs the selected whisper model on the finished call in the background.
+                          {config && !config.keep_audio && " Needs call audio."}
+                        </>
+                      }
+                      error={autoRetranscribeError}
+                    >
+                      <Checkbox
+                        id="auto-retranscribe"
+                        checked={config?.auto_retranscribe ?? false}
+                        disabled={!config || !config.keep_audio}
+                        onCheckedChange={(checked) => handleSetAutoRetranscribe(checked === true)}
+                      />
+                    </Row>
+                    <Row
+                      label="Delete the audio after re-transcribing"
+                      htmlFor="delete-audio-after-retranscribe"
+                      description={
+                        'Removes the recording once a re-transcribe succeeds - manual or automatic, it always applies, regardless of whether "Keep call audio" is currently on (an old session recorded with it on can still be re-transcribed manually) - and that call can never be re-transcribed again.'
+                      }
+                      error={deleteAudioAfterError}
+                    >
+                      <Checkbox
+                        id="delete-audio-after-retranscribe"
+                        checked={config?.delete_audio_after_retranscribe ?? false}
+                        disabled={!config}
+                        onCheckedChange={(checked) => handleSetDeleteAudioAfterRetranscribe(checked === true)}
+                      />
+                    </Row>
+                  </Group>
 
             {/* Recording group (stage 0.8): every `role === "live"` entry.
                 Parakeet is the only one today and stays the only one a future
@@ -691,7 +734,7 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
             <div className="flex flex-col gap-1.5">
               <div className="flex items-baseline justify-between gap-2">
                 <h4 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
-                  Recording
+                  Live model
                 </h4>
                 <span className="text-xs text-muted-foreground">
                   Recording models: {humanBytes(totalDiskUsed(liveModels))} on disk
@@ -849,7 +892,10 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                 })}
               </ul>
             </div>
-          </section>
+                </section>
+              </div>
+            </div>
+          </div>
         </div>
       </DialogContent>
     </Dialog>

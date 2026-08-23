@@ -35,7 +35,7 @@ ASR models download inside the app on first run (Settings > Models), into
 
 [releases]: ../../releases/latest
 
-## Why not Granola, Hyprnote or Meetily
+## Why not Granola, Anarlog or Meetily
 
 [Granola](https://granola.ai) nailed the UX and this app borrows from it
 shamelessly, but it is cloud all the way down: audio streams to hosted ASR,
@@ -43,11 +43,11 @@ notes live on their servers behind an account, the audio itself is not kept
 (a wrong transcript can never be re-checked), and there is no plain-markdown
 export.
 
-[Hyprnote](https://github.com/fastrepl/anarlog) is the closest project and
-has real local ASR, but it grew into a platform: accounts, a Pro tier, cloud
-sync, analytics on by default, and a SQLite store its own docs tell you not
-to edit directly or put inside an Obsidian vault. Markdown is a manual
-per-meeting export.
+[Anarlog](https://github.com/fastrepl/anarlog) (formerly Hyprnote) is the
+closest project and has real local ASR, but it grew into a platform: an
+optional account with a $15/mo Pro tier for sync and sharing, telemetry on
+by default (`telemetry_consent: true` in its settings schema), and notes
+and transcripts in SQLite. Markdown is an export, not the storage.
 
 [Meetily](https://github.com/Zackriya-Solutions/meetily) is honestly local
 with no login, but the transcripts live in SQLite and markdown export is a

@@ -40,7 +40,16 @@ a paid PRO feature, alongside diarization and calendar. Its issue tracker was
 a useful map of the hard parts (Windows system-audio device handling, GPU
 offload flakiness, mic+system mixing bugs, Linux loopback unsolved).
 
-## Hyprnote / Anarlog (fastrepl, YC S25, MIT)
+## Anarlog, formerly Hyprnote (fastrepl, YC S25, MIT)
+
+Update 2026-08-23: the project is now named anarlog (Hyprnote -> briefly
+"char" -> anarlog after a project split). Re-verified against the current
+repo: telemetry is still on by default (`telemetry_consent: { default:
+true }` in apps/desktop/src/settings/schema.ts), Pro is $15/mo or $150/yr,
+an account is optional and only needed for sync/sharing/Pro, storage is
+still SQLite with markdown as a manual export. The old docs warning about
+Obsidian vaults could not be re-verified (docs domain moved); don't cite it
+publicly.
 
 The closest existing thing, and the best code to learn from: Tauri 2 + Rust,
 Core Audio process tap via `cidre` on macOS, WASAPI on Windows, PipeWire on

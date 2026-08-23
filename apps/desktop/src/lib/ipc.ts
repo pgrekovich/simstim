@@ -357,6 +357,18 @@ export function createSession(): Promise<string> {
   return invoke("create_session");
 }
 
+/**
+ * Moves a session's `.md` and its audio file(s) to the macOS Trash (stage
+ * 0.10) -- recoverable from the Finder, not a hard delete. Mirrors
+ * `sessions::delete_session` (apps/desktop/src-tauri/src/sessions.rs).
+ * Rejects (with a plain, user-facing message) the currently-recording
+ * session, one still being finalized, and one with an in-flight or queued
+ * re-transcribe job.
+ */
+export function deleteSession(path: string): Promise<void> {
+  return invoke("delete_session", { path });
+}
+
 export function saveSession(path: string, title: string, notes: string): Promise<void> {
   return invoke("save_session", { path, title, notes });
 }

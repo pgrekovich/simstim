@@ -4,6 +4,7 @@ import App from "@/App";
 import * as ipc from "@/lib/ipc";
 import type { SessionMeta } from "@/lib/ipc";
 import { listen } from "@tauri-apps/api/event";
+import { ask } from "@tauri-apps/plugin-dialog";
 
 /**
  * App drives three "real" Tauri surfaces directly: the `@/lib/ipc` wrappers
@@ -51,6 +52,7 @@ vi.mock("@/lib/ipc", () => ({
   deleteModel: vi.fn().mockResolvedValue(undefined),
   retranscribeSession: vi.fn().mockResolvedValue(undefined),
   createSession: vi.fn().mockResolvedValue("/tmp/new.md"),
+  deleteSession: vi.fn().mockResolvedValue(undefined),
   showMainWindow: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -60,6 +62,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({
   open: vi.fn(),
+  ask: vi.fn().mockResolvedValue(false),
 }));
 
 // SessionView feeds a session's `<audio src>` through `convertFileSrc` when
@@ -889,5 +892,79 @@ describe("App: sidebar refresh on model-ready (final review Important finding)",
     emit("transcript-line", "[00:00:07] Me: sounds good");
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(vi.mocked(ipc.listSessions).mock.calls.length).toBe(callsBeforeModelReady + 1);
+  });
+});
+
+describe("App: deleting a note from the sidebar (stage 0.10)", () => {
+  const doomed: SessionMeta[] = [
+    { path: "/tmp/doomed.md", title: "Doomed call", date: new Date().toISOString(), duration_secs: null },
+  ];
+
+  beforeEach(() => {
+    vi.mocked(ipc.deleteSession).mockClear().mockResolvedValue(undefined);
+    vi.mocked(ask).mockClear();
+  });
+
+  it("confirms with the note's title, deletes, clears the selection and refreshes the list", async () => {
+    vi.mocked(ipc.listSessions).mockResolvedValue(doomed);
+    vi.mocked(ask).mockResolvedValue(true);
+    vi.mocked(ipc.readSession).mockResolvedValue({
+      title: "Doomed call",
+      date: "",
+      notes: "",
+      transcript: "",
+      audio_path: null,
+    });
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /doomed call/i }));
+    await waitFor(() => expect(document.body.textContent).not.toContain("select a session"));
+
+    const callsBefore = vi.mocked(ipc.listSessions).mock.calls.length;
+    fireEvent.click(screen.getByRole("button", { name: /move to trash/i }));
+
+    await waitFor(() =>
+      expect(ipc.deleteSession).toHaveBeenCalledExactlyOnceWith("/tmp/doomed.md"),
+    );
+    // The dialog names the note and says where the files go.
+    const askMessage = vi.mocked(ask).mock.calls[0][0];
+    expect(askMessage).toContain('"Doomed call"');
+    expect(askMessage).toContain("Trash");
+    // The deleted note was selected: the pane must fall back to the empty
+    // state, and the sidebar must re-scan the folder.
+    await waitFor(() =>
+      expect(document.body.textContent).toContain("select a session or start recording"),
+    );
+    await waitFor(() =>
+      expect(vi.mocked(ipc.listSessions).mock.calls.length).toBeGreaterThan(callsBefore),
+    );
+  });
+
+  it("does not delete anything when the confirm dialog is declined", async () => {
+    vi.mocked(ipc.listSessions).mockResolvedValue(doomed);
+    vi.mocked(ask).mockResolvedValue(false);
+
+    render(<App />);
+    await screen.findByRole("button", { name: /doomed call/i });
+    fireEvent.click(screen.getByRole("button", { name: /move to trash/i }));
+
+    await waitFor(() => expect(ask).toHaveBeenCalledTimes(1));
+    expect(ipc.deleteSession).not.toHaveBeenCalled();
+  });
+
+  it("surfaces the backend's refusal message instead of silently swallowing it", async () => {
+    vi.mocked(ipc.listSessions).mockResolvedValue(doomed);
+    vi.mocked(ask).mockResolvedValue(true);
+    vi.mocked(ipc.deleteSession).mockRejectedValue(
+      "this session is being re-transcribed; wait for it to finish before deleting",
+    );
+
+    render(<App />);
+    await screen.findByRole("button", { name: /doomed call/i });
+    fireEvent.click(screen.getByRole("button", { name: /move to trash/i }));
+
+    await waitFor(() =>
+      expect(document.body.textContent).toContain("being re-transcribed"),
+    );
   });
 });

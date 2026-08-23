@@ -1,4 +1,4 @@
-import { Plus } from "lucide-react";
+import { Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { SessionMeta } from "@/lib/ipc";
@@ -10,6 +10,8 @@ interface SidebarProps {
   activePath: string | null;
   onSelect: (path: string) => void;
   onNewSession: () => void;
+  /** Row-hover trash button; App owns the confirm dialog and the IPC call. */
+  onDelete: (path: string) => void;
 }
 
 interface SessionGroup {
@@ -66,6 +68,7 @@ export function Sidebar({
   activePath,
   onSelect,
   onNewSession,
+  onDelete,
 }: SidebarProps) {
   const groups = groupSessions(sessions);
 
@@ -102,40 +105,71 @@ export function Sidebar({
                 const selected = selectedPath === session.path;
                 const recording = activePath === session.path;
                 return (
-                  <button
-                    key={session.path}
-                    type="button"
-                    onClick={() => onSelect(session.path)}
-                    className={cn(
-                      "flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors duration-150",
-                      // Selection reads as a filled pill plus weight, with no
-                      // left rule: a border on a rounded row renders as a
-                      // detached bracket. Each state gets its own hover so the
-                      // selected row deepens on hover instead of being dimmed
-                      // by a lower-opacity tint winning the cascade.
-                      selected
-                        ? "bg-foreground/[0.09] font-medium text-foreground hover:bg-foreground/[0.12]"
-                        : "text-foreground/75 hover:bg-foreground/[0.05] hover:text-foreground active:bg-foreground/[0.09]"
-                    )}
-                  >
-                    <span className="flex min-w-0 flex-1 items-center gap-1.5">
-                      {recording && (
-                        <span
-                          data-testid="recording-dot"
-                          aria-hidden="true"
-                          className="size-1.5 shrink-0 animate-pulse rounded-full bg-destructive"
-                        />
+                  // A wrapper div, not one button: the delete affordance is
+                  // its own overlaid button (nesting buttons is invalid
+                  // HTML), revealed on row hover in place of the timestamp.
+                  <div key={session.path} className="group relative">
+                    <button
+                      type="button"
+                      onClick={() => onSelect(session.path)}
+                      className={cn(
+                        "flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors duration-150",
+                        // Selection reads as a filled pill plus weight, with no
+                        // left rule: a border on a rounded row renders as a
+                        // detached bracket. Each state gets its own hover so the
+                        // selected row deepens on hover instead of being dimmed
+                        // by a lower-opacity tint winning the cascade.
+                        selected
+                          ? "bg-foreground/[0.09] font-medium text-foreground hover:bg-foreground/[0.12]"
+                          : "text-foreground/75 hover:bg-foreground/[0.05] hover:text-foreground active:bg-foreground/[0.09]"
                       )}
-                      <span className="min-w-0 truncate">{session.title}</span>
-                      {/* Appended AFTER the title text so it doesn't become
-                          the row button's primary accessible name (App.test.tsx
-                          matches the active row by /^untitled/i). */}
-                      {recording && <span className="sr-only">recording</span>}
-                    </span>
-                    <span className="shrink-0 text-xs text-muted-foreground">
-                      {formatTime(session.date)}
-                    </span>
-                  </button>
+                    >
+                      <span className="flex min-w-0 flex-1 items-center gap-1.5">
+                        {recording && (
+                          <span
+                            data-testid="recording-dot"
+                            aria-hidden="true"
+                            className="size-1.5 shrink-0 animate-pulse rounded-full bg-destructive"
+                          />
+                        )}
+                        <span className="min-w-0 truncate">{session.title}</span>
+                        {/* Appended AFTER the title text so it doesn't become
+                            the row button's primary accessible name (App.test.tsx
+                            matches the active row by /^untitled/i). */}
+                        {recording && <span className="sr-only">recording</span>}
+                      </span>
+                      <span
+                        className={cn(
+                          "shrink-0 text-xs text-muted-foreground",
+                          // The trash button takes the timestamp's spot on
+                          // hover -- but never for the recording row, which
+                          // can't be deleted and keeps its time visible.
+                          !recording && "group-hover:opacity-0"
+                        )}
+                      >
+                        {formatTime(session.date)}
+                      </span>
+                    </button>
+                    {!recording && (
+                      <button
+                        type="button"
+                        // The accessible name deliberately does NOT include
+                        // the session title: row queries (tests and screen
+                        // readers alike) match rows by title, and a delete
+                        // button carrying the same words would collide with
+                        // its own row (14 existing queries broke that way).
+                        aria-label="Move to Trash"
+                        title="Move to Trash"
+                        onClick={() => onDelete(session.path)}
+                        // pointer-events gating, not just opacity: an
+                        // invisible-but-clickable overlay would steal clicks
+                        // aimed at the timestamp area of the row button.
+                        className="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 cursor-pointer rounded p-1 text-muted-foreground opacity-0 transition-opacity duration-150 hover:text-destructive focus-visible:pointer-events-auto focus-visible:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100"
+                      >
+                        <Trash2 className="size-3.5" />
+                      </button>
+                    )}
+                  </div>
                 );
               })}
             </div>

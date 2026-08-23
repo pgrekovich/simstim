@@ -3,6 +3,7 @@ pub mod audio_sink;
 pub mod banner;
 pub mod config;
 pub mod detect;
+pub mod enhance;
 pub mod models;
 pub mod retranscribe;
 pub mod session;
@@ -513,6 +514,7 @@ pub fn run() {
         .manage(AppState::default())
         .manage(DownloadState::default())
         .manage(retranscribe::RetranscribeState::default())
+        .manage(enhance::EnhanceState::default())
         .setup(|app| {
             // Security review finding (this task): the static
             // `assetProtocol.scope` in tauri.conf.json is empty on purpose
@@ -557,6 +559,10 @@ pub fn run() {
             config::set_auto_retranscribe,
             config::set_delete_audio_after_retranscribe,
             config::set_auto_stop_after_call,
+            config::set_enhance_provider,
+            config::set_enhance_model,
+            enhance::list_enhance_providers,
+            enhance::enhance_session,
             detect::set_detect_calls,
             banner::banner_dismiss,
             banner::banner_current_state,

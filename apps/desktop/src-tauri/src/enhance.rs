@@ -1,0 +1,487 @@
+//! AI enhance (stage 0.11): Granola's core mechanic on our terms.
+//!
+//! The user's rough notes are the primary signal; the transcript is backing
+//! material. `enhance_session` feeds both to a locally-installed AI CLI --
+//! `claude` (Claude Code) or `codex` (OpenAI Codex), whichever the user
+//! already pays for -- and writes the result into the note's `## Summary`
+//! section, labeled with the provider. No API keys, nothing configured
+//! beyond having the CLI logged in.
+//!
+//! Product rules honored here:
+//! - Text-only leaves the machine, and only on an explicit click (rule 2:
+//!   any cloud step is opt-in and text-only). Audio never goes anywhere.
+//! - The user's words are sacred (rule 6): output lands in `## Summary`,
+//!   never inside `## Notes`. Re-enhancing replaces only the summary.
+//! - Single writer (rule 5): the currently-recording or finalizing session
+//!   is rejected, and the write itself is the same atomic tmp+rename every
+//!   other rewrite uses.
+//!
+//! Subprocess hygiene, learned the careful way:
+//! - Both CLIs are agentic and read project context from their cwd (a
+//!   CLAUDE.md, a git repo). They're spawned in a fresh empty temp dir so
+//!   the ONLY thing they ever see is our prompt.
+//! - `codex exec` runs with `-s read-only` (its own sandbox) and writes the
+//!   final message to a file via `-o`; stdout is logs. `claude -p
+//!   --output-format text` prints the answer to stdout.
+//! - A GUI app's PATH doesn't include /opt/homebrew/bin, so binaries are
+//!   resolved against a small list of well-known install dirs plus PATH.
+
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
+
+use serde::Serialize;
+use tauri::Manager;
+
+use crate::config::Config;
+use crate::AppState;
+
+/// How long a provider gets before we kill it. Generous: a long call's
+/// transcript is a big prompt, and subscription CLIs can queue.
+const ENHANCE_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// One runnable provider: the CLI this app knows how to drive.
+struct ProviderSpec {
+    id: &'static str,
+    name: &'static str,
+    binary: &'static str,
+}
+
+const PROVIDERS: &[ProviderSpec] = &[
+    ProviderSpec { id: "claude", name: "Claude Code", binary: "claude" },
+    ProviderSpec { id: "codex", name: "Codex", binary: "codex" },
+];
+
+/// IPC-facing provider row for the Settings AI section. Mirrors
+/// `EnhanceProviderInfo` in `ipc.ts`.
+#[derive(Debug, Clone, Serialize)]
+pub struct EnhanceProviderInfo {
+    pub id: String,
+    pub name: String,
+    pub available: bool,
+    pub version: Option<String>,
+}
+
+/// At most one enhance at a time, app-wide (same reasoning as the
+/// re-transcribe queue's `running` slot: these are heavyweight external
+/// processes). Holds the running session's path for the error message.
+#[derive(Default)]
+pub struct EnhanceState(Mutex<Option<String>>);
+
+/// Resolves `binary` to an executable path. A bundled GUI app launches with
+/// a minimal PATH (no /opt/homebrew/bin), so well-known install dirs are
+/// checked explicitly before falling back to whatever PATH has.
+fn resolve_binary(binary: &str) -> Option<PathBuf> {
+    let mut candidates: Vec<PathBuf> = vec![
+        PathBuf::from("/opt/homebrew/bin").join(binary),
+        PathBuf::from("/usr/local/bin").join(binary),
+    ];
+    if let Some(home) = dirs::home_dir() {
+        candidates.push(home.join(".local/bin").join(binary));
+        candidates.push(home.join(".bun/bin").join(binary));
+        candidates.push(home.join(".npm-global/bin").join(binary));
+    }
+    if let Ok(path_var) = std::env::var("PATH") {
+        for dir in std::env::split_paths(&path_var) {
+            candidates.push(dir.join(binary));
+        }
+    }
+    candidates.into_iter().find(|p| p.is_file())
+}
+
+/// `<binary> --version`, trimmed, or `None` if the binary is missing or
+/// errors. Used both for the Settings availability rows and as the "is it
+/// actually runnable" gate before an enhance.
+fn probe_version(binary: &str) -> Option<String> {
+    let path = resolve_binary(binary)?;
+    let out = Command::new(path).arg("--version").output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let version = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (!version.is_empty()).then_some(version)
+}
+
+/// Async + `spawn_blocking`: probing spawns `--version` subprocesses, and a
+/// non-async tauri command would run them on the MAIN thread, freezing the
+/// UI (the enhance command below froze the whole app exactly this way, owner
+/// bug report).
+#[tauri::command]
+pub async fn list_enhance_providers() -> Vec<EnhanceProviderInfo> {
+    tauri::async_runtime::spawn_blocking(|| {
+        PROVIDERS
+            .iter()
+            .map(|spec| {
+                let version = probe_version(spec.binary);
+                EnhanceProviderInfo {
+                    id: spec.id.to_string(),
+                    name: spec.name.to_string(),
+                    available: version.is_some(),
+                    version,
+                }
+            })
+            .collect()
+    })
+    .await
+    .unwrap_or_default()
+}
+
+/// The Granola contract, spelled out (owner decision, stage 0.11): the
+/// user's rough notes lead, the transcript backs them up. Kept as a plain
+/// function of the inputs so tests can pin its shape without running any
+/// CLI.
+fn build_prompt(title: &str, notes: &str, transcript: &str) -> String {
+    let notes_block = if notes.trim().is_empty() {
+        "(the user took no notes during this call)".to_string()
+    } else {
+        notes.trim().to_string()
+    };
+    format!(
+        "You are enhancing notes taken during a call, in the style of Granola.\n\
+         \n\
+         The user's own rough notes are the PRIMARY signal: they show what mattered\n\
+         to the user. The transcript is backing material to fill in details,\n\
+         decisions, numbers and names the rough notes only hint at. If the notes are\n\
+         empty, produce a concise structured summary of the call instead.\n\
+         \n\
+         Rules:\n\
+         - Write in the language the notes and transcript are in.\n\
+         - Output Markdown: short sections, bullet points, bold the decisions.\n\
+         - Include an \"Action items\" section only if the call actually produced any.\n\
+         - Never invent facts that are in neither the notes nor the transcript.\n\
+         - Output ONLY the enhanced note itself: no preamble, no closing remarks,\n\
+           no top-level title heading.\n\
+         \n\
+         Call title: {title}\n\
+         \n\
+         === USER'S ROUGH NOTES ===\n\
+         {notes_block}\n\
+         \n\
+         === TRANSCRIPT ===\n\
+         {transcript}\n"
+    )
+}
+
+/// The label written into the note's `summary_model:` field: bare provider
+/// id on the CLI's default model, `provider/model` with an override -- the
+/// user asked to always be able to tell WHAT generated a summary.
+fn summary_label(spec: &ProviderSpec, model: Option<&str>) -> String {
+    match model {
+        Some(m) => format!("{}/{}", spec.id, m),
+        None => spec.id.to_string(),
+    }
+}
+
+/// Runs `spec`'s CLI over `prompt` (with `model` overriding the CLI's
+/// default when set) and returns the generated text. Blocking -- callers
+/// run it inside `spawn_blocking`; killed at [`ENHANCE_TIMEOUT`].
+fn run_provider(spec: &ProviderSpec, model: Option<&str>, prompt: &str) -> Result<String, String> {
+    let binary = resolve_binary(spec.binary)
+        .ok_or_else(|| format!("{} isn't installed (no `{}` on this Mac)", spec.name, spec.binary))?;
+    // A fresh, empty working dir: both CLIs are agentic and would otherwise
+    // read whatever project context (CLAUDE.md, git history) the cwd holds.
+    let workdir = tempfile::tempdir().map_err(|e| e.to_string())?;
+
+    let mut cmd = Command::new(&binary);
+    let codex_out = workdir.path().join("last-message.txt");
+    match spec.id {
+        "claude" => {
+            cmd.args(["-p", "--output-format", "text"]);
+            if let Some(m) = model {
+                cmd.args(["--model", m]);
+            }
+        }
+        "codex" => {
+            cmd.args(["exec", "--skip-git-repo-check", "-s", "read-only"]);
+            if let Some(m) = model {
+                cmd.args(["-m", m]);
+            }
+            cmd.arg("-o").arg(&codex_out).arg("-");
+        }
+        other => return Err(format!("unknown enhance provider: {other}")),
+    }
+    let mut child = cmd
+        .current_dir(workdir.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("couldn't start {}: {e}", spec.name))?;
+
+    child
+        .stdin
+        .take()
+        .expect("stdin was piped")
+        .write_all(prompt.as_bytes())
+        .map_err(|e| format!("couldn't send the note to {}: {e}", spec.name))?;
+    // Dropping stdin closes it -- both CLIs read to EOF before answering.
+
+    // Poll-with-deadline instead of a plain `wait`: a hung provider must
+    // not hold the enhance slot forever. Output is drained in a thread so a
+    // chatty stdout can't deadlock the child on a full pipe.
+    let stdout = child.stdout.take().expect("stdout was piped");
+    let stderr = child.stderr.take().expect("stderr was piped");
+    let reader = std::thread::spawn(move || {
+        use std::io::Read;
+        let mut out = String::new();
+        let mut err = String::new();
+        let _ = std::io::BufReader::new(stdout).read_to_string(&mut out);
+        let _ = std::io::BufReader::new(stderr).read_to_string(&mut err);
+        (out, err)
+    });
+
+    let deadline = Instant::now() + ENHANCE_TIMEOUT;
+    let status = loop {
+        match child.try_wait().map_err(|e| e.to_string())? {
+            Some(status) => break status,
+            None if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!(
+                    "{} took longer than {} minutes and was stopped",
+                    spec.name,
+                    ENHANCE_TIMEOUT.as_secs() / 60
+                ));
+            }
+            None => std::thread::sleep(Duration::from_millis(200)),
+        }
+    };
+    let (out, err) = reader.join().unwrap_or_default();
+
+    if !status.success() {
+        let detail = if err.trim().is_empty() { out } else { err };
+        let detail = detail.trim();
+        let tail: String = detail
+            .lines()
+            .rev()
+            .take(3)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect::<Vec<_>>()
+            .join(" ");
+        return Err(format!("{} failed: {}", spec.name, tail));
+    }
+
+    let text = match spec.id {
+        // codex prints logs to stdout; the actual answer is the -o file.
+        "codex" => std::fs::read_to_string(&codex_out).unwrap_or_default(),
+        _ => out,
+    };
+    let text = text.trim().to_string();
+    if text.is_empty() {
+        return Err(format!("{} returned an empty response", spec.name));
+    }
+    Ok(text)
+}
+
+/// Rejections for `enhance_session`, split out for direct unit tests (the
+/// same shape as `sessions::validate_delete_session`).
+fn validate_enhance(
+    md_path: &Path,
+    active: Option<&Path>,
+    finalizing: Option<&Path>,
+    already_running: Option<&str>,
+    transcript: &str,
+) -> Result<(), String> {
+    if active == Some(md_path) {
+        return Err("this session is currently recording; stop it before enhancing".to_string());
+    }
+    if finalizing == Some(md_path) {
+        return Err("this call is still being saved, try again in a moment".to_string());
+    }
+    if let Some(running) = already_running {
+        return Err(if running == md_path.display().to_string() {
+            "this note is already being enhanced".to_string()
+        } else {
+            "another note is being enhanced; wait for it to finish".to_string()
+        });
+    }
+    if transcript.trim().is_empty() {
+        return Err("nothing to enhance: this note has no transcript yet".to_string());
+    }
+    Ok(())
+}
+
+/// Enhances `path`'s notes with the configured provider and writes the
+/// result into its `## Summary` section (replacing any previous summary --
+/// generated text is regenerable, the notes are never touched).
+///
+/// Async, with the whole blocking pipeline (parse, subprocess, atomic write)
+/// inside `spawn_blocking`: a non-async tauri command runs ON THE MAIN
+/// THREAD, and the first version of this froze the entire app for the whole
+/// generation (owner bug report). The `AppHandle` crosses into the blocking
+/// closure instead of `State` guards, which can't outlive the request.
+#[tauri::command]
+pub async fn enhance_session(
+    path: String,
+    app: tauri::AppHandle,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let md_path = Path::new(&path);
+        let state = app.state::<AppState>();
+        let enhance = app.state::<EnhanceState>();
+        let cfg = Config::load();
+        let spec = PROVIDERS
+            .iter()
+            .find(|s| s.id == cfg.enhance_provider)
+            .ok_or_else(|| format!("unknown enhance provider: {}", cfg.enhance_provider))?;
+        let model = cfg
+            .enhance_models
+            .get(spec.id)
+            .map(|m| m.trim())
+            .filter(|m| !m.is_empty())
+            .map(str::to_string);
+
+        let existing = simstim_transcript::parse_session(md_path).map_err(|e| e.to_string())?;
+        {
+            let mut running = enhance.0.lock().unwrap();
+            validate_enhance(
+                md_path,
+                state.active_output_path().as_deref(),
+                state.finalizing_match(md_path).as_deref(),
+                running.as_deref(),
+                &existing.transcript,
+            )?;
+            *running = Some(path.clone());
+        }
+        // The slot is held; release it on EVERY exit path below.
+        let result = (|| {
+            let prompt = build_prompt(&existing.title, &existing.notes, &existing.transcript);
+            let summary = run_provider(spec, model.as_deref(), &prompt)?;
+            // Re-check the single-writer rule right before the write: the
+            // user could have started recording into this same note while
+            // the provider was thinking.
+            if state.active_output_path().as_deref() == Some(md_path) {
+                return Err(
+                    "this session started recording while enhancing; the summary was discarded"
+                        .to_string(),
+                );
+            }
+            crate::sessions::set_summary_at(md_path, &summary, &summary_label(spec, model.as_deref()))
+                .map_err(|e| e.to_string())?;
+            Ok(summary)
+        })();
+        *enhance.0.lock().unwrap() = None;
+        result
+    })
+    .await
+    .map_err(|e| format!("enhance task failed: {e}"))?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    mod prompt {
+        use super::*;
+
+        #[test]
+        fn notes_lead_and_transcript_backs() {
+            let p = build_prompt("Weekly sync", "- budget approved", "[00:00:01] Me: hi");
+            let notes_at = p.find("- budget approved").unwrap();
+            let transcript_at = p.find("[00:00:01] Me: hi").unwrap();
+            assert!(notes_at < transcript_at, "notes must come before the transcript");
+            assert!(p.contains("PRIMARY signal"));
+            assert!(p.contains("Call title: Weekly sync"));
+        }
+
+        #[test]
+        fn empty_notes_ask_for_a_structured_summary_instead() {
+            let p = build_prompt("Untitled", "   ", "[00:00:01] Them: hello");
+            assert!(p.contains("took no notes"));
+        }
+    }
+
+    mod validation {
+        use super::*;
+
+        #[test]
+        fn rejects_the_recording_session() {
+            let err = validate_enhance(
+                Path::new("/tmp/a.md"),
+                Some(Path::new("/tmp/a.md")),
+                None,
+                None,
+                "[00:00:01] Me: hi",
+            )
+            .unwrap_err();
+            assert!(err.contains("currently recording"), "{err}");
+        }
+
+        #[test]
+        fn rejects_a_finalizing_session() {
+            let err = validate_enhance(
+                Path::new("/tmp/a.md"),
+                None,
+                Some(Path::new("/tmp/a.md")),
+                None,
+                "[00:00:01] Me: hi",
+            )
+            .unwrap_err();
+            assert!(err.contains("still being saved"), "{err}");
+        }
+
+        #[test]
+        fn rejects_while_any_enhance_is_running() {
+            let err = validate_enhance(
+                Path::new("/tmp/a.md"),
+                None,
+                None,
+                Some("/tmp/b.md"),
+                "[00:00:01] Me: hi",
+            )
+            .unwrap_err();
+            assert!(err.contains("another note"), "{err}");
+
+            let err = validate_enhance(
+                Path::new("/tmp/a.md"),
+                None,
+                None,
+                Some("/tmp/a.md"),
+                "[00:00:01] Me: hi",
+            )
+            .unwrap_err();
+            assert!(err.contains("already being enhanced"), "{err}");
+        }
+
+        #[test]
+        fn rejects_an_empty_transcript() {
+            let err = validate_enhance(Path::new("/tmp/a.md"), None, None, None, "  \n ")
+                .unwrap_err();
+            assert!(err.contains("no transcript"), "{err}");
+        }
+
+        #[test]
+        fn accepts_a_plain_inactive_session_with_a_transcript() {
+            assert!(validate_enhance(
+                Path::new("/tmp/a.md"),
+                Some(Path::new("/tmp/other.md")),
+                None,
+                None,
+                "[00:00:01] Me: hi",
+            )
+            .is_ok());
+        }
+    }
+
+    /// Manual e2e: runs the REAL configured provider CLI over a tiny fake
+    /// call. Needs a logged-in `claude` on this machine; costs a real
+    /// (small) request. Run with:
+    /// `cargo test -p desktop --lib enhance_manual -- --ignored --nocapture`
+    #[test]
+    #[ignore = "spawns the real claude CLI; run manually"]
+    fn enhance_manual_e2e_real_provider() {
+        let spec = &PROVIDERS[0];
+        let prompt = build_prompt(
+            "Test call",
+            "- agreed to ship v2 friday",
+            "[00:00:01] Me: let's ship version two on friday\n[00:00:04] Them: deal, friday it is",
+        );
+        let summary = run_provider(spec, None, &prompt).expect("provider run failed");
+        eprintln!("--- summary ---\n{summary}\n---------------");
+        assert!(!summary.is_empty());
+    }
+}

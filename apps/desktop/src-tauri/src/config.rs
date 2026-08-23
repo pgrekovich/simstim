@@ -67,6 +67,15 @@ fn default_delete_audio_after_retranscribe() -> bool {
 }
 
 /// Call detection only suggests recording and therefore defaults on.
+/// The enhance provider ids `enhance::PROVIDERS` knows how to run.
+pub const VALID_ENHANCE_PROVIDERS: &[&str] = &["claude", "codex"];
+
+/// Claude first: the owner's own subscription, and the provider the enhance
+/// prompt was tuned against.
+fn default_enhance_provider() -> String {
+    "claude".to_string()
+}
+
 fn default_detect_calls() -> bool {
     true
 }
@@ -126,6 +135,18 @@ pub struct Config {
     /// failing deserialization entirely.
     #[serde(default = "default_delete_audio_after_retranscribe")]
     pub delete_audio_after_retranscribe: bool,
+    /// Which CLI `enhance_session` runs (stage 0.11): `"claude" | "codex"`.
+    /// The user's own subscription does the work -- no API keys, text-only,
+    /// and only ever on an explicit click. `serde(default)` so older
+    /// config.json files still load.
+    #[serde(default = "default_enhance_provider")]
+    pub enhance_provider: String,
+    /// Per-provider model override (stage 0.11), keyed by provider id: e.g.
+    /// `{"claude": "fable"}` runs `claude --model fable`. A missing or empty
+    /// entry means the CLI's own default -- model lineups change too often
+    /// to hardcode a list here, so this is free-form and passed through.
+    #[serde(default)]
+    pub enhance_models: std::collections::HashMap<String, String>,
     /// Whether mic activity from known calling apps may surface a recording
     /// suggestion. Detection never starts capture itself.
     #[serde(default = "default_detect_calls")]
@@ -147,6 +168,8 @@ impl Default for Config {
             retranscribe_model: default_retranscribe_model(),
             auto_retranscribe: default_auto_retranscribe(),
             delete_audio_after_retranscribe: default_delete_audio_after_retranscribe(),
+            enhance_provider: default_enhance_provider(),
+            enhance_models: Default::default(),
             detect_calls: default_detect_calls(),
             auto_stop_after_call: default_auto_stop_after_call(),
         }
@@ -174,6 +197,37 @@ pub fn set_theme(theme: String) -> Result<(), String> {
     validate_theme(&theme)?;
     let mut cfg = Config::load();
     cfg.theme = theme;
+    cfg.save().map_err(|e| e.to_string())
+}
+
+/// Sets and persists which CLI `enhance_session` runs (stage 0.11).
+/// Validates against [`VALID_ENHANCE_PROVIDERS`] rather than persisting an
+/// id the runner wouldn't know how to spawn.
+#[tauri::command]
+pub fn set_enhance_provider(provider: String) -> Result<(), String> {
+    if !VALID_ENHANCE_PROVIDERS.contains(&provider.as_str()) {
+        return Err(format!("unknown enhance provider: {provider}"));
+    }
+    let mut cfg = Config::load();
+    cfg.enhance_provider = provider;
+    cfg.save().map_err(|e| e.to_string())
+}
+
+/// Sets and persists the model override for one enhance provider (stage
+/// 0.11). An empty/whitespace `model` clears the override back to the CLI's
+/// own default.
+#[tauri::command]
+pub fn set_enhance_model(provider: String, model: String) -> Result<(), String> {
+    if !VALID_ENHANCE_PROVIDERS.contains(&provider.as_str()) {
+        return Err(format!("unknown enhance provider: {provider}"));
+    }
+    let mut cfg = Config::load();
+    let model = model.trim().to_string();
+    if model.is_empty() {
+        cfg.enhance_models.remove(&provider);
+    } else {
+        cfg.enhance_models.insert(provider, model);
+    }
     cfg.save().map_err(|e| e.to_string())
 }
 
@@ -315,6 +369,8 @@ mod tests {
             retranscribe_model: "whisper-large-v3".to_string(),
             auto_retranscribe: true,
             delete_audio_after_retranscribe: true,
+            enhance_provider: "codex".to_string(),
+            enhance_models: [("claude".to_string(), "fable".to_string())].into(),
             detect_calls: false,
             auto_stop_after_call: true,
         };

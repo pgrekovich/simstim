@@ -200,6 +200,29 @@ describe("App: call detection via the banner window (stage 1.1)", () => {
     expect(ipc.startRecording).not.toHaveBeenCalled();
   });
 
+  it("does not duplicate the model warning beside its toolbar action", async () => {
+    vi.mocked(ipc.listModels).mockResolvedValueOnce([
+      {
+        id: "m1",
+        name: "Test model",
+        tagline: null,
+        size_mb: 100,
+        downloaded: false,
+        active: true,
+        role: "live",
+        size_on_disk_bytes: 0,
+        retired: false,
+      },
+    ]);
+
+    render(<App />);
+    await screen.findByText("model not downloaded");
+    fireEvent.click(screen.getByRole("button", { name: /^New Note⌘N$/ }));
+
+    expect(await screen.findByRole("button", { name: "Open settings" })).toBeVisible();
+    expect(screen.queryByText("model not downloaded")).not.toBeInTheDocument();
+  });
+
   it("stops through the normal stop path on a banner-stop event", async () => {
     render(<App />);
     await emitBannerStart();

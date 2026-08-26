@@ -837,23 +837,22 @@ function App() {
   // left in the UI to actually stop.
   const sessionActive = activePath !== null;
   const viewingActiveSession = selectedPath !== null && selectedPath === activePath;
-  // The model-missing hint only replaces the status text while there is no
-  // more specific status to show (idle, not recording): once a real status
-  // exists ("saved to ...", an error, or an active recording) it takes
-  // priority, so a stale model-download reminder never masks it.
+  // Model readiness gets a dedicated Open settings action in the toolbar.
+  // Do not repeat the same message in the status slot: with all three tabs
+  // visible that duplicate was the first item to crowd the Record action at
+  // the default 800 px window width. The empty state still carries the text
+  // hint because it has no toolbar action.
   const showModelHint = !sessionActive && !modelReady && status.kind === "idle";
   // The empty-state screen (nothing selected, no search, not recording)
   // hides the topbar entirely. A lone Record button floating over the
   // shortcut menu reads as clutter, so its branch renders a bare drag strip.
   const showTopbar = sessionActive || searchResults !== null || selectedPath !== null;
-  const statusText = showModelHint
-    ? "model not downloaded"
-    : status.kind === "loading-model"
-      ? "loading model"
-      : status.kind === "recording"
-        ? "recording"
-        : status.kind === "saving"
-          ? "saving"
+  const statusText = status.kind === "loading-model"
+    ? "loading model"
+    : status.kind === "recording"
+      ? "recording"
+      : status.kind === "saving"
+        ? "saving"
         : status.kind === "saved"
           ? "saved"
           : "";

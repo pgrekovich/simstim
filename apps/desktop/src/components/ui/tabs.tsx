@@ -31,15 +31,9 @@ function TabsTrigger({
     <TabsPrimitive.Trigger
       data-slot="tabs-trigger"
       className={cn(
-        // The active tab is a solid inverted pill: foreground fill,
-        // background text. Every alpha-tint variant tried before this
-        // (bg-background inside a tinted list, then the sidebar-row 9%
-        // tint) read as mush on the identical bg-background content pane,
-        // especially in the light theme. Inversion flips with the theme,
-        // so it's unmissable in both.
-        "inline-flex h-7 items-center justify-center rounded-md px-3 text-sm text-muted-foreground outline-none transition-colors duration-150",
+        "inline-flex h-7 items-center justify-center rounded-md px-3 text-sm text-muted-foreground outline-none",
         "hover:bg-foreground/[0.07] hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50",
-        "data-[state=active]:bg-foreground data-[state=active]:font-medium data-[state=active]:text-background",
+        "data-[state=active]:font-semibold data-[state=active]:text-foreground",
         className
       )}
       {...props}

@@ -217,16 +217,13 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
   const [retranscribeError, setRetranscribeError] = useState<string | null>(null);
   const playerRef = useRef<AudioPlayerHandle>(null);
   const jobRunningHere = retranscribingJob?.path === path;
-  // App's toolbar renders an empty `#topbar-title-slot`; the title input is
-  // portaled into it so it reads as the document's name up there while every
-  // bit of save/flush routing stays in this component (whose keyed
-  // remount-per-path lifecycle the title state depends on). Looked up in an
-  // effect, not during render: the slot is a sibling subtree, and reading
-  // the DOM mid-render would race React mounting it. Falls back to inline
-  // rendering when the slot doesn't exist (component-level tests).
-  const [titleSlot, setTitleSlot] = useState<HTMLElement | null>(null);
+  // App's toolbar renders an empty `#topbar-tabs-slot`; the tab switcher is
+  // portaled into it to match the design while remaining inside the Radix
+  // Tabs React tree. Looked up in an effect because the slot is a sibling DOM
+  // subtree. Component tests have no slot and use the inline fallback.
+  const [toolbarSlot, setToolbarSlot] = useState<HTMLElement | null>(null);
   useEffect(() => {
-    setTitleSlot(document.getElementById("topbar-title-slot"));
+    setToolbarSlot(document.getElementById("topbar-tabs-slot"));
   }, []);
 
   // "Latest value" mirrors of the controlled state above, read from
@@ -480,73 +477,68 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
       onKeyDown={handleTitleKeyDown}
       onBlur={commitTitle}
       placeholder="Untitled"
-      className={
-        titleSlot
-          ? // Toolbar scale: the input IS the window title up there.
-            "w-full min-w-0 bg-transparent text-sm font-medium outline-none placeholder:text-muted-foreground"
-          : "min-w-0 flex-1 bg-transparent text-xl font-semibold outline-none placeholder:text-muted-foreground"
-      }
+      className="w-full min-w-0 bg-transparent font-serif text-[26px] font-semibold leading-[1.25] tracking-[-0.01em] outline-none placeholder:text-muted-foreground"
     />
   );
 
-  return (
-    <div className="flex h-full min-h-0 flex-col gap-3">
-      {titleSlot ? createPortal(titleInput, titleSlot) : (
-        <div className="flex shrink-0 items-center gap-2">{titleInput}</div>
+  const tabList = (
+    <TabsList className="h-[34px] gap-[3px] rounded-full bg-foreground/[0.06] p-[3px] dark:bg-foreground/[0.07]">
+      <TabsTrigger
+        className="h-7 gap-[7px] rounded-full px-[13px] font-mono text-[11px] font-normal hover:bg-foreground/[0.05] data-[state=active]:bg-background data-[state=active]:font-semibold data-[state=active]:tracking-[0.04em] data-[state=active]:shadow-[0_1px_2px_rgb(30_27_22/0.14)] dark:data-[state=active]:bg-foreground/[0.14]"
+        value="notes"
+      >
+        Notes
+      </TabsTrigger>
+      {summary && (
+        <TabsTrigger
+          className="h-7 gap-[7px] rounded-full px-[13px] font-mono text-[11px] font-normal hover:bg-foreground/[0.05] data-[state=active]:bg-background data-[state=active]:font-semibold data-[state=active]:tracking-[0.04em] data-[state=active]:shadow-[0_1px_2px_rgb(30_27_22/0.14)] dark:data-[state=active]:bg-foreground/[0.14]"
+          value="summary"
+        >
+          Summary
+        </TabsTrigger>
       )}
+      <TabsTrigger
+        className="h-7 gap-[7px] rounded-full px-[13px] font-mono text-[11px] font-normal hover:bg-foreground/[0.05] data-[state=active]:bg-background data-[state=active]:font-semibold data-[state=active]:tracking-[0.04em] data-[state=active]:shadow-[0_1px_2px_rgb(30_27_22/0.14)] dark:data-[state=active]:bg-foreground/[0.14]"
+        value="transcript"
+      >
+        {isActive && <span aria-hidden="true" className="recording-tally size-[5px] rounded-full bg-destructive" />}
+        Transcript
+      </TabsTrigger>
+    </TabsList>
+  );
 
-      {/* Notes first, transcript behind a tab (Granola's own restraint:
-          the notepad is the primary surface, the transcript is backing
-          material). Both contents are force-mounted and CSS-hidden when
-          inactive rather than unmounted: unmounting would kill audio
-          playback on a tab switch and reset TranscriptView's scroll. */}
-      <Tabs defaultValue="notes" className="min-h-0 flex-1 gap-3">
-        <TabsList className="self-center">
-          <TabsTrigger value="notes">Notes</TabsTrigger>
-          <TabsTrigger value="transcript">Transcript</TabsTrigger>
-        </TabsList>
+  return (
+    <div className="mx-auto flex h-full min-h-0 w-full max-w-[920px] flex-col">
+      {/* Notes stay primary. Generated Summary is a separate material and
+          only appears after Enhance has produced it. Tab contents are
+          force-mounted and CSS-hidden so a switch does not kill playback or
+          reset TranscriptView's scroll. */}
+      <Tabs defaultValue="notes" className="min-h-0 flex-1 gap-0">
+        {toolbarSlot ? createPortal(tabList, toolbarSlot) : (
+          <div className="flex h-11 shrink-0 items-center justify-start">{tabList}</div>
+        )}
 
         <TabsContent
           value="notes"
           forceMount
           className="flex min-h-0 flex-1 flex-col gap-3 data-[state=inactive]:hidden"
         >
+          <div className="shrink-0 px-6 pt-0.5">{titleInput}</div>
           <textarea
             value={notes}
             onChange={handleNotesChange}
             onBlur={commitNotes}
             placeholder="your notes..."
             className={cn(
-              "w-full resize-none rounded-md border bg-transparent p-3 text-sm outline-none placeholder:text-muted-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50",
-              // With a summary on screen the notepad yields most of the
-              // height to it; alone, it owns the tab.
-              summary ? "h-40 shrink-0" : "min-h-0 flex-1"
+              "min-h-0 w-full flex-1 resize-none border-0 bg-transparent px-6 py-4 font-serif text-[15px] leading-[1.65] text-card-foreground outline-none placeholder:font-serif placeholder:text-muted-foreground focus-visible:ring-0"
             )}
           />
-
-          {summary && (
-            <div className="flex min-h-0 flex-1 flex-col overflow-y-auto rounded-md border bg-card p-3">
-              <div className="flex items-baseline gap-2 pb-2">
-                <h3 className="text-sm font-semibold">Summary</h3>
-                {summaryModel && (
-                  <span className="text-xs text-muted-foreground">
-                    by {summaryModel}
-                  </span>
-                )}
-              </div>
-              {/* Generated text, visually its own block -- it never mixes
-                  into the notes above (the user's words are sacred). */}
-              <div className="whitespace-pre-wrap text-sm leading-relaxed text-foreground/90">
-                {summary}
-              </div>
-            </div>
-          )}
 
           {enhanceError && (
             <p className="shrink-0 text-sm text-destructive">{enhanceError}</p>
           )}
 
-          <div className="flex shrink-0 items-center gap-2">
+          <div className="flex shrink-0 items-center gap-2 px-6 pb-1">
             <Button
               type="button"
               variant="outline"
@@ -558,12 +550,31 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
               {enhancing ? "Enhancing..." : summary ? "Re-enhance" : "Enhance"}
             </Button>
             {enhancing && (
-              <span className="text-xs text-muted-foreground">
+              <span className="font-mono text-[10.5px] text-muted-foreground">
                 sending notes and transcript to your AI CLI...
               </span>
             )}
           </div>
         </TabsContent>
+
+        {summary && (
+          <TabsContent
+            value="summary"
+            forceMount
+            className="min-h-0 flex-1 overflow-y-auto px-6 py-4 data-[state=inactive]:hidden"
+          >
+            <div className="border-l-2 border-[var(--voice-remote)] pl-5">
+              {summaryModel && (
+                <p className="mb-4 font-mono text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
+                  by {summaryModel}
+                </p>
+              )}
+              <div className="whitespace-pre-wrap font-serif text-[14.5px] leading-[1.65] text-card-foreground">
+                {summary}
+              </div>
+            </div>
+          </TabsContent>
+        )}
 
         <TabsContent
           value="transcript"
@@ -578,16 +589,13 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
           />
 
           {retranscribeStatusText && (
-            <p className="shrink-0 text-xs text-muted-foreground">{retranscribeStatusText}</p>
+            <p className="shrink-0 px-6 font-mono text-[10.5px] text-muted-foreground">{retranscribeStatusText}</p>
           )}
           {retranscribeError && (
             <p className="shrink-0 text-sm text-destructive">{retranscribeError}</p>
           )}
 
-          {/* Pinned under the transcript, a single compact row: this bottom
-              slot is where a chat-with-the-transcript input will later
-              live, so the player must stay stackable, not a full-width
-              native embed. */}
+          {/* Pinned under the transcript as one compact, stackable row. */}
           {audioPath && (
             <AudioPlayer
               ref={playerRef}

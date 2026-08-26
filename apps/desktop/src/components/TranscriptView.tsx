@@ -71,43 +71,49 @@ export function TranscriptView({ lines, interimMe, interimThem, onSeek }: Transc
   }, [lines, interimMe, interimThem]);
 
   return (
-    <Card className="min-h-0 flex-1 flex-col overflow-hidden p-0">
-      <div ref={scrollRef} onScroll={handleScroll} className="h-full overflow-y-auto p-4">
+    <Card className="min-h-0 flex-1 flex-col overflow-hidden border-0 bg-transparent p-0 shadow-none">
+      <div ref={scrollRef} onScroll={handleScroll} className="h-full overflow-y-auto px-6 pb-5 pt-[6px]">
         {isEmpty ? (
-          <p className="flex h-full items-center justify-center text-center text-[13px] text-muted-foreground">
+          <p className="flex h-full items-center justify-center text-center font-serif text-[14px] text-muted-foreground">
             transcript will appear here
           </p>
         ) : (
-          <div className="space-y-1 font-mono text-[13px] leading-relaxed">
+          <div className="flex flex-col gap-[14px]">
             {lines.map((raw, i) => {
               const parsed = parseLine(raw);
               if (!parsed.timestamp) {
                 return (
-                  <p key={i} className="whitespace-pre-wrap">
+                  <p key={i} className="whitespace-pre-wrap font-serif text-[15px] leading-[1.6] text-card-foreground">
                     {raw}
                   </p>
                 );
               }
               const content = (
                 <>
-                  <span className="text-muted-foreground">[{parsed.timestamp}]</span>{" "}
-                  <span
-                    className={
-                      parsed.speaker === "Them"
-                        ? "text-sky-600 dark:text-sky-400"
-                        : "text-foreground"
-                    }
-                  >
-                    {parsed.speaker}:
-                  </span>{" "}
-                  {parsed.text}
+                  <span className="flex items-baseline gap-[9px]">
+                    <span
+                      className={
+                        parsed.speaker === "Them"
+                          ? "inline-flex h-[17px] items-center rounded-[4px] border border-[var(--voice-remote)] px-[7px] font-mono text-[9.5px] font-semibold uppercase tracking-[0.08em] text-[var(--voice-remote-foreground)]"
+                          : "inline-flex h-[17px] items-center rounded-[4px] border border-foreground bg-foreground px-[7px] font-mono text-[9.5px] font-semibold uppercase tracking-[0.08em] text-background"
+                      }
+                    >
+                      {parsed.speaker}
+                    </span>
+                    <span className="font-mono text-[10px] text-muted-foreground">
+                      {parsed.timestamp}
+                    </span>
+                  </span>
+                  <span className="block whitespace-pre-wrap font-serif text-[15px] leading-[1.6] text-card-foreground">
+                    {parsed.text}
+                  </span>
                 </>
               );
               if (!onSeek) {
                 return (
-                  <p key={i} className="whitespace-pre-wrap">
+                  <div key={i} className="flex flex-col gap-[3px]">
                     {content}
-                  </p>
+                  </div>
                 );
               }
               const offsetSecs = timestampToSeconds(parsed.timestamp);
@@ -116,21 +122,29 @@ export function TranscriptView({ lines, interimMe, interimThem, onSeek }: Transc
                   key={i}
                   type="button"
                   onClick={() => onSeek(offsetSecs)}
-                  className="-mx-1 block w-full whitespace-pre-wrap rounded px-1 text-left transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                  className="-mx-2 flex w-[calc(100%+1rem)] flex-col gap-[3px] rounded-[7px] px-2 text-left transition-colors hover:bg-foreground/[0.05] focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
                 >
                   {content}
                 </button>
               );
             })}
             {interimMe && (
-              <p className="whitespace-pre-wrap italic text-muted-foreground">
-                <span className="text-foreground">Me:</span> {interimMe}
-              </p>
+              <div className="flex flex-col gap-[3px]">
+                <span className="flex items-baseline gap-[9px]">
+                  <span className="inline-flex h-[17px] items-center rounded-[4px] border border-foreground bg-foreground px-[7px] font-mono text-[9.5px] font-semibold uppercase not-italic tracking-[0.08em] text-background">Me</span>
+                  <span className="font-mono text-[10px] not-italic text-muted-foreground">···</span>
+                </span>
+                <p className="whitespace-pre-wrap font-serif text-[15px] italic leading-[1.6] text-muted-foreground">{interimMe}</p>
+              </div>
             )}
             {interimThem && (
-              <p className="whitespace-pre-wrap italic text-muted-foreground">
-                <span className="text-sky-600 dark:text-sky-400">Them:</span> {interimThem}
-              </p>
+              <div className="flex flex-col gap-[3px]">
+                <span className="flex items-baseline gap-[9px]">
+                  <span className="inline-flex h-[17px] items-center rounded-[4px] border border-[var(--voice-remote)] px-[7px] font-mono text-[9.5px] font-semibold uppercase not-italic tracking-[0.08em] text-[var(--voice-remote-foreground)]">Them</span>
+                  <span className="font-mono text-[10px] not-italic text-muted-foreground">···</span>
+                </span>
+                <p className="whitespace-pre-wrap font-serif text-[15px] italic leading-[1.6] text-muted-foreground">{interimThem}</p>
+              </div>
             )}
           </div>
         )}

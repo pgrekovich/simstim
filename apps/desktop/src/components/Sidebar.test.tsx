@@ -24,7 +24,6 @@ describe("Sidebar: recording indicator", () => {
         onDelete={vi.fn()}
         searchQuery=""
         onSearchChange={vi.fn()}
-        onOpenSettings={vi.fn()}
       />
     );
 
@@ -50,7 +49,6 @@ describe("Sidebar: recording indicator", () => {
         onDelete={vi.fn()}
         searchQuery=""
         onSearchChange={vi.fn()}
-        onOpenSettings={vi.fn()}
       />
     );
 
@@ -72,11 +70,53 @@ describe("Sidebar: recording indicator", () => {
         onDelete={vi.fn()}
         searchQuery=""
         onSearchChange={vi.fn()}
-        onOpenSettings={vi.fn()}
       />
     );
 
     expect(container.querySelector('[data-testid="recording-dot"]')).toBeNull();
+  });
+
+  it("uses the design's two-line recording row instead of showing a timestamp", () => {
+    render(
+      <Sidebar
+        sessions={makeSessions()}
+        selectedPath="/tmp/a.md"
+        activePath="/tmp/a.md"
+        onSelect={vi.fn()}
+        onNewSession={vi.fn()}
+        onDelete={vi.fn()}
+        searchQuery=""
+        onSearchChange={vi.fn()}
+      />
+    );
+
+    const row = screen.getByRole("button", { name: /^session a/i });
+    expect(row.classList.contains("items-center")).toBe(true);
+    expect(row.textContent).toBe("Session Arecording");
+  });
+});
+
+describe("Sidebar: session metadata", () => {
+  it("places time and duration on the second line below the title", () => {
+    const sessions = makeSessions();
+    sessions[0].duration_secs = 65;
+    render(
+      <Sidebar
+        sessions={sessions}
+        selectedPath={null}
+        activePath={null}
+        onSelect={vi.fn()}
+        onNewSession={vi.fn()}
+        onDelete={vi.fn()}
+        searchQuery=""
+        onSearchChange={vi.fn()}
+      />
+    );
+
+    const row = screen.getByRole("button", { name: /^session a/i });
+    expect(row.classList.contains("flex-col")).toBe(true);
+    expect(row.textContent).toContain(" · 1:05");
+    expect(row.querySelector(".group-hover\\:opacity-0")).toBeNull();
   });
 });
 
@@ -93,7 +133,6 @@ describe("Sidebar: selected styling", () => {
         onDelete={vi.fn()}
         searchQuery=""
         onSearchChange={vi.fn()}
-        onOpenSettings={vi.fn()}
       />
     );
 
@@ -102,10 +141,10 @@ describe("Sidebar: selected styling", () => {
 
     // Exact classList tokens, not substring matching: the hover variants
     // carry the same base names at different opacities.
-    expect(rowB.classList.contains("bg-foreground/[0.12]")).toBe(true);
-    expect(rowB.classList.contains("font-medium")).toBe(true);
-    expect(rowA.classList.contains("bg-foreground/[0.12]")).toBe(false);
-    expect(rowA.classList.contains("font-medium")).toBe(false);
+    expect(rowB.classList.contains("bg-background")).toBe(true);
+    expect(rowB.querySelector(".font-medium")).not.toBeNull();
+    expect(rowA.classList.contains("bg-background")).toBe(false);
+    expect(rowA.querySelector(".font-medium")).toBeNull();
     // No left rule on any row: a border on a rounded row reads as a bracket.
     expect(rowA.className).not.toContain("border-l");
     expect(rowB.className).not.toContain("border-l");
@@ -123,7 +162,6 @@ describe("Sidebar: selected styling", () => {
         onDelete={vi.fn()}
         searchQuery=""
         onSearchChange={vi.fn()}
-        onOpenSettings={vi.fn()}
       />
     );
 
@@ -133,10 +171,10 @@ describe("Sidebar: selected styling", () => {
     // Regression test: a lower-opacity hover shared with the selected row
     // would win the cascade on hover and visibly dim it instead of
     // reinforcing it, so each state carries its own hover step.
-    expect(rowB.classList.contains("hover:bg-foreground/[0.16]")).toBe(true);
-    expect(rowB.classList.contains("hover:bg-foreground/[0.07]")).toBe(false);
-    expect(rowA.classList.contains("hover:bg-foreground/[0.07]")).toBe(true);
-    expect(rowA.classList.contains("hover:bg-foreground/[0.16]")).toBe(false);
+    expect(rowB.classList.contains("hover:bg-background/80")).toBe(true);
+    expect(rowB.classList.contains("hover:bg-foreground/[0.05]")).toBe(false);
+    expect(rowA.classList.contains("hover:bg-foreground/[0.05]")).toBe(true);
+    expect(rowA.classList.contains("hover:bg-background/80")).toBe(false);
   });
 });
 
@@ -153,7 +191,6 @@ describe("Sidebar: new note button", () => {
         onDelete={vi.fn()}
         searchQuery=""
         onSearchChange={vi.fn()}
-        onOpenSettings={vi.fn()}
       />
     );
 
@@ -177,7 +214,6 @@ describe("Sidebar: delete button", () => {
         onDelete={onDelete}
         searchQuery=""
         onSearchChange={vi.fn()}
-        onOpenSettings={vi.fn()}
       />
     );
 
@@ -199,7 +235,6 @@ describe("Sidebar: delete button", () => {
         onDelete={vi.fn()}
         searchQuery=""
         onSearchChange={vi.fn()}
-        onOpenSettings={vi.fn()}
       />
     );
 
@@ -208,7 +243,7 @@ describe("Sidebar: delete button", () => {
   });
 });
 
-describe("Sidebar: search and settings (stage 0.10)", () => {
+describe("Sidebar: search (stage 0.10)", () => {
   it("reports every keystroke through onSearchChange", () => {
     const onSearchChange = vi.fn();
     render(
@@ -221,7 +256,6 @@ describe("Sidebar: search and settings (stage 0.10)", () => {
         onDelete={vi.fn()}
         searchQuery=""
         onSearchChange={onSearchChange}
-        onOpenSettings={vi.fn()}
       />
     );
 
@@ -241,31 +275,10 @@ describe("Sidebar: search and settings (stage 0.10)", () => {
         onDelete={vi.fn()}
         searchQuery="quarterly"
         onSearchChange={vi.fn()}
-        onOpenSettings={vi.fn()}
       />
     );
 
     expect(screen.getByText("no matches")).toBeInTheDocument();
     expect(screen.queryByText("no sessions yet")).toBeNull();
-  });
-
-  it("opens settings from the footer button", () => {
-    const onOpenSettings = vi.fn();
-    render(
-      <Sidebar
-        sessions={[]}
-        selectedPath={null}
-        activePath={null}
-        onSelect={vi.fn()}
-        onNewSession={vi.fn()}
-        onDelete={vi.fn()}
-        searchQuery=""
-        onSearchChange={vi.fn()}
-        onOpenSettings={onOpenSettings}
-      />
-    );
-
-    screen.getByRole("button", { name: /settings/i }).click();
-    expect(onOpenSettings).toHaveBeenCalledTimes(1);
   });
 });

@@ -1,8 +1,35 @@
 @import "tailwindcss";
 
+@font-face {
+    font-family: "Source Serif 4";
+    src: url("./assets/fonts/SourceSerif4-Variable.ttf") format("truetype");
+    font-style: normal;
+    font-weight: 200 900;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: "Source Serif 4";
+    src: url("./assets/fonts/SourceSerif4-Italic-Variable.ttf") format("truetype");
+    font-style: italic;
+    font-weight: 200 900;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: "Spline Sans Mono";
+    src: url("./assets/fonts/SplineSansMono-Variable.ttf") format("truetype");
+    font-style: normal;
+    font-weight: 300 700;
+    font-display: swap;
+}
+
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
+    --font-sans: var(--font-ui);
+    --font-serif: var(--font-reading);
+    --font-mono: var(--font-machine);
     --radius-sm: calc(var(--radius) - 4px);
     --radius-md: calc(var(--radius) - 2px);
     --radius-lg: var(--radius);
@@ -41,88 +68,126 @@
     --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
     --color-sidebar-border: var(--sidebar-border);
     --color-sidebar-ring: var(--sidebar-ring);
+    --color-quiet-foreground: var(--quiet-foreground);
 }
 
-/* Stock shadcn new-york/neutral tokens, restored (Stage 0.5 had promoted the
-   ".dark" values to be the only :root values as a hack; Stage 0.6 reverts
-   that). `:root` = light, `.dark` = dark; `<html class="dark">` is toggled at
-   runtime by src/lib/theme.ts based on config + system preference, not
-   hardcoded. */
+/* The paper/tape palette from the interface redesign. `:root` is light and
+   `.dark` is dark; src/lib/theme.ts toggles the class from config and the
+   system preference. Fonts stay local so the app makes no network request. */
 :root {
-    --radius: 0.625rem;
-    --background: oklch(1 0 0);
-    --foreground: oklch(0.145 0 0);
-    --card: oklch(1 0 0);
-    --card-foreground: oklch(0.145 0 0);
-    --popover: oklch(1 0 0);
-    --popover-foreground: oklch(0.145 0 0);
-    --primary: oklch(0.205 0 0);
-    --primary-foreground: oklch(0.985 0 0);
-    --secondary: oklch(0.97 0 0);
-    --secondary-foreground: oklch(0.205 0 0);
-    --muted: oklch(0.97 0 0);
-    --muted-foreground: oklch(0.49 0 0);
-    --accent: oklch(0.97 0 0);
-    --accent-foreground: oklch(0.205 0 0);
-    --destructive: oklch(0.577 0.245 27.325);
-    --border: oklch(0.87 0 0);
-    --input: oklch(0.87 0 0);
-    --ring: oklch(0.708 0 0);
+    --radius: 0.5rem;
+    --font-ui: "Helvetica Neue", -apple-system, BlinkMacSystemFont, sans-serif;
+    --font-reading: "Source Serif 4", "New York", "Iowan Old Style", Georgia, serif;
+    --font-machine: "Spline Sans Mono", "SFMono-Regular", Menlo, Monaco, monospace;
+    --background: #F4F2EB;
+    --foreground: #1E1B16;
+    --card: #EFEDE4;
+    --card-foreground: #2C2822;
+    --popover: #F4F2EB;
+    --popover-foreground: #1E1B16;
+    --primary: #1E1B16;
+    --primary-foreground: #F4F2EB;
+    --secondary: #EFEDE4;
+    --secondary-foreground: #1E1B16;
+    --muted: #E9E6DC;
+    --muted-foreground: #8B8578;
+    --quiet-foreground: #4C4840;
+    --accent: #E6E2D7;
+    --accent-foreground: #1E1B16;
+    --destructive: #C33D2E;
+    --border: rgb(30 27 22 / 11%);
+    --input: rgb(30 27 22 / 14%);
+    --ring: rgb(30 27 22 / 28%);
+    --voice-remote: #A8843C;
+    --voice-remote-foreground: #76591E;
     --chart-1: oklch(0.646 0.222 41.116);
     --chart-2: oklch(0.6 0.118 184.704);
     --chart-3: oklch(0.398 0.07 227.392);
     --chart-4: oklch(0.828 0.189 84.429);
     --chart-5: oklch(0.769 0.188 70.08);
-    --sidebar: oklch(0.968 0 0);
-    --sidebar-foreground: oklch(0.145 0 0);
-    --sidebar-primary: oklch(0.205 0 0);
-    --sidebar-primary-foreground: oklch(0.985 0 0);
-    --sidebar-accent: oklch(0.97 0 0);
-    --sidebar-accent-foreground: oklch(0.205 0 0);
-    --sidebar-border: oklch(0.87 0 0);
-    --sidebar-ring: oklch(0.708 0 0);
+    --sidebar: #ECE9E0;
+    --sidebar-foreground: #1E1B16;
+    --sidebar-primary: #1E1B16;
+    --sidebar-primary-foreground: #F4F2EB;
+    --sidebar-accent: #F4F2EB;
+    --sidebar-accent-foreground: #1E1B16;
+    --sidebar-border: rgb(30 27 22 / 10%);
+    --sidebar-ring: rgb(30 27 22 / 28%);
+    --scrollbar-thumb: rgb(30 27 22 / 22%);
+    --scrollbar-thumb-hover: rgb(30 27 22 / 36%);
 }
 
 .dark {
-    --background: oklch(0.145 0 0);
-    --foreground: oklch(0.985 0 0);
-    --card: oklch(0.205 0 0);
-    --card-foreground: oklch(0.985 0 0);
-    --popover: oklch(0.205 0 0);
-    --popover-foreground: oklch(0.985 0 0);
-    --primary: oklch(0.922 0 0);
-    --primary-foreground: oklch(0.205 0 0);
-    --secondary: oklch(0.269 0 0);
-    --secondary-foreground: oklch(0.985 0 0);
-    --muted: oklch(0.269 0 0);
-    --muted-foreground: oklch(0.76 0 0);
-    --accent: oklch(0.269 0 0);
-    --accent-foreground: oklch(0.985 0 0);
-    --destructive: oklch(0.704 0.191 22.216);
-    --border: oklch(1 0 0 / 16%);
-    --input: oklch(1 0 0 / 20%);
-    --ring: oklch(0.556 0 0);
+    --background: #17150F;
+    --foreground: #F0EBDD;
+    --card: #1E1C15;
+    --card-foreground: #DED8C8;
+    --popover: #1E1C15;
+    --popover-foreground: #F0EBDD;
+    --primary: #F0EBDD;
+    --primary-foreground: #17150F;
+    --secondary: #1E1C15;
+    --secondary-foreground: #F0EBDD;
+    --muted: #252219;
+    --muted-foreground: #A8A090;
+    --quiet-foreground: #B7B1A2;
+    --accent: #2B281E;
+    --accent-foreground: #F0EBDD;
+    --destructive: #E05540;
+    --border: rgb(233 228 214 / 9%);
+    --input: rgb(233 228 214 / 14%);
+    --ring: rgb(233 228 214 / 30%);
+    --voice-remote: #C9A24D;
+    --voice-remote-foreground: #E0BC6A;
     --chart-1: oklch(0.87 0 0);
     --chart-2: oklch(0.556 0 0);
     --chart-3: oklch(0.439 0 0);
     --chart-4: oklch(0.371 0 0);
     --chart-5: oklch(0.269 0 0);
-    --sidebar: oklch(0.205 0 0);
-    --sidebar-foreground: oklch(0.985 0 0);
-    --sidebar-primary: oklch(0.488 0.243 264.376);
-    --sidebar-primary-foreground: oklch(0.985 0 0);
-    --sidebar-accent: oklch(0.269 0 0);
-    --sidebar-accent-foreground: oklch(0.985 0 0);
-    --sidebar-border: oklch(1 0 0 / 16%);
-    --sidebar-ring: oklch(0.556 0 0);
+    --sidebar: #131109;
+    --sidebar-foreground: #E9E4D6;
+    --sidebar-primary: #F0EBDD;
+    --sidebar-primary-foreground: #17150F;
+    --sidebar-accent: #1E1C15;
+    --sidebar-accent-foreground: #F0EBDD;
+    --sidebar-border: rgb(233 228 214 / 8%);
+    --sidebar-ring: rgb(233 228 214 / 30%);
+    --scrollbar-thumb: rgb(233 228 214 / 24%);
+    --scrollbar-thumb-hover: rgb(233 228 214 / 40%);
 }
 
 @layer base {
   * {
     @apply border-border outline-ring/50;
+    scrollbar-color: var(--scrollbar-thumb) transparent;
+    scrollbar-width: thin;
+    }
+  *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+    }
+  *::-webkit-scrollbar-track,
+  *::-webkit-scrollbar-corner {
+    background: transparent;
+    }
+  *::-webkit-scrollbar-thumb {
+    min-height: 36px;
+    border: 2px solid transparent;
+    border-radius: 999px;
+    background: var(--scrollbar-thumb);
+    background-clip: padding-box;
+    }
+  *::-webkit-scrollbar-thumb:hover {
+    background: var(--scrollbar-thumb-hover);
+    background-clip: padding-box;
+    }
+  *::-webkit-scrollbar-button {
+    display: none;
+    width: 0;
+    height: 0;
     }
   body {
-    @apply m-0 bg-background text-foreground;
+    @apply m-0 bg-background font-sans text-foreground;
     }
   /* Desktop app, not a web page: controls get the arrow cursor, the way
      every native macOS button does. Overrides Tailwind preflight's
@@ -139,6 +204,22 @@
      renders its own notification text. */
   .banner-window body {
     background: transparent;
-    -webkit-font-smoothing: antialiased;
     }
+}
+
+@keyframes recording-tally {
+  0%, 100% { opacity: 0.42; }
+  50% { opacity: 1; }
+}
+
+.recording-tally {
+  animation: recording-tally 1.6s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .recording-tally,
+  .animate-pulse,
+  .animate-spin {
+    animation: none !important;
+  }
 }

@@ -57,13 +57,16 @@ export function RecordButton({
       disabled={disabled}
       onClick={onClick}
       className={cn(
-        size === "compact" ? "h-8 rounded-full px-4 text-sm" : "h-14 rounded-full px-10 text-lg",
-        !recording && "bg-emerald-600 text-white hover:bg-emerald-500"
+        "font-mono font-semibold tracking-[0.02em] shadow-none",
+        size === "compact" ? "h-[30px] rounded-full px-3.5 text-[11.5px]" : "h-12 rounded-full px-8 text-sm",
+        recording
+          ? "border border-destructive/25 bg-destructive/10 text-destructive hover:bg-destructive/16"
+          : "bg-foreground text-background hover:bg-foreground/90"
       )}
     >
       {recording ? (
         <>
-          <span className="size-2 animate-pulse rounded-full bg-current" />
+          <span className="recording-tally size-2 rounded-[2px] bg-current" />
           Stop {elapsed}
         </>
       ) : size === "compact" ? (

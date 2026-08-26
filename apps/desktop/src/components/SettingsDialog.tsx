@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
-import { AudioLines, Mic, Settings2, Sparkles, Trash2 } from "lucide-react";
+import { ChevronLeft, Trash2 } from "lucide-react";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
@@ -35,9 +35,9 @@ import {
 import { applyTheme } from "@/lib/theme";
 
 const THEME_OPTIONS: { value: string; label: string }[] = [
-  { value: "system", label: "System" },
   { value: "light", label: "Light" },
   { value: "dark", label: "Dark" },
+  { value: "system", label: "Auto" },
 ];
 
 /**
@@ -119,10 +119,10 @@ const ENHANCE_MODEL_OPTIONS: Record<string, { value: string; label: string }[]> 
 
 /** The left-rail pages; a nav click swaps which section is visible. */
 const NAV_SECTIONS = [
-  { id: "settings-general", label: "General", icon: Settings2 },
-  { id: "settings-recording", label: "Recording", icon: Mic },
-  { id: "settings-transcription", label: "Transcription", icon: AudioLines },
-  { id: "settings-ai", label: "AI", icon: Sparkles },
+  { id: "settings-general", label: "General" },
+  { id: "settings-recording", label: "Audio" },
+  { id: "settings-transcription", label: "Models" },
+  { id: "settings-ai", label: "Summary" },
 ] as const;
 
 /**
@@ -144,20 +144,20 @@ function Row({
   children?: ReactNode;
 }) {
   return (
-    <div className="flex items-start justify-between gap-6 py-3 first:pt-3.5 last:pb-3.5">
-      <div className="flex min-w-0 flex-col gap-0.5">
-        <Label htmlFor={htmlFor}>{label}</Label>
-        {description && <span className="text-xs text-muted-foreground">{description}</span>}
-        {error && <span className="text-xs text-destructive">{error}</span>}
+    <div className="flex items-center justify-between gap-6 px-0.5 py-3.5">
+      <div className="flex min-w-0 flex-col gap-[3px]">
+        <Label className="text-[13px] font-medium" htmlFor={htmlFor}>{label}</Label>
+        {description && <span className="text-[11.5px] leading-[1.45] text-muted-foreground">{description}</span>}
+        {error && <span className="font-mono text-[10.5px] text-destructive">{error}</span>}
       </div>
-      {children && <div className="flex shrink-0 items-center gap-1.5 pt-0.5">{children}</div>}
+      {children && <div className="flex shrink-0 items-center gap-1.5">{children}</div>}
     </div>
   );
 }
 
 /** A bordered group of rows, the section's visual unit. */
 function Group({ children }: { children: ReactNode }) {
-  return <div className="divide-y rounded-lg border bg-card px-4">{children}</div>;
+  return <div className="divide-y divide-border border-y border-border">{children}</div>;
 }
 
 interface SettingsDialogProps {
@@ -639,6 +639,8 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
     Boolean(config?.retranscribe_model) &&
     !retranscribeModelRetired &&
     !models.some((m) => m.id === config?.retranscribe_model && m.downloaded);
+  const activeSectionLabel =
+    NAV_SECTIONS.find((section) => section.id === activeSection)?.label ?? "General";
 
   return (
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
@@ -647,37 +649,53 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
           window so there's room for the features to come. Each nav item is
           its own page; inactive sections are CSS-hidden, not unmounted, so
           a download's progress keeps rendering wherever you navigate. */}
-      <DialogContent className="top-0 left-0 flex h-full w-full max-w-none translate-x-0 translate-y-0 flex-col gap-0 rounded-none border-0 p-0 sm:max-w-none">
+      <DialogContent
+        showCloseButton={false}
+        className="top-0 left-0 flex h-full w-full max-w-none translate-x-0 translate-y-0 flex-col gap-0 rounded-none border-0 p-0 sm:max-w-none"
+      >
         <div className="flex min-h-0 flex-1">
-          <nav className="flex w-52 shrink-0 flex-col border-r bg-sidebar p-3">
+          <nav className="flex w-56 shrink-0 flex-col border-r border-sidebar-border bg-sidebar px-3 pb-3">
             {/* Same overlay-title-bar drag strip as the main window: the
                 traffic lights float over this corner. */}
-            <div data-tauri-drag-region className="h-10 shrink-0" />
-            <DialogTitle className="px-2 pb-3 text-base font-semibold">Settings</DialogTitle>
-            {NAV_SECTIONS.map(({ id, label, icon: Icon }) => (
+            <div data-tauri-drag-region className="h-14 shrink-0" />
+            <button
+              type="button"
+              onClick={() => onOpenChange(false)}
+              className="flex h-7 items-center gap-2 rounded-[7px] px-2 text-left text-[12px] text-quiet-foreground hover:bg-foreground/[0.06] hover:text-foreground"
+            >
+              <ChevronLeft className="size-3.5" />
+              Notes
+            </button>
+            <p className="px-2 pb-2 pt-3.5 font-mono text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+              Settings
+            </p>
+            {NAV_SECTIONS.map(({ id, label }) => (
               <button
                 key={id}
                 type="button"
                 onClick={() => setActiveSection(id)}
                 className={cn(
-                  "flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors duration-150",
+                  "flex h-[30px] items-center rounded-[7px] px-2.5 text-left text-[12.5px] transition-colors duration-150",
                   activeSection === id
-                    ? "bg-foreground/[0.12] font-medium text-foreground"
-                    : "text-foreground/75 hover:bg-foreground/[0.07] hover:text-foreground"
+                    ? "bg-foreground font-medium text-background"
+                    : "text-quiet-foreground hover:bg-foreground/[0.06] hover:text-foreground"
                 )}
               >
-                <Icon className="size-4 text-muted-foreground" />
                 {label}
               </button>
             ))}
           </nav>
 
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-            <div data-tauri-drag-region className="h-10 shrink-0" />
+            <header data-tauri-drag-region className="flex h-14 shrink-0 items-center justify-between gap-6 px-8">
+              <DialogTitle className="font-serif text-[17px] font-semibold tracking-[-0.005em]">
+                {activeSectionLabel}
+              </DialogTitle>
+              <span className="font-mono text-[10.5px] text-muted-foreground">saved automatically</span>
+            </header>
             <div className="min-h-0 flex-1 overflow-y-auto">
-              <div className="mx-auto flex max-w-2xl flex-col gap-8 px-8 pb-10 pt-2">
-                <section id="settings-general" className={cn("flex flex-col gap-2", activeSection !== "settings-general" && "hidden")}>
-                  <h3 className="px-1 text-sm font-semibold text-muted-foreground">General</h3>
+              <div className="flex w-full flex-col px-8 pb-10 pt-1.5">
+                <section id="settings-general" className={cn("flex flex-col gap-5", activeSection !== "settings-general" && "hidden")}>
                   <Group>
                     <Row label="Theme" error={themeError}>
                       {THEME_OPTIONS.map((option) => (
@@ -692,7 +710,7 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                       ))}
                     </Row>
                     <Row
-                      label="Output folder"
+                      label="Notes folder"
                       description={
                         <span
                           className="block max-w-72 truncate font-mono"
@@ -705,14 +723,13 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                       error={folderError}
                     >
                       <Button variant="outline" size="sm" disabled={choosingDir} onClick={handleChooseFolder}>
-                        Choose folder
+                        Change
                       </Button>
                     </Row>
                   </Group>
                 </section>
 
-                <section id="settings-recording" className={cn("flex flex-col gap-2", activeSection !== "settings-recording" && "hidden")}>
-                  <h3 className="px-1 text-sm font-semibold text-muted-foreground">Recording</h3>
+                <section id="settings-recording" className={cn("flex flex-col gap-5", activeSection !== "settings-recording" && "hidden")}>
                   <Group>
                     <Row
                       label="Keep call audio"
@@ -721,6 +738,7 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                       error={keepAudioError}
                     >
                       <Checkbox
+                        variant="switch"
                         id="keep-audio"
                         checked={config?.keep_audio ?? false}
                         disabled={!config}
@@ -747,12 +765,13 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                   </Group>
                   <Group>
                     <Row
-                      label="Suggest recording when a call starts"
+                      label="Offer to record when a call starts"
                       htmlFor="detect-calls"
                       description="Watches microphone activity from known calling apps. Recording still needs your click."
                       error={detectCallsError}
                     >
                       <Checkbox
+                        variant="switch"
                         id="detect-calls"
                         checked={config?.detect_calls ?? false}
                         disabled={!config}
@@ -766,6 +785,7 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                       error={autoStopAfterCallError}
                     >
                       <Checkbox
+                        variant="switch"
                         id="auto-stop-after-call"
                         checked={config?.auto_stop_after_call ?? false}
                         disabled={!config || !config.detect_calls}
@@ -775,8 +795,7 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                   </Group>
                 </section>
 
-                <section id="settings-transcription" className={cn("flex flex-col gap-2", activeSection !== "settings-transcription" && "hidden")}>
-                  <h3 className="px-1 text-sm font-semibold text-muted-foreground">Transcription</h3>
+                <section id="settings-transcription" className={cn("flex flex-col gap-5", activeSection !== "settings-transcription" && "hidden")}>
                   {/* Stage 0.9 (fix-review correction): only the AUTO toggle
                       needs `keep_audio` on -- it fires right after a recording
                       stops, so it's useless without an audio file having just
@@ -798,6 +817,7 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                       error={autoRetranscribeError}
                     >
                       <Checkbox
+                        variant="switch"
                         id="auto-retranscribe"
                         checked={config?.auto_retranscribe ?? false}
                         disabled={!config || !config.keep_audio}
@@ -813,6 +833,7 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                       error={deleteAudioAfterError}
                     >
                       <Checkbox
+                        variant="switch"
                         id="delete-audio-after-retranscribe"
                         checked={config?.delete_audio_after_retranscribe ?? false}
                         disabled={!config}
@@ -829,19 +850,19 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                 that drives recording would break it). */}
             <div className="flex flex-col gap-1.5">
               <div className="flex items-baseline justify-between gap-2">
-                <h4 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+                <h4 className="font-mono text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
                   Live model
                 </h4>
-                <span className="text-xs text-muted-foreground">
+                <span className="font-mono text-[10.5px] text-muted-foreground">
                   Recording models: {humanBytes(totalDiskUsed(liveModels))} on disk
                 </span>
               </div>
-              <ul className="flex flex-col gap-3">
+              <ul className="flex flex-col divide-y divide-border border-y border-border">
                 {liveModels.map((model) => {
                   const p = progress[model.id];
                   const busy = busyIds.has(model.id);
                   return (
-                    <li key={model.id} className="flex flex-col gap-1.5 rounded-md border p-3">
+                    <li key={model.id} className="flex flex-col gap-2 px-0.5 py-3.5">
                       <div className="flex items-center justify-between gap-3">
                         <div className="flex flex-col">
                           <span className="text-sm font-medium">{model.name}</span>
@@ -875,10 +896,10 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                 disk. */}
             <div className="flex flex-col gap-1.5">
               <div className="flex items-baseline justify-between gap-2">
-                <h4 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
+                <h4 className="font-mono text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
                   Re-transcribe
                 </h4>
-                <span className="text-xs text-muted-foreground">
+                <span className="font-mono text-[10.5px] text-muted-foreground">
                   Re-transcribe models: {humanBytes(totalDiskUsed(retranscribeModels))} on disk
                 </span>
               </div>
@@ -897,7 +918,7 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                   Selected model is not downloaded. Pick another or download it again.
                 </span>
               )}
-              <ul className="flex flex-col gap-3">
+              <ul className="flex flex-col divide-y divide-border border-y border-border">
                 {retranscribeModels.map((model) => {
                   const p = progress[model.id];
                   const busy = busyIds.has(model.id);
@@ -911,7 +932,7 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                   // Download button; just the name, size, a muted "no longer
                   // offered" note, and delete.
                   return (
-                    <li key={model.id} className="flex flex-col gap-1.5 rounded-md border p-3">
+                    <li key={model.id} className="flex flex-col gap-2 px-0.5 py-3.5">
                       <div className="flex items-center justify-between gap-3">
                         <div className="flex min-w-0 items-center gap-2.5">
                           {model.downloaded && !model.retired && (
@@ -992,9 +1013,8 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
 
                 <section
                   id="settings-ai"
-                  className={cn("flex flex-col gap-2", activeSection !== "settings-ai" && "hidden")}
+                  className={cn("flex flex-col gap-5", activeSection !== "settings-ai" && "hidden")}
                 >
-                  <h3 className="px-1 text-sm font-semibold text-muted-foreground">AI</h3>
                   <p className="px-1 text-xs text-muted-foreground">
                     Enhance runs an AI CLI you already have installed and pay for -- no API
                     keys, nothing configured here ever phones home. Only the note's text and
@@ -1048,6 +1068,7 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                       error={autoEnhanceError}
                     >
                       <Checkbox
+                        variant="switch"
                         id="auto-enhance"
                         checked={config?.auto_enhance ?? false}
                         disabled={!config}

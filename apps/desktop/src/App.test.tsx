@@ -200,6 +200,29 @@ describe("App: call detection via the banner window (stage 1.1)", () => {
     expect(ipc.startRecording).not.toHaveBeenCalled();
   });
 
+  it("does not duplicate the model warning beside its toolbar action", async () => {
+    vi.mocked(ipc.listModels).mockResolvedValueOnce([
+      {
+        id: "m1",
+        name: "Test model",
+        tagline: null,
+        size_mb: 100,
+        downloaded: false,
+        active: true,
+        role: "live",
+        size_on_disk_bytes: 0,
+        retired: false,
+      },
+    ]);
+
+    render(<App />);
+    await screen.findByText("model not downloaded");
+    fireEvent.click(screen.getByRole("button", { name: /^New Note⌘N$/ }));
+
+    expect(await screen.findByRole("button", { name: "Open settings" })).toBeVisible();
+    expect(screen.queryByText("model not downloaded")).not.toBeInTheDocument();
+  });
+
   it("stops through the normal stop path on a banner-stop event", async () => {
     render(<App />);
     await emitBannerStart();
@@ -301,6 +324,13 @@ describe("App: hot-mic fix (final review Critical finding)", () => {
     // flipped the button back to "Record" -- clicking it would then run
     // handleStart against an already-running session instead of stopping it.
     emit("session-error", { message: "disk write failed" });
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Something went wrong");
+    expect(alert).toHaveTextContent("disk write failed");
+
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss error" }));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 
     const button = await screen.findByRole("button", { name: /stop/i });
     expect(button).toBeVisible();
@@ -1174,7 +1204,7 @@ describe("App: note actions menu (stage 0.10)", () => {
 
     render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: /weekly sync/i }));
-    const trigger = await screen.findByRole("button", { name: /note actions/i });
+    const trigger = await screen.findByRole("button", { name: /more actions/i });
 
     fireEvent.pointerDown(trigger);
     fireEvent.click(trigger);
@@ -1189,12 +1219,17 @@ describe("App: note actions menu (stage 0.10)", () => {
     await waitFor(() =>
       expect(opener.revealItemInDir).toHaveBeenCalledExactlyOnceWith("/tmp/sync.md"),
     );
+
+    fireEvent.pointerDown(trigger);
+    fireEvent.click(trigger);
+    fireEvent.click(await screen.findByText("Settings"));
+    expect(await screen.findByRole("dialog")).toBeVisible();
   });
 
   it("hides the menu when nothing is selected", async () => {
     render(<App />);
     await screen.findByText("New Note");
-    expect(screen.queryByRole("button", { name: /note actions/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /more actions/i })).toBeNull();
   });
 });
 
@@ -1226,7 +1261,7 @@ describe("App: background auto-enhance completion (stage 0.11)", () => {
     expect(document.body.textContent).toContain("by claude");
   });
 
-  it("surfaces a background enhance failure through the status line", async () => {
+  it("surfaces a background enhance failure through the global error notice", async () => {
     vi.mocked(ipc.listSessions).mockResolvedValue(one);
     render(<App />);
     await screen.findByRole("button", { name: /weekly sync/i });
@@ -1236,8 +1271,7 @@ describe("App: background auto-enhance completion (stage 0.11)", () => {
       ok: false,
       message: "Claude Code took longer than 5 minutes and was stopped",
     });
-    await waitFor(() =>
-      expect(document.body.textContent).toContain("took longer than 5 minutes"),
-    );
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("took longer than 5 minutes");
   });
 });

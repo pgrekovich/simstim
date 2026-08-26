@@ -101,21 +101,21 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, AudioPlayerProps>(
     const shown = dragging ?? position;
 
     return (
-      <div className="flex shrink-0 items-center gap-3 rounded-lg border bg-card px-3 py-2">
+      <div className="flex shrink-0 items-center gap-3 rounded-full border border-border bg-card px-2 py-1.5">
         <audio ref={audioRef} src={src} preload="metadata" className="hidden" />
 
         <Button
           type="button"
           variant="ghost"
           size="icon"
-          className="size-8 shrink-0"
+          className="size-8 shrink-0 rounded-full bg-foreground text-background hover:bg-foreground/90 hover:text-background"
           aria-label={playing ? "Pause" : "Play"}
           onClick={togglePlay}
         >
           {playing ? <Pause className="size-4" /> : <Play className="size-4" />}
         </Button>
 
-        <span className="w-12 shrink-0 text-right text-xs tabular-nums text-muted-foreground">
+        <span className="w-12 shrink-0 text-right font-mono text-[10.5px] tabular-nums text-muted-foreground">
           {formatClock(shown)}
         </span>
 
@@ -133,7 +133,7 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, AudioPlayerProps>(
           className="min-w-0 flex-1"
         />
 
-        <span className="w-12 shrink-0 text-xs tabular-nums text-muted-foreground">
+        <span className="w-12 shrink-0 font-mono text-[10.5px] tabular-nums text-muted-foreground">
           {formatClock(duration)}
         </span>
 
@@ -141,7 +141,7 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, AudioPlayerProps>(
           type="button"
           variant="ghost"
           size="sm"
-          className="w-12 shrink-0 text-xs tabular-nums text-muted-foreground"
+          className="w-12 shrink-0 font-mono text-[10.5px] tabular-nums text-muted-foreground"
           aria-label="Playback speed"
           onClick={cycleRate}
         >

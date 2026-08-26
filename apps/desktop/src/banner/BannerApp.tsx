@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { emitTo, listen } from "@tauri-apps/api/event";
 import { ChevronDown, X } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import appIcon from "../../src-tauri/icons/128x128.png";
 import {
   bannerCurrentState,
@@ -97,10 +96,8 @@ export default function BannerApp() {
     }
   }
 
-  // Granola-style layout on macOS conventions (owner e2e feedback): a
-  // notification-shaped card, one prominent split button carrying the app
-  // icon so the popup is identifiable at a glance, secondary actions behind
-  // the chevron, and a close affordance that only appears on hover.
+  // macOS notification layout from the design reference: app icon, message,
+  // one compact split action, and a close affordance that appears on hover.
   //
   // The card is drawn in CSS rather than with a native NSVisualEffectView
   // material (tauri's window effects): the material fills the whole window,
@@ -115,48 +112,43 @@ export default function BannerApp() {
       onMouseLeave={() => setHovered(false)}
     >
       <div className="relative w-full">
-        <div className="relative overflow-hidden rounded-[14px] border border-black/10 bg-popover shadow-[0_10px_30px_rgba(0,0,0,0.25)] dark:border-white/10">
-          <div className="flex items-center gap-3 py-2.5 pl-3.5 pr-2.5">
+        <div className="relative rounded-[18px] border border-border bg-popover shadow-[0_12px_38px_rgba(20,17,12,0.38)] dark:shadow-[0_12px_38px_rgba(0,0,0,0.55)]">
+          <div className="flex items-center gap-3 py-[11px] pl-[13px] pr-3">
+            <img src={appIcon} alt="" className="size-[38px] shrink-0 rounded-[9px]" />
             <div className="min-w-0 flex-1">
-              <p className="text-[13px] font-semibold leading-tight">
+              <p className="text-[13px] font-semibold leading-4">
                 {detected ? "Call detected" : "Call seems over"}
               </p>
               {state.kind === "detected" && (
-                <p className="truncate text-[12px] leading-tight text-muted-foreground">
+                <p className="truncate text-[12px] leading-4 text-muted-foreground">
                   {state.app_name}
                 </p>
               )}
             </div>
-            {/* Deliberately not the default primary button: in dark mode
-                --primary is near-white, which reads as a glaring slab on a
-                dark card. A translucent surface matches macOS controls. */}
-            <div className="flex items-stretch overflow-hidden rounded-[9px] border border-black/10 bg-black/[0.04] shadow-sm dark:border-white/15 dark:bg-white/10">
-              <Button
-                variant="ghost"
-                className="h-9 gap-2 rounded-none px-2.5 text-[13px] font-medium hover:bg-black/[0.06] dark:hover:bg-white/10"
+            <div
+              className={
+                detected
+                  ? "flex h-[34px] shrink-0 items-stretch overflow-hidden rounded-[9px] bg-foreground text-background"
+                  : "flex h-[34px] shrink-0 items-stretch overflow-hidden rounded-[9px] bg-destructive text-white"
+              }
+            >
+              <button
+                type="button"
+                className="px-[13px] text-[13px] font-semibold leading-none hover:bg-white/10 dark:hover:bg-black/[0.06]"
                 onClick={onPrimary}
               >
-                <img src={appIcon} alt="" className="size-5 rounded-[5px]" />
                 {detected ? "Start recording" : "Stop"}
-              </Button>
-              <Button
-                variant="ghost"
-                className="h-9 rounded-none border-l border-black/10 px-1.5 text-muted-foreground hover:bg-black/[0.06] dark:border-white/15 dark:hover:bg-white/10"
+              </button>
+              <button
+                type="button"
+                className="flex w-[30px] items-center justify-center border-l border-background/20 hover:bg-white/10 dark:hover:bg-black/[0.06]"
                 aria-label="More options"
                 onClick={() => setMenuOpen((open) => !open)}
               >
-                <ChevronDown />
-              </Button>
+                <ChevronDown className={menuOpen ? "size-3 rotate-180" : "size-3"} />
+              </button>
             </div>
           </div>
-          {detected && (
-            <div className="absolute inset-x-0 bottom-0 h-[3px]">
-              <div
-                className="h-full rounded-full bg-foreground/20"
-                style={{ width: `${(remainingMs / AUTO_DISMISS_MS) * 100}%` }}
-              />
-            </div>
-          )}
         </div>
 
         {/* Hover-only close, like Granola: the banner is self-dismissing, so
@@ -164,7 +156,7 @@ export default function BannerApp() {
         {hovered && (
           <button
             aria-label="Dismiss"
-            className="absolute -left-1.5 -top-1.5 flex size-[22px] items-center justify-center rounded-full border border-black/10 bg-popover text-muted-foreground shadow-md hover:text-foreground dark:border-white/15"
+            className="absolute -left-[7px] -top-[7px] flex size-[22px] items-center justify-center rounded-full border border-border bg-popover text-muted-foreground shadow-[0_2px_7px_rgba(0,0,0,0.28)] hover:bg-muted hover:text-foreground"
             onClick={() => void bannerDismiss()}
           >
             <X className="size-3" />
@@ -172,15 +164,15 @@ export default function BannerApp() {
         )}
 
         {menuOpen && (
-          <div className="absolute right-0 top-full z-10 mt-1.5 min-w-48 rounded-[10px] border border-black/10 bg-popover p-1 shadow-[0_10px_30px_rgba(0,0,0,0.25)] dark:border-white/10">
+          <div className="absolute right-0 top-full z-10 mt-0.5 w-56 rounded-[12px] border border-border bg-popover p-[5px] shadow-[0_12px_34px_rgba(20,17,12,0.34)]">
             <button
-              className="w-full rounded-md px-2.5 py-1.5 text-left text-[13px] hover:bg-black/[0.06] dark:hover:bg-white/10"
+              className="flex h-[29px] w-full items-center rounded-[7px] px-[9px] text-left text-[13px] hover:bg-accent hover:text-accent-foreground"
               onClick={() => {
                 setMenuOpen(false);
                 void showMainWindow();
               }}
             >
-              Open simstim
+              Open Simstim
             </button>
           </div>
         )}

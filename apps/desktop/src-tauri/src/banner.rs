@@ -21,7 +21,7 @@ pub const WINDOW_LABEL: &str = "banner";
 /// its shadow has room to render (the window itself is transparent and
 /// shadowless: a native shadow on a transparent window leaves artifacts
 /// when the content redraws).
-const WINDOW_WIDTH: f64 = 370.0;
+const WINDOW_WIDTH: f64 = 392.0;
 /// Tall enough for the card plus its dropdown menu (the menu renders inside
 /// this same window; anything past the card is fully transparent).
 const WINDOW_HEIGHT: f64 = 170.0;

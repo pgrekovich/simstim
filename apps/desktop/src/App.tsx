@@ -2,12 +2,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
-import { Ellipsis, FileText, Folder } from "lucide-react";
+import { CircleAlert, Ellipsis, FileText, Folder, Settings, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { RecordButton } from "@/components/RecordButton";
@@ -370,7 +371,7 @@ function App() {
   }, []);
 
   // Worker-side errors (engine/VAD init, save failures) surfaced instead of
-  // living only in stderr: reflect them in the status line, same as a
+  // living only in stderr: reflect them in the global error notice, same as a
   // failed start/stop call, and refresh the sidebar (a save failure can mean
   // the on-disk session list changed underneath us).
   useEffect(() => {
@@ -566,7 +567,7 @@ function App() {
 
   // A background (auto) enhance finished (stage 0.11): refresh the open
   // note so the new summary appears without a manual switch-away-and-back,
-  // and surface failures through the status line -- an auto job has no
+  // and surface failures through the global error notice -- an auto job has no
   // awaiting promise to reject.
   useEffect(() => {
     const unlisten = listen<EnhanceDonePayload>("enhance-done", (event) => {
@@ -836,32 +837,28 @@ function App() {
   // left in the UI to actually stop.
   const sessionActive = activePath !== null;
   const viewingActiveSession = selectedPath !== null && selectedPath === activePath;
-  // The model-missing hint only replaces the status text while there is no
-  // more specific status to show (idle, not recording): once a real status
-  // exists ("saved to ...", an error, or an active recording) it takes
-  // priority, so a stale model-download reminder never masks it.
+  // Model readiness gets a dedicated Open settings action in the toolbar.
+  // Do not repeat the same message in the status slot: with all three tabs
+  // visible that duplicate was the first item to crowd the Record action at
+  // the default 800 px window width. The empty state still carries the text
+  // hint because it has no toolbar action.
   const showModelHint = !sessionActive && !modelReady && status.kind === "idle";
   // The empty-state screen (nothing selected, no search, not recording)
-  // hides the topbar entirely -- a lone Record button floating over the
-  // shortcut menu reads as clutter -- so its branch renders a bare drag
-  // strip instead, and the status line surfaces inside EmptyState.
+  // hides the topbar entirely. A lone Record button floating over the
+  // shortcut menu reads as clutter, so its branch renders a bare drag strip.
   const showTopbar = sessionActive || searchResults !== null || selectedPath !== null;
-  const statusText = showModelHint
-    ? "model not downloaded"
-    : status.kind === "loading-model"
-      ? "loading model"
-      : status.kind === "recording"
-        ? "recording"
-        : status.kind === "saving"
-          ? "saving"
+  const statusText = status.kind === "loading-model"
+    ? "loading model"
+    : status.kind === "recording"
+      ? "recording"
+      : status.kind === "saving"
+        ? "saving"
         : status.kind === "saved"
           ? "saved"
-          : status.kind === "error"
-            ? status.message
-            : "";
+          : "";
 
   return (
-    <div className="flex h-screen">
+    <div className="flex h-screen bg-background text-foreground">
       <Sidebar
         sessions={searchResults ?? sessions}
         selectedPath={selectedPath}
@@ -876,36 +873,28 @@ function App() {
         onDelete={handleDeleteSession}
         searchQuery={searchQuery}
         onSearchChange={setSearchQuery}
-        onOpenSettings={() => setSettingsOpen(true)}
       />
 
-      <div className="flex min-w-0 flex-1 flex-col">
-        {!showTopbar && <div data-tauri-drag-region className="h-10 shrink-0" />}
+      <div className="relative flex min-w-0 flex-1 flex-col">
+        {!showTopbar && <div data-tauri-drag-region className="h-11 shrink-0" />}
         {/* Sits at the very window top, level with the traffic lights
             (overlay title bar), and doubles as that region's drag handle --
             buttons inside still receive their own clicks. */}
         {showTopbar && (
         <header
           data-tauri-drag-region
-          className="flex h-12 shrink-0 items-center gap-3 border-b px-4"
+          className="flex h-14 shrink-0 items-center gap-3 px-5"
         >
-          {/* The mounted SessionView portals its editable title input in
-              here (see SessionView's title-slot logic), so the title reads
-              as the document's name in the toolbar while ALL of the
-              save/flush routing stays inside SessionView, where its
-              remount-per-path lifecycle lives. Empty (and invisible) when
-              nothing is selected or search owns the main pane. */}
-          <div id="topbar-title-slot" className="flex min-w-0 flex-1 items-center" />
+          {/* SessionView portals its Radix tab list here so the switcher is
+              part of the 56 px toolbar while its context and mounted tab
+              contents remain owned by SessionView. */}
+          <div id="topbar-tabs-slot" className="flex min-w-0 flex-1 items-center" />
 
-          <span
-            className={
-              status.kind === "error"
-                ? "min-w-0 max-w-[50%] shrink-0 truncate text-sm text-destructive"
-                : "min-w-0 max-w-[50%] shrink-0 truncate text-sm text-muted-foreground"
-            }
-          >
-            {statusText}
-          </span>
+          {statusText && (
+            <span className="min-w-0 max-w-[35%] shrink-0 truncate font-mono text-[10.5px] text-muted-foreground">
+              {statusText}
+            </span>
+          )}
 
           {showModelHint && (
             <Button variant="outline" size="sm" onClick={() => setSettingsOpen(true)}>
@@ -921,32 +910,65 @@ function App() {
             onClick={sessionActive ? handleStop : () => void handleStart()}
           />
 
-          {/* File actions for the open note. Hidden while search owns the
-              main pane: the selection is invisible there, so acting on it
-              would be acting on something the user can't see. */}
-          {selectedPath !== null && searchResults === null && (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon" aria-label="Note actions">
-                  <Ellipsis />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuItem onSelect={() => void openPath(selectedPath)}>
-                  <FileText />
-                  Open file
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => void revealItemInDir(selectedPath)}>
-                  <Folder />
-                  Show in Finder
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          )}
+          {/* Global actions always live in overflow. Note-specific actions
+              only appear while the selected note owns the main pane. */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon" aria-label="More actions">
+                <Ellipsis />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              {selectedPath !== null && searchResults === null && (
+                <>
+                  <DropdownMenuItem onSelect={() => void openPath(selectedPath)}>
+                    <FileText />
+                    Open file
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => void revealItemInDir(selectedPath)}>
+                    <Folder />
+                    Show in Finder
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                </>
+              )}
+              <DropdownMenuItem onSelect={() => setSettingsOpen(true)}>
+                <Settings />
+                Settings
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </header>
         )}
 
-        <div className="flex min-h-0 flex-1 flex-col p-6">
+        {status.kind === "error" && (
+          <div
+            role="alert"
+            className="absolute right-5 top-16 z-40 flex w-[min(420px,calc(100%-40px))] items-start gap-3 rounded-[9px] border border-destructive/25 bg-card p-3.5 text-card-foreground shadow-[0_10px_30px_rgb(30_27_22/0.16)]"
+          >
+            <CircleAlert aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-destructive" />
+            <div className="min-w-0 flex-1">
+              <p className="font-mono text-[10.5px] font-semibold uppercase tracking-[0.06em] text-destructive">
+                Something went wrong
+              </p>
+              <p className="mt-1 text-[12.5px] leading-[1.45] [overflow-wrap:anywhere]">
+                {status.message}
+              </p>
+            </div>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-xs"
+              className="-mr-1 -mt-1 text-muted-foreground hover:text-foreground"
+              aria-label="Dismiss error"
+              onClick={() => setStatus(sessionActive ? { kind: "recording" } : { kind: "idle" })}
+            >
+              <X className="size-3.5" />
+            </Button>
+          </div>
+        )}
+
+        <div className="flex min-h-0 flex-1 flex-col px-8 pb-7 pt-1">
           {searchResults !== null ? (
             // An active search owns the main pane: hits in context, query
             // highlighted (stage 0.10). Opening a hit clears the search, so
@@ -965,8 +987,7 @@ function App() {
               onStartRecording={() => void handleStart()}
               onOpenSettings={() => setSettingsOpen(true)}
               recordingDisabled={busy || sessionActive || !modelReady}
-              notice={statusText || undefined}
-              noticeIsError={status.kind === "error"}
+              recordingHint={showModelHint ? "model not downloaded" : undefined}
             />
           ) : viewingActiveSession ? (
             <SessionView
@@ -995,7 +1016,25 @@ function App() {
               }}
             />
           ) : sessionDataError ? (
-            <p className="text-sm text-destructive">{sessionDataError}</p>
+            <div className="flex h-full items-center justify-center">
+              <div
+                role="alert"
+                className="flex w-full max-w-md items-start gap-3 rounded-[9px] border border-destructive/25 bg-card p-4 text-card-foreground shadow-[0_8px_24px_rgb(30_27_22/0.1)]"
+              >
+                <CircleAlert
+                  aria-hidden="true"
+                  className="mt-0.5 size-4 shrink-0 text-destructive"
+                />
+                <div className="min-w-0">
+                  <p className="font-mono text-[10.5px] font-semibold uppercase tracking-[0.06em] text-destructive">
+                    Could not open note
+                  </p>
+                  <p className="mt-1 text-[12.5px] leading-[1.45] [overflow-wrap:anywhere]">
+                    {sessionDataError}
+                  </p>
+                </div>
+              </div>
+            </div>
           ) : sessionData === null ? (
             <p className="text-sm text-muted-foreground">loading...</p>
           ) : (

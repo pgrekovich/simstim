@@ -100,13 +100,7 @@ export function Sidebar({
           `titleBarStyle: Overlay`), so the sidebar background runs to the
           very top and the traffic lights float over this strip. It doubles
           as the drag handle for that region. */}
-      {/* Native macOS traffic lights sit on the 19 px titlebar centerline.
-          Keep the full 56 px toolbar allocation, but center our controls in
-          its top 38 px so both sides of the window share that line. */}
-      <div
-        data-tauri-drag-region
-        className="flex h-14 shrink-0 items-center justify-end gap-0.5 px-2.5 pb-[18px]"
-      >
+      <div data-tauri-drag-region className="flex h-14 shrink-0 items-center justify-end gap-0.5 px-2.5">
         <Button
           variant="ghost"
           size="icon"

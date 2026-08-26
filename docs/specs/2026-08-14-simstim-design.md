@@ -333,6 +333,15 @@ hover-pausable auto-dismiss, clicks routed through the main window's
 existing start and stop paths, in-app CallBanner and the UN notification
 layer removed (cidre's `un` feature dropped).
 
+## Stage 1.2: interface redesign (started 2026-08-26)
+
+The complete design package in `design/` introduces a new paper, ink, tape,
+and ochre visual language plus several future product surfaces. The staged
+scope, design audit, discrepancies, and acceptance criteria live in
+`docs/specs/2026-08-26-interface-redesign.md`. Stage 1.2 changes the presentation
+of shipped behavior only. It does not add menu-bar, onboarding, waveform,
+chapters, diarization, calendar, or knowledge-chat behavior.
+
 ## Milestones after MVP-0
 
 1. Audio file kept next to the .md; re-transcribe command (whisper turbo).

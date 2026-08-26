@@ -169,7 +169,7 @@ export function Sidebar({
                       type="button"
                       onClick={() => onSelect(session.path)}
                       className={cn(
-                        "h-auto w-full rounded-[7px] px-2.5 py-2 text-left font-normal transition-colors duration-150",
+                        "h-auto w-full rounded-[7px] px-2.5 py-2 text-left font-normal",
                         selected
                           ? "bg-background text-foreground shadow-[0_1px_2px_rgb(30_27_22/0.07)] hover:bg-background/80"
                           : "text-foreground/75 hover:bg-foreground/[0.05] hover:text-foreground active:bg-foreground/[0.10]",
@@ -192,8 +192,8 @@ export function Sidebar({
                         </>
                       ) : (
                         <>
-                          <span className={cn("w-full truncate text-[12.5px]", selected && "font-medium")}>{session.title}</span>
-                          <span className="font-mono text-[10.5px] text-muted-foreground group-hover:opacity-0 dark:text-[#7A7466]">
+                          <span className={cn("w-full truncate pr-6 text-[12.5px]", selected && "font-medium")}>{session.title}</span>
+                          <span className="font-mono text-[10.5px] text-muted-foreground dark:text-[#7A7466]">
                             {formatTime(session.date)}
                             {duration && ` · ${duration}`}
                           </span>
@@ -214,7 +214,7 @@ export function Sidebar({
                         // pointer-events gating, not just opacity: an
                         // invisible-but-clickable overlay would steal clicks
                         // aimed at the timestamp area of the row button.
-                        className="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground opacity-0 transition-opacity duration-150 hover:text-destructive focus-visible:pointer-events-auto focus-visible:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100"
+                        className="pointer-events-none absolute right-1.5 top-1.5 rounded p-1 text-muted-foreground opacity-0 hover:text-destructive focus-visible:pointer-events-auto focus-visible:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100"
                       >
                         <Trash2 className="size-3.5" />
                       </button>

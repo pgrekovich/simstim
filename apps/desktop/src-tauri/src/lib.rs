@@ -556,6 +556,11 @@ fn position_main_traffic_lights(window: &tauri::WebviewWindow) -> tauri::Result<
         {
             let mut origin = NSView::frame(button).origin;
             origin.x = LEFT_INSET + index as f64 * button_spacing;
+            // AppKit preserves the buttons' global Y while resizing their
+            // container, leaving them at the default 12 px top inset. In a
+            // 35 px titlebar (14 px button + 21 px top inset), the intended
+            // position is the container's bottom edge exactly.
+            origin.y = 0.0;
             NSView::setFrameOrigin(button, origin);
         }
     }

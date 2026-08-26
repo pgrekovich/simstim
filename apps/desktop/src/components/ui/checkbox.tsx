@@ -6,8 +6,32 @@ import { cn } from "@/lib/utils"
 
 function Checkbox({
   className,
+  variant = "checkbox",
+  children,
   ...props
-}: React.ComponentProps<typeof CheckboxPrimitive.Root>) {
+}: React.ComponentProps<typeof CheckboxPrimitive.Root> & {
+  variant?: "checkbox" | "switch"
+}) {
+  if (variant === "switch") {
+    return (
+      <CheckboxPrimitive.Root
+        data-slot="checkbox"
+        className={cn(
+          "peer flex h-[22px] w-[38px] shrink-0 items-center rounded-full bg-foreground/15 p-[3px] outline-none transition-colors",
+          "hover:bg-foreground/20 data-[state=checked]:bg-primary",
+          "focus-visible:ring-[3px] focus-visible:ring-ring/40",
+          "disabled:cursor-not-allowed disabled:opacity-40",
+          "[&[data-state=checked]>span]:translate-x-4",
+          className
+        )}
+        {...props}
+      >
+        <span className="size-4 rounded-full bg-background shadow-[0_1px_2px_rgb(30_27_22/0.25)] transition-transform" />
+        {children}
+      </CheckboxPrimitive.Root>
+    )
+  }
+
   return (
     <CheckboxPrimitive.Root
       data-slot="checkbox"
@@ -20,6 +44,7 @@ function Checkbox({
       )}
       {...props}
     >
+      {children}
       <CheckboxPrimitive.Indicator
         data-slot="checkbox-indicator"
         className="flex items-center justify-center text-current transition-none"

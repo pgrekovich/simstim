@@ -79,7 +79,7 @@ describe("SettingsDialog: call detection (stage 1.0)", () => {
 
     render(<SettingsDialog open onOpenChange={() => {}} />);
     const detect = await screen.findByRole("checkbox", {
-      name: /suggest recording when a call starts/i,
+      name: /offer to record when a call starts/i,
     });
     const autoStop = screen.getByRole("checkbox", {
       name: /stop automatically when the call ends/i,
@@ -96,7 +96,7 @@ describe("SettingsDialog: call detection (stage 1.0)", () => {
     vi.mocked(ipc.setDetectCalls).mockRejectedValueOnce(new Error("config write failed"));
     render(<SettingsDialog open onOpenChange={() => {}} />);
     const detect = await screen.findByRole("checkbox", {
-      name: /suggest recording when a call starts/i,
+      name: /offer to record when a call starts/i,
     });
 
     fireEvent.click(detect);
@@ -654,7 +654,7 @@ describe("SettingsDialog: model manager (stage 0.8 Task 2)", () => {
 describe("SettingsDialog: AI enhance provider (stage 0.11)", () => {
   async function openAiSection() {
     render(<SettingsDialog open onOpenChange={() => {}} />);
-    fireEvent.click(await screen.findByRole("button", { name: /^ai$/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /^summary$/i }));
   }
 
   it("lists probed providers with availability and picks one via the radio", async () => {
@@ -688,7 +688,7 @@ describe("SettingsDialog: AI enhance provider (stage 0.11)", () => {
 describe("SettingsDialog: enhance model override (stage 0.11)", () => {
   it("persists a model pick and clears it back to Default", async () => {
     render(<SettingsDialog open onOpenChange={() => {}} />);
-    fireEvent.click(await screen.findByRole("button", { name: /^ai$/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /^summary$/i }));
 
     const select = await screen.findByRole("combobox", { name: /claude code model/i });
     fireEvent.change(select, { target: { value: "fable" } });

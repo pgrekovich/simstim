@@ -663,7 +663,7 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                   "flex items-center gap-2 rounded-[7px] px-2 py-1.5 text-left text-[12.5px] transition-colors duration-150",
                   activeSection === id
                     ? "bg-foreground/[0.12] font-medium text-foreground"
-                    : "text-foreground/75 hover:bg-foreground/[0.07] hover:text-foreground"
+                    : "text-quiet-foreground hover:bg-foreground/[0.07] hover:text-foreground"
                 )}
               >
                 <Icon className="size-4 text-muted-foreground" />

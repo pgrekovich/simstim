@@ -172,7 +172,7 @@ export function Sidebar({
                         "h-auto w-full rounded-[7px] px-2.5 py-2 text-left font-normal",
                         selected
                           ? "bg-background text-foreground shadow-[0_1px_2px_rgb(30_27_22/0.07)] hover:bg-background/80"
-                          : "text-foreground/75 hover:bg-foreground/[0.05] hover:text-foreground active:bg-foreground/[0.10]",
+                          : "text-quiet-foreground hover:bg-foreground/[0.05] hover:text-foreground active:bg-foreground/[0.10]",
                         recording
                           ? "flex items-center gap-2 bg-background shadow-[0_1px_2px_rgb(30_27_22/0.07)] dark:border dark:border-destructive/[0.28] dark:bg-destructive/[0.14]"
                           : "flex flex-col gap-px"

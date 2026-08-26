@@ -483,28 +483,33 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
       className={
         titleSlot
           ? // Toolbar scale: the input IS the window title up there.
-            "w-full min-w-0 bg-transparent text-sm font-medium outline-none placeholder:text-muted-foreground"
-          : "min-w-0 flex-1 bg-transparent text-xl font-semibold outline-none placeholder:text-muted-foreground"
+            "w-full min-w-0 bg-transparent text-[13.5px] font-medium outline-none placeholder:text-muted-foreground"
+          : "min-w-0 flex-1 bg-transparent font-serif text-2xl font-semibold outline-none placeholder:text-muted-foreground"
       }
     />
   );
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-3">
+    <div className="mx-auto flex h-full min-h-0 w-full max-w-[920px] flex-col">
       {titleSlot ? createPortal(titleInput, titleSlot) : (
         <div className="flex shrink-0 items-center gap-2">{titleInput}</div>
       )}
 
-      {/* Notes first, transcript behind a tab (Granola's own restraint:
-          the notepad is the primary surface, the transcript is backing
-          material). Both contents are force-mounted and CSS-hidden when
-          inactive rather than unmounted: unmounting would kill audio
-          playback on a tab switch and reset TranscriptView's scroll. */}
-      <Tabs defaultValue="notes" className="min-h-0 flex-1 gap-3">
-        <TabsList className="self-center">
-          <TabsTrigger value="notes">Notes</TabsTrigger>
-          <TabsTrigger value="transcript">Transcript</TabsTrigger>
-        </TabsList>
+      {/* Notes stay primary. Generated Summary is a separate material and
+          only appears after Enhance has produced it. Tab contents are
+          force-mounted and CSS-hidden so a switch does not kill playback or
+          reset TranscriptView's scroll. */}
+      <Tabs defaultValue="notes" className="min-h-0 flex-1 gap-0">
+        <div className="flex h-11 shrink-0 items-center justify-center">
+          <TabsList className="h-[34px] rounded-full bg-foreground/[0.06] p-[3px]">
+            <TabsTrigger className="h-7 rounded-full px-3 font-mono text-[11px] data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm" value="notes">Notes</TabsTrigger>
+            {summary && <TabsTrigger className="h-7 rounded-full px-3 font-mono text-[11px] data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm" value="summary">Summary</TabsTrigger>}
+            <TabsTrigger className="h-7 rounded-full px-3 font-mono text-[11px] data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm" value="transcript">
+              {isActive && <span aria-hidden="true" className="recording-tally mr-1.5 size-1.5 rounded-full bg-destructive" />}
+              Transcript
+            </TabsTrigger>
+          </TabsList>
+        </div>
 
         <TabsContent
           value="notes"
@@ -517,36 +522,15 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
             onBlur={commitNotes}
             placeholder="your notes..."
             className={cn(
-              "w-full resize-none rounded-md border bg-transparent p-3 text-sm outline-none placeholder:text-muted-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50",
-              // With a summary on screen the notepad yields most of the
-              // height to it; alone, it owns the tab.
-              summary ? "h-40 shrink-0" : "min-h-0 flex-1"
+              "min-h-0 w-full flex-1 resize-none border-0 bg-transparent px-6 py-4 font-serif text-[15px] leading-[1.65] text-card-foreground outline-none placeholder:font-serif placeholder:text-muted-foreground focus-visible:ring-0"
             )}
           />
-
-          {summary && (
-            <div className="flex min-h-0 flex-1 flex-col overflow-y-auto rounded-md border bg-card p-3">
-              <div className="flex items-baseline gap-2 pb-2">
-                <h3 className="text-sm font-semibold">Summary</h3>
-                {summaryModel && (
-                  <span className="text-xs text-muted-foreground">
-                    by {summaryModel}
-                  </span>
-                )}
-              </div>
-              {/* Generated text, visually its own block -- it never mixes
-                  into the notes above (the user's words are sacred). */}
-              <div className="whitespace-pre-wrap text-sm leading-relaxed text-foreground/90">
-                {summary}
-              </div>
-            </div>
-          )}
 
           {enhanceError && (
             <p className="shrink-0 text-sm text-destructive">{enhanceError}</p>
           )}
 
-          <div className="flex shrink-0 items-center gap-2">
+          <div className="flex shrink-0 items-center gap-2 px-6 pb-1">
             <Button
               type="button"
               variant="outline"
@@ -558,12 +542,31 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
               {enhancing ? "Enhancing..." : summary ? "Re-enhance" : "Enhance"}
             </Button>
             {enhancing && (
-              <span className="text-xs text-muted-foreground">
+              <span className="font-mono text-[10.5px] text-muted-foreground">
                 sending notes and transcript to your AI CLI...
               </span>
             )}
           </div>
         </TabsContent>
+
+        {summary && (
+          <TabsContent
+            value="summary"
+            forceMount
+            className="min-h-0 flex-1 overflow-y-auto px-6 py-4 data-[state=inactive]:hidden"
+          >
+            <div className="border-l-2 border-[var(--voice-remote)] pl-5">
+              {summaryModel && (
+                <p className="mb-4 font-mono text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
+                  by {summaryModel}
+                </p>
+              )}
+              <div className="whitespace-pre-wrap font-serif text-[14.5px] leading-[1.65] text-card-foreground">
+                {summary}
+              </div>
+            </div>
+          </TabsContent>
+        )}
 
         <TabsContent
           value="transcript"
@@ -578,16 +581,13 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
           />
 
           {retranscribeStatusText && (
-            <p className="shrink-0 text-xs text-muted-foreground">{retranscribeStatusText}</p>
+            <p className="shrink-0 px-6 font-mono text-[10.5px] text-muted-foreground">{retranscribeStatusText}</p>
           )}
           {retranscribeError && (
             <p className="shrink-0 text-sm text-destructive">{retranscribeError}</p>
           )}
 
-          {/* Pinned under the transcript, a single compact row: this bottom
-              slot is where a chat-with-the-transcript input will later
-              live, so the player must stay stackable, not a full-width
-              native embed. */}
+          {/* Pinned under the transcript as one compact, stackable row. */}
           {audioPath && (
             <AudioPlayer
               ref={playerRef}

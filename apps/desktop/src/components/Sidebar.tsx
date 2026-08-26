@@ -1,4 +1,4 @@
-import { Plus, Search, Settings, Trash2 } from "lucide-react";
+import { Search, Settings, SquarePen, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
@@ -48,6 +48,17 @@ function formatTime(dateStr: string): string {
   return `${hh}:${mm}`;
 }
 
+function formatDuration(durationSecs: number | null): string | null {
+  if (durationSecs === null) return null;
+  const whole = Math.max(0, Math.floor(durationSecs));
+  const hours = Math.floor(whole / 3600);
+  const minutes = Math.floor((whole % 3600) / 60);
+  const seconds = whole % 60;
+  return hours > 0
+    ? `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`
+    : `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
 /**
  * Groups sessions into day buckets in the order they arrive. `list_sessions`
  * already sorts by date desc, so a single pass merging into the trailing
@@ -84,32 +95,35 @@ export function Sidebar({
   const searching = searchQuery.trim() !== "";
 
   return (
-    <aside className="flex h-full w-60 shrink-0 flex-col border-r bg-sidebar text-sidebar-foreground">
+    <aside className="flex h-full w-56 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground">
       {/* The window's title bar is an overlay (tauri.conf.json
           `titleBarStyle: Overlay`), so the sidebar background runs to the
           very top and the traffic lights float over this strip. It doubles
           as the drag handle for that region. */}
-      <div data-tauri-drag-region className="h-10 shrink-0" />
-      {/* Borderless on purpose: the sidebar reads as one seamless surface
-          from the traffic lights down; only the main pane keeps a header
-          rule, and it terminates at the sidebar edge. */}
-      <div className="flex h-12 shrink-0 items-center px-2">
-        {/* Surfaces are alpha over `foreground` rather than the sidebar-accent
-            token: in the light theme that token (0.97) sits so close to the
-            sidebar background (0.985) that hover and selection are invisible.
-            Alpha over foreground inverts with the theme, so one value reads
-            correctly in both. */}
+      <div data-tauri-drag-region className="flex h-14 shrink-0 items-center justify-end gap-0.5 px-2.5">
         <Button
           variant="ghost"
-          className="w-full justify-start gap-2 transition-colors duration-150 hover:bg-foreground/[0.08] active:bg-foreground/[0.15]"
+          size="icon"
+          className="size-6 rounded-md text-muted-foreground hover:bg-foreground/[0.07] hover:text-foreground active:bg-foreground/[0.14] dark:text-[#8B8578]"
+          aria-label="Focus search"
+          title="Search"
+          onClick={() => document.getElementById("session-search")?.focus()}
+        >
+          <Search className="size-[15px]" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="size-6 rounded-md text-muted-foreground hover:bg-foreground/[0.07] hover:text-foreground active:bg-foreground/[0.14] dark:text-[#8B8578]"
+          aria-label="New note"
+          title="New note"
           onClick={onNewSession}
         >
-          <Plus className="size-4" />
-          New note
+          <SquarePen className="size-[15px]" />
         </Button>
       </div>
 
-      <div className="px-2 pb-1 pt-2">
+      <div className="px-3 pt-1.5">
         <div className="relative">
           <Search
             aria-hidden="true"
@@ -126,25 +140,26 @@ export function Sidebar({
             // the sidebar surface (owner contrast review). Same
             // alpha-over-foreground trick as the row hovers so one value
             // reads correctly in both themes.
-            className="h-8 rounded-md border-input bg-foreground/[0.06] pl-8 text-sm shadow-none focus-visible:border-ring focus-visible:bg-transparent"
+            className="h-[30px] rounded-[7px] border-sidebar-border bg-background pl-8 pr-2 text-[12.5px] shadow-[0_1px_2px_rgb(30_27_22/0.04)] placeholder:text-muted-foreground focus-visible:border-foreground/25 focus-visible:bg-background"
           />
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
+      <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
         {sessions.length === 0 ? (
           <p className="px-2 py-4 text-center text-xs text-muted-foreground">
             {searching ? "no matches" : "no sessions yet"}
           </p>
         ) : (
           groups.map((group) => (
-            <div key={group.label} className="mb-2">
-              <div className="px-2 py-1 text-xs font-medium text-muted-foreground">
+            <div key={group.label} className="flex flex-col gap-px">
+              <div className="px-2 pb-2 pt-[14px] font-mono text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground dark:text-[#7A7466]">
                 {group.label}
               </div>
               {group.sessions.map((session) => {
                 const selected = selectedPath === session.path;
                 const recording = activePath === session.path;
+                const duration = formatDuration(session.duration_secs);
                 return (
                   // A wrapper div, not one button: the delete affordance is
                   // its own overlaid button (nesting buttons is invalid
@@ -154,42 +169,36 @@ export function Sidebar({
                       type="button"
                       onClick={() => onSelect(session.path)}
                       className={cn(
-                        "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors duration-150",
-                        // Selection reads as a filled pill plus weight, with no
-                        // left rule: a border on a rounded row renders as a
-                        // detached bracket. Each state gets its own hover so the
-                        // selected row deepens on hover instead of being dimmed
-                        // by a lower-opacity tint winning the cascade.
+                        "h-auto w-full rounded-[7px] px-2.5 py-2 text-left font-normal transition-colors duration-150",
                         selected
-                          ? "bg-foreground/[0.12] font-medium text-foreground hover:bg-foreground/[0.16]"
-                          : "text-foreground/75 hover:bg-foreground/[0.07] hover:text-foreground active:bg-foreground/[0.12]"
+                          ? "bg-background text-foreground shadow-[0_1px_2px_rgb(30_27_22/0.07)] hover:bg-background/80"
+                          : "text-foreground/75 hover:bg-foreground/[0.05] hover:text-foreground active:bg-foreground/[0.10]",
+                        recording
+                          ? "flex items-center gap-2 bg-background shadow-[0_1px_2px_rgb(30_27_22/0.07)] dark:border dark:border-destructive/[0.28] dark:bg-destructive/[0.14]"
+                          : "flex flex-col gap-px"
                       )}
                     >
-                      <span className="flex min-w-0 flex-1 items-center gap-1.5">
-                        {recording && (
+                      {recording ? (
+                        <>
                           <span
                             data-testid="recording-dot"
                             aria-hidden="true"
-                            className="size-1.5 shrink-0 animate-pulse rounded-full bg-destructive"
+                            className="recording-tally size-1.5 shrink-0 rounded-full bg-destructive"
                           />
-                        )}
-                        <span className="min-w-0 truncate">{session.title}</span>
-                        {/* Appended AFTER the title text so it doesn't become
-                            the row button's primary accessible name (App.test.tsx
-                            matches the active row by /^untitled/i). */}
-                        {recording && <span className="sr-only">recording</span>}
-                      </span>
-                      <span
-                        className={cn(
-                          "shrink-0 text-xs text-muted-foreground",
-                          // The trash button takes the timestamp's spot on
-                          // hover -- but never for the recording row, which
-                          // can't be deleted and keeps its time visible.
-                          !recording && "group-hover:opacity-0"
-                        )}
-                      >
-                        {formatTime(session.date)}
-                      </span>
+                          <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                            <span className="truncate text-[12.5px] font-medium text-foreground">{session.title}</span>
+                            <span className="font-mono text-[10.5px] text-destructive">recording</span>
+                          </span>
+                        </>
+                      ) : (
+                        <>
+                          <span className={cn("w-full truncate text-[12.5px]", selected && "font-medium")}>{session.title}</span>
+                          <span className="font-mono text-[10.5px] text-muted-foreground group-hover:opacity-0 dark:text-[#7A7466]">
+                            {formatTime(session.date)}
+                            {duration && ` · ${duration}`}
+                          </span>
+                        </>
+                      )}
                     </button>
                     {!recording && (
                       <button
@@ -218,10 +227,10 @@ export function Sidebar({
         )}
       </div>
 
-      <div className="border-t border-sidebar-border px-2 py-2">
+      <div className="border-t border-sidebar-border px-3 py-2.5">
         <Button
           variant="ghost"
-          className="w-full justify-start gap-2 transition-colors duration-150 hover:bg-foreground/[0.08] active:bg-foreground/[0.15]"
+          className="h-8 w-full justify-start gap-2 rounded-[7px] px-2 text-[12.5px] text-muted-foreground transition-colors duration-150 hover:bg-foreground/[0.08] hover:text-foreground active:bg-foreground/[0.15]"
           onClick={onOpenSettings}
         >
           <Settings className="size-4" />

@@ -102,7 +102,7 @@ function formatDate(dateStr: string): string {
 export function SearchResults({ hits, query, onOpen }: SearchResultsProps) {
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <p className="pb-3 text-sm text-muted-foreground">
+      <p className="pb-4 font-mono text-[10.5px] uppercase tracking-[0.08em] text-muted-foreground">
         {hits.length === 0
           ? `no matches for "${query}"`
           : `${hits.length} ${hits.length === 1 ? "note matches" : "notes match"} "${query}"`}
@@ -114,13 +114,13 @@ export function SearchResults({ hits, query, onOpen }: SearchResultsProps) {
             key={hit.path}
             type="button"
             onClick={() => onOpen(hit.path)}
-            className="block w-full rounded-lg border bg-card px-4 py-3 text-left transition-colors duration-150 hover:bg-foreground/[0.06] active:bg-foreground/[0.10]"
+            className="block w-full rounded-[9px] border border-border bg-card px-4 py-3.5 text-left shadow-[0_1px_2px_rgb(30_27_22/0.04)] transition-colors duration-150 hover:bg-foreground/[0.06] active:bg-foreground/[0.10]"
           >
             <div className="flex items-baseline justify-between gap-3">
-              <span className="min-w-0 truncate text-sm font-medium">
+              <span className="min-w-0 truncate text-[13.5px] font-medium">
                 <Highlighted text={hit.title} query={query} />
               </span>
-              <span className="shrink-0 text-xs text-muted-foreground">
+              <span className="shrink-0 font-mono text-[10.5px] text-muted-foreground">
                 {formatDate(hit.date)}
               </span>
             </div>

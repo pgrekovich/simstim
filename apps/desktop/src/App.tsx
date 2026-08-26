@@ -861,7 +861,7 @@ function App() {
             : "";
 
   return (
-    <div className="flex h-screen">
+    <div className="flex h-screen bg-background text-foreground">
       <Sidebar
         sessions={searchResults ?? sessions}
         selectedPath={selectedPath}
@@ -880,14 +880,14 @@ function App() {
       />
 
       <div className="flex min-w-0 flex-1 flex-col">
-        {!showTopbar && <div data-tauri-drag-region className="h-10 shrink-0" />}
+        {!showTopbar && <div data-tauri-drag-region className="h-11 shrink-0" />}
         {/* Sits at the very window top, level with the traffic lights
             (overlay title bar), and doubles as that region's drag handle --
             buttons inside still receive their own clicks. */}
         {showTopbar && (
         <header
           data-tauri-drag-region
-          className="flex h-12 shrink-0 items-center gap-3 border-b px-4"
+          className="flex h-14 shrink-0 items-center gap-3 px-5"
         >
           {/* The mounted SessionView portals its editable title input in
               here (see SessionView's title-slot logic), so the title reads
@@ -900,8 +900,8 @@ function App() {
           <span
             className={
               status.kind === "error"
-                ? "min-w-0 max-w-[50%] shrink-0 truncate text-sm text-destructive"
-                : "min-w-0 max-w-[50%] shrink-0 truncate text-sm text-muted-foreground"
+                ? "min-w-0 max-w-[50%] shrink-0 truncate font-mono text-[10.5px] text-destructive"
+                : "min-w-0 max-w-[50%] shrink-0 truncate font-mono text-[10.5px] text-muted-foreground"
             }
           >
             {statusText}
@@ -946,7 +946,7 @@ function App() {
         </header>
         )}
 
-        <div className="flex min-h-0 flex-1 flex-col p-6">
+        <div className="flex min-h-0 flex-1 flex-col px-8 pb-7 pt-1">
           {searchResults !== null ? (
             // An active search owns the main pane: hits in context, query
             // highlighted (stage 0.10). Opening a hit clears the search, so

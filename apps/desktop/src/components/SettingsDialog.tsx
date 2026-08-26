@@ -146,9 +146,9 @@ function Row({
   return (
     <div className="flex items-start justify-between gap-6 py-3 first:pt-3.5 last:pb-3.5">
       <div className="flex min-w-0 flex-col gap-0.5">
-        <Label htmlFor={htmlFor}>{label}</Label>
-        {description && <span className="text-xs text-muted-foreground">{description}</span>}
-        {error && <span className="text-xs text-destructive">{error}</span>}
+        <Label className="text-[12.5px] font-medium" htmlFor={htmlFor}>{label}</Label>
+        {description && <span className="text-[11.5px] leading-relaxed text-muted-foreground">{description}</span>}
+        {error && <span className="font-mono text-[10.5px] text-destructive">{error}</span>}
       </div>
       {children && <div className="flex shrink-0 items-center gap-1.5 pt-0.5">{children}</div>}
     </div>
@@ -157,7 +157,7 @@ function Row({
 
 /** A bordered group of rows, the section's visual unit. */
 function Group({ children }: { children: ReactNode }) {
-  return <div className="divide-y rounded-lg border bg-card px-4">{children}</div>;
+  return <div className="divide-y divide-border rounded-[9px] border border-border bg-card px-4 shadow-[0_1px_2px_rgb(30_27_22/0.03)]">{children}</div>;
 }
 
 interface SettingsDialogProps {
@@ -649,18 +649,18 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
           a download's progress keeps rendering wherever you navigate. */}
       <DialogContent className="top-0 left-0 flex h-full w-full max-w-none translate-x-0 translate-y-0 flex-col gap-0 rounded-none border-0 p-0 sm:max-w-none">
         <div className="flex min-h-0 flex-1">
-          <nav className="flex w-52 shrink-0 flex-col border-r bg-sidebar p-3">
+          <nav className="flex w-56 shrink-0 flex-col border-r border-sidebar-border bg-sidebar p-3">
             {/* Same overlay-title-bar drag strip as the main window: the
                 traffic lights float over this corner. */}
-            <div data-tauri-drag-region className="h-10 shrink-0" />
-            <DialogTitle className="px-2 pb-3 text-base font-semibold">Settings</DialogTitle>
+            <div data-tauri-drag-region className="h-11 shrink-0" />
+            <DialogTitle className="px-2 pb-4 font-serif text-[18px] font-semibold">Settings</DialogTitle>
             {NAV_SECTIONS.map(({ id, label, icon: Icon }) => (
               <button
                 key={id}
                 type="button"
                 onClick={() => setActiveSection(id)}
                 className={cn(
-                  "flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors duration-150",
+                  "flex items-center gap-2 rounded-[7px] px-2 py-1.5 text-left text-[12.5px] transition-colors duration-150",
                   activeSection === id
                     ? "bg-foreground/[0.12] font-medium text-foreground"
                     : "text-foreground/75 hover:bg-foreground/[0.07] hover:text-foreground"
@@ -673,11 +673,11 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
           </nav>
 
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-            <div data-tauri-drag-region className="h-10 shrink-0" />
+            <div data-tauri-drag-region className="h-11 shrink-0" />
             <div className="min-h-0 flex-1 overflow-y-auto">
-              <div className="mx-auto flex max-w-2xl flex-col gap-8 px-8 pb-10 pt-2">
+              <div className="mx-auto flex max-w-2xl flex-col gap-8 px-8 pb-10 pt-3">
                 <section id="settings-general" className={cn("flex flex-col gap-2", activeSection !== "settings-general" && "hidden")}>
-                  <h3 className="px-1 text-sm font-semibold text-muted-foreground">General</h3>
+                  <h3 className="px-1 font-mono text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">General</h3>
                   <Group>
                     <Row label="Theme" error={themeError}>
                       {THEME_OPTIONS.map((option) => (
@@ -712,7 +712,7 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                 </section>
 
                 <section id="settings-recording" className={cn("flex flex-col gap-2", activeSection !== "settings-recording" && "hidden")}>
-                  <h3 className="px-1 text-sm font-semibold text-muted-foreground">Recording</h3>
+                  <h3 className="px-1 font-mono text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">Recording</h3>
                   <Group>
                     <Row
                       label="Keep call audio"
@@ -776,7 +776,7 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                 </section>
 
                 <section id="settings-transcription" className={cn("flex flex-col gap-2", activeSection !== "settings-transcription" && "hidden")}>
-                  <h3 className="px-1 text-sm font-semibold text-muted-foreground">Transcription</h3>
+                  <h3 className="px-1 font-mono text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">Transcription</h3>
                   {/* Stage 0.9 (fix-review correction): only the AUTO toggle
                       needs `keep_audio` on -- it fires right after a recording
                       stops, so it's useless without an audio file having just
@@ -994,7 +994,7 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                   id="settings-ai"
                   className={cn("flex flex-col gap-2", activeSection !== "settings-ai" && "hidden")}
                 >
-                  <h3 className="px-1 text-sm font-semibold text-muted-foreground">AI</h3>
+                  <h3 className="px-1 font-mono text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">AI</h3>
                   <p className="px-1 text-xs text-muted-foreground">
                     Enhance runs an AI CLI you already have installed and pay for -- no API
                     keys, nothing configured here ever phones home. Only the note's text and

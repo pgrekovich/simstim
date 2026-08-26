@@ -342,11 +342,10 @@ scope, design audit, discrepancies, and acceptance criteria live in
 of shipped behavior only. It does not add menu-bar, onboarding, waveform,
 chapters, diarization, calendar, or knowledge-chat behavior.
 
-Status (2026-08-27): implementation and the iterative light-theme owner review
-are complete on `codex/stage-1.2-interface-redesign`. The approved deviations
-are recorded in the interface redesign spec. Dark appearance, a real detected
-call, full-screen focus behavior, call end, and the standard full test run from
-the owner's terminal remain required before merge.
+Status (2026-08-27): stage 1.2 shipped. The owner approved the final visual and
+native e2e after the integration polish cycle and authorized merge and release
+as v0.6.0. The approved deviations are recorded in the interface redesign
+spec.
 
 ## Milestones after MVP-0
 

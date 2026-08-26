@@ -1,8 +1,8 @@
 # simstim interface redesign
 
-2026-08-27. Status: stage 1 implementation complete. Light-theme owner review
-passed after the integration polish cycle. Dark appearance and the final native
-call-detection e2e remain required before merge.
+2026-08-27. Status: stage 1 shipped. The owner approved the final visual and
+native e2e after the integration polish cycle and authorized merge and release
+as v0.6.0.
 
 This document translates the interface package in `design/` into product
 scope. The existing product rules in `2026-08-14-simstim-design.md` remain

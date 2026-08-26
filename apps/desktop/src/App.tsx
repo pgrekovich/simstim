@@ -2,7 +2,17 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
-import { CircleAlert, Ellipsis, FileText, Folder, Settings, X } from "lucide-react";
+import {
+  CircleAlert,
+  Ellipsis,
+  FileText,
+  Folder,
+  PanelLeftOpen,
+  Search,
+  Settings,
+  SquarePen,
+  X,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -57,6 +67,15 @@ import { initTheme } from "@/lib/theme";
  * forever.
  */
 const MODEL_LOAD_FALLBACK_MS = 15_000;
+const SIDEBAR_COLLAPSED_KEY = "simstim.sidebar-collapsed";
+
+function initialSidebarCollapsed(): boolean {
+  try {
+    return window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Starting title/notes for a freshly started recording that has no session
@@ -102,6 +121,7 @@ function App() {
   const [modelReady, setModelReady] = useState(true);
   const [busy, setBusy] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(initialSidebarCollapsed);
   const [autoStopAfterCall, setAutoStopAfterCall] = useState(false);
   const loadingFallbackRef = useRef<number | null>(null);
   const callLifecycleRef = useRef({
@@ -245,6 +265,14 @@ function App() {
         // ever does fire, the pre-paint script's system guess stands.
       });
   }, []);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(sidebarCollapsed));
+    } catch {
+      // A blocked localStorage should not make the application unusable.
+    }
+  }, [sidebarCollapsed]);
 
   // The floating banner window (stage 1.1) owns rendering call
   // suggestions; its clicks forward here so recording keeps its single
@@ -782,6 +810,9 @@ function App() {
         const search = document.getElementById("session-search") as HTMLInputElement | null;
         search?.focus();
         search?.select();
+      } else if (key === "\\" && !e.shiftKey) {
+        e.preventDefault();
+        setSidebarCollapsed((collapsed) => !collapsed);
       }
     }
     window.addEventListener("keydown", onKeyDown);
@@ -859,7 +890,7 @@ function App() {
 
   return (
     <div className="flex h-screen bg-background text-foreground">
-      <Sidebar
+      {!sidebarCollapsed && <Sidebar
         sessions={searchResults ?? sessions}
         selectedPath={selectedPath}
         activePath={activePath}
@@ -870,21 +901,57 @@ function App() {
           if (searchQuery !== "") setSearchQuery("");
         }}
         onNewSession={handleNewSession}
+        onCollapse={() => setSidebarCollapsed(true)}
         onDelete={handleDeleteSession}
         searchQuery={searchQuery}
         onSearchChange={setSearchQuery}
-      />
+      />}
 
       <div className="relative flex min-w-0 flex-1 flex-col">
-        {!showTopbar && <div data-tauri-drag-region className="h-11 shrink-0" />}
+        {!showTopbar && !sidebarCollapsed && <div data-tauri-drag-region className="h-11 shrink-0" />}
         {/* Sits at the very window top, level with the traffic lights
             (overlay title bar), and doubles as that region's drag handle --
             buttons inside still receive their own clicks. */}
-        {showTopbar && (
+        {(showTopbar || sidebarCollapsed) && (
         <header
           data-tauri-drag-region
           className="flex h-14 shrink-0 items-center gap-3 px-5"
         >
+          {sidebarCollapsed && (
+            <div className="flex shrink-0 items-center gap-0.5">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-7"
+                aria-label="Show sidebar"
+                title="Show sidebar (⌘\\)"
+                onClick={() => setSidebarCollapsed(false)}
+              >
+                <PanelLeftOpen className="size-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-7"
+                aria-label="Focus search"
+                title="Search"
+                onClick={() => document.getElementById("session-search")?.focus()}
+              >
+                <Search className="size-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-7"
+                aria-label="New note"
+                title="New note"
+                onClick={handleNewSession}
+              >
+                <SquarePen className="size-4" />
+              </Button>
+            </div>
+          )}
+
           {/* SessionView portals its Radix tab list here so the switcher is
               part of the 56 px toolbar while its context and mounted tab
               contents remain owned by SessionView. */}

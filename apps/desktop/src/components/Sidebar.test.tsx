@@ -200,6 +200,29 @@ describe("Sidebar: new note button", () => {
   });
 });
 
+describe("Sidebar: collapse button", () => {
+  it("reports a collapse request without changing the selected row", () => {
+    const onCollapse = vi.fn();
+    render(
+      <Sidebar
+        sessions={makeSessions()}
+        selectedPath="/tmp/a.md"
+        activePath={null}
+        onSelect={vi.fn()}
+        onNewSession={vi.fn()}
+        onCollapse={onCollapse}
+        onDelete={vi.fn()}
+        searchQuery=""
+        onSearchChange={vi.fn()}
+      />
+    );
+
+    screen.getByRole("button", { name: /collapse sidebar/i }).click();
+    expect(onCollapse).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: /session a/i })).toBeInTheDocument();
+  });
+});
+
 describe("Sidebar: delete button", () => {
   it("calls onDelete with the row's path, and never onSelect, when its trash button is clicked", () => {
     const onSelect = vi.fn();

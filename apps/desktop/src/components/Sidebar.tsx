@@ -1,4 +1,4 @@
-import { Search, SquarePen, Trash2 } from "lucide-react";
+import { PanelLeftClose, Search, SquarePen, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
@@ -11,6 +11,8 @@ interface SidebarProps {
   activePath: string | null;
   onSelect: (path: string) => void;
   onNewSession: () => void;
+  /** Hides the note list while preserving the selected note and recording. */
+  onCollapse?: () => void;
   /** Row-hover trash button; App owns the confirm dialog and the IPC call. */
   onDelete: (path: string) => void;
   /** Current search text; `sessions` is already the filtered result for it. */
@@ -84,6 +86,7 @@ export function Sidebar({
   activePath,
   onSelect,
   onNewSession,
+  onCollapse,
   onDelete,
   searchQuery,
   onSearchChange,
@@ -98,6 +101,16 @@ export function Sidebar({
           very top and the traffic lights float over this strip. It doubles
           as the drag handle for that region. */}
       <div data-tauri-drag-region className="flex h-14 shrink-0 items-center justify-end gap-0.5 px-2.5">
+        <Button
+          variant="ghost"
+          size="icon"
+          className="size-6 rounded-md text-muted-foreground hover:bg-foreground/[0.07] hover:text-foreground active:bg-foreground/[0.14] dark:text-[#8B8578]"
+          aria-label="Collapse sidebar"
+          title="Collapse sidebar (⌘\\)"
+          onClick={onCollapse}
+        >
+          <PanelLeftClose className="size-[15px]" />
+        </Button>
         <Button
           variant="ghost"
           size="icon"

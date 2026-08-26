@@ -61,6 +61,10 @@ tempfile = "3"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cidre = { version = "0.15", default-features = false, features = ["app", "at", "blocks", "core_audio"] }
+# AppKit must receive the titlebar frame as one atomic setFrame call. Updating
+# its size and origin separately lets the autoresizing mask cancel the
+# vertical traffic-light inset.
+objc = "0.2"
 # Converts the banner window into a non-activating NSPanel so clicking its
 # buttons never steals focus from the call app, and the panel can float over
 # full-screen apps (fullScreenAuxiliary). Not on crates.io; pinned to a rev

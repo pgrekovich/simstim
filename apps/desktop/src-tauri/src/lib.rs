@@ -511,8 +511,9 @@ fn set_retranscribe_model(id: String) -> Result<(), String> {
 /// config-created main webview on macOS. Reapply the same geometry after the
 /// window exists so the native controls share the 28 px toolbar centerline.
 #[cfg(target_os = "macos")]
-#[allow(deprecated)]
+#[allow(deprecated, unexpected_cfgs)]
 fn position_main_traffic_lights(window: &tauri::WebviewWindow) -> tauri::Result<()> {
+    use objc::{msg_send, sel, sel_impl};
     use tauri_nspanel::cocoa::{
         appkit::{NSView, NSWindow, NSWindowButton},
         base::{id, nil},
@@ -541,8 +542,7 @@ fn position_main_traffic_lights(window: &tauri::WebviewWindow) -> tauri::Result<
         let mut titlebar_frame = NSView::frame(titlebar);
         titlebar_frame.size.height = titlebar_height;
         titlebar_frame.origin.y = window_frame.size.height - titlebar_height;
-        NSView::setFrameSize(titlebar, titlebar_frame.size);
-        NSView::setFrameOrigin(titlebar, titlebar_frame.origin);
+        let _: () = msg_send![titlebar, setFrame: titlebar_frame];
 
         let button_spacing = NSView::frame(minimize).origin.x - close_frame.origin.x;
         for (index, button) in [

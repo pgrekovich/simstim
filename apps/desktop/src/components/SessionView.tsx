@@ -217,16 +217,13 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
   const [retranscribeError, setRetranscribeError] = useState<string | null>(null);
   const playerRef = useRef<AudioPlayerHandle>(null);
   const jobRunningHere = retranscribingJob?.path === path;
-  // App's toolbar renders an empty `#topbar-title-slot`; the title input is
-  // portaled into it so it reads as the document's name up there while every
-  // bit of save/flush routing stays in this component (whose keyed
-  // remount-per-path lifecycle the title state depends on). Looked up in an
-  // effect, not during render: the slot is a sibling subtree, and reading
-  // the DOM mid-render would race React mounting it. Falls back to inline
-  // rendering when the slot doesn't exist (component-level tests).
-  const [titleSlot, setTitleSlot] = useState<HTMLElement | null>(null);
+  // App's toolbar renders an empty `#topbar-tabs-slot`; the tab switcher is
+  // portaled into it to match the design while remaining inside the Radix
+  // Tabs React tree. Looked up in an effect because the slot is a sibling DOM
+  // subtree. Component tests have no slot and use the inline fallback.
+  const [toolbarSlot, setToolbarSlot] = useState<HTMLElement | null>(null);
   useEffect(() => {
-    setTitleSlot(document.getElementById("topbar-title-slot"));
+    setToolbarSlot(document.getElementById("topbar-tabs-slot"));
   }, []);
 
   // "Latest value" mirrors of the controlled state above, read from
@@ -480,42 +477,53 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
       onKeyDown={handleTitleKeyDown}
       onBlur={commitTitle}
       placeholder="Untitled"
-      className={
-        titleSlot
-          ? // Toolbar scale: the input IS the window title up there.
-            "w-full min-w-0 bg-transparent text-[13.5px] font-medium outline-none placeholder:text-muted-foreground"
-          : "min-w-0 flex-1 bg-transparent font-serif text-2xl font-semibold outline-none placeholder:text-muted-foreground"
-      }
+      className="w-full min-w-0 bg-transparent font-serif text-[26px] font-semibold leading-[1.25] tracking-[-0.01em] outline-none placeholder:text-muted-foreground"
     />
+  );
+
+  const tabList = (
+    <TabsList className="h-[34px] gap-[3px] rounded-full bg-foreground/[0.06] p-[3px] dark:bg-foreground/[0.07]">
+      <TabsTrigger
+        className="h-7 gap-[7px] rounded-full px-[13px] font-mono text-[11px] font-normal hover:bg-foreground/[0.05] data-[state=active]:bg-background data-[state=active]:font-semibold data-[state=active]:tracking-[0.04em] data-[state=active]:shadow-[0_1px_2px_rgb(30_27_22/0.14)] dark:data-[state=active]:bg-foreground/[0.14]"
+        value="notes"
+      >
+        Notes
+      </TabsTrigger>
+      {summary && (
+        <TabsTrigger
+          className="h-7 gap-[7px] rounded-full px-[13px] font-mono text-[11px] font-normal hover:bg-foreground/[0.05] data-[state=active]:bg-background data-[state=active]:font-semibold data-[state=active]:tracking-[0.04em] data-[state=active]:shadow-[0_1px_2px_rgb(30_27_22/0.14)] dark:data-[state=active]:bg-foreground/[0.14]"
+          value="summary"
+        >
+          Summary
+        </TabsTrigger>
+      )}
+      <TabsTrigger
+        className="h-7 gap-[7px] rounded-full px-[13px] font-mono text-[11px] font-normal hover:bg-foreground/[0.05] data-[state=active]:bg-background data-[state=active]:font-semibold data-[state=active]:tracking-[0.04em] data-[state=active]:shadow-[0_1px_2px_rgb(30_27_22/0.14)] dark:data-[state=active]:bg-foreground/[0.14]"
+        value="transcript"
+      >
+        {isActive && <span aria-hidden="true" className="recording-tally size-[5px] rounded-full bg-destructive" />}
+        Transcript
+      </TabsTrigger>
+    </TabsList>
   );
 
   return (
     <div className="mx-auto flex h-full min-h-0 w-full max-w-[920px] flex-col">
-      {titleSlot ? createPortal(titleInput, titleSlot) : (
-        <div className="flex shrink-0 items-center gap-2">{titleInput}</div>
-      )}
-
       {/* Notes stay primary. Generated Summary is a separate material and
           only appears after Enhance has produced it. Tab contents are
           force-mounted and CSS-hidden so a switch does not kill playback or
           reset TranscriptView's scroll. */}
       <Tabs defaultValue="notes" className="min-h-0 flex-1 gap-0">
-        <div className="flex h-11 shrink-0 items-center justify-center">
-          <TabsList className="h-[34px] rounded-full bg-foreground/[0.06] p-[3px]">
-            <TabsTrigger className="h-7 rounded-full px-3 font-mono text-[11px] data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm" value="notes">Notes</TabsTrigger>
-            {summary && <TabsTrigger className="h-7 rounded-full px-3 font-mono text-[11px] data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm" value="summary">Summary</TabsTrigger>}
-            <TabsTrigger className="h-7 rounded-full px-3 font-mono text-[11px] data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm" value="transcript">
-              {isActive && <span aria-hidden="true" className="recording-tally mr-1.5 size-1.5 rounded-full bg-destructive" />}
-              Transcript
-            </TabsTrigger>
-          </TabsList>
-        </div>
+        {toolbarSlot ? createPortal(tabList, toolbarSlot) : (
+          <div className="flex h-11 shrink-0 items-center justify-start">{tabList}</div>
+        )}
 
         <TabsContent
           value="notes"
           forceMount
           className="flex min-h-0 flex-1 flex-col gap-3 data-[state=inactive]:hidden"
         >
+          <div className="shrink-0 px-6 pt-0.5">{titleInput}</div>
           <textarea
             value={notes}
             onChange={handleNotesChange}

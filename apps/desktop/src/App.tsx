@@ -889,13 +889,10 @@ function App() {
           data-tauri-drag-region
           className="flex h-14 shrink-0 items-center gap-3 px-5"
         >
-          {/* The mounted SessionView portals its editable title input in
-              here (see SessionView's title-slot logic), so the title reads
-              as the document's name in the toolbar while ALL of the
-              save/flush routing stays inside SessionView, where its
-              remount-per-path lifecycle lives. Empty (and invisible) when
-              nothing is selected or search owns the main pane. */}
-          <div id="topbar-title-slot" className="flex min-w-0 flex-1 items-center" />
+          {/* SessionView portals its Radix tab list here so the switcher is
+              part of the 56 px toolbar while its context and mounted tab
+              contents remain owned by SessionView. */}
+          <div id="topbar-tabs-slot" className="flex min-w-0 flex-1 items-center" />
 
           <span
             className={

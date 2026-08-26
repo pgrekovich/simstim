@@ -419,6 +419,34 @@ describe("SessionView: audio playback and re-transcribe (Task 4, stage-0.7)", ()
 });
 
 describe("SessionView: notes/transcript tabs (stage 0.10)", () => {
+  it("places the switcher in the application toolbar when its portal slot exists", async () => {
+    const toolbarSlot = document.createElement("div");
+    toolbarSlot.id = "topbar-tabs-slot";
+    document.body.appendChild(toolbarSlot);
+
+    let unmount = () => {};
+    try {
+      ({ unmount } = render(
+        <SessionView
+          path="/tmp/call.md"
+          isActive={false}
+          initialData={baseData}
+          liveLines={[]}
+          interimMe=""
+          interimThem=""
+          retranscribingJob={null}
+        />
+      ));
+
+      const notesTab = screen.getByRole("tab", { name: "Notes" });
+      await waitFor(() => expect(toolbarSlot).toContainElement(notesTab));
+      expect(toolbarSlot).not.toContainElement(screen.getByPlaceholderText("Untitled"));
+    } finally {
+      unmount();
+      toolbarSlot.remove();
+    }
+  });
+
   it("defaults to the Notes tab with the transcript content hidden, and switches on click", () => {
     render(
       <SessionView

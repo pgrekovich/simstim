@@ -507,6 +507,62 @@ fn set_retranscribe_model(id: String) -> Result<(), String> {
     cfg.save().map_err(|e| e.to_string())
 }
 
+/// Tauri's declarative traffic-light inset is not reliably applied to the
+/// config-created main webview on macOS. Reapply the same geometry after the
+/// window exists so the native controls share the 28 px toolbar centerline.
+#[cfg(target_os = "macos")]
+#[allow(deprecated)]
+fn position_main_traffic_lights(window: &tauri::WebviewWindow) -> tauri::Result<()> {
+    use tauri_nspanel::cocoa::{
+        appkit::{NSView, NSWindow, NSWindowButton},
+        base::{id, nil},
+    };
+
+    const LEFT_INSET: f64 = 14.0;
+    const TOP_INSET: f64 = 21.0;
+
+    let ns_window = window.ns_window()? as id;
+    unsafe {
+        let close = NSWindow::standardWindowButton_(ns_window, NSWindowButton::NSWindowCloseButton);
+        let minimize =
+            NSWindow::standardWindowButton_(ns_window, NSWindowButton::NSWindowMiniaturizeButton);
+        if close == nil || minimize == nil {
+            return Ok(());
+        }
+
+        let titlebar = NSView::superview(NSView::superview(close));
+        if titlebar == nil {
+            return Ok(());
+        }
+
+        let close_frame = NSView::frame(close);
+        let window_frame = NSWindow::frame(ns_window);
+        let titlebar_height = close_frame.size.height + TOP_INSET;
+        let mut titlebar_frame = NSView::frame(titlebar);
+        titlebar_frame.size.height = titlebar_height;
+        titlebar_frame.origin.y = window_frame.size.height - titlebar_height;
+        NSView::setFrameSize(titlebar, titlebar_frame.size);
+        NSView::setFrameOrigin(titlebar, titlebar_frame.origin);
+
+        let button_spacing = NSView::frame(minimize).origin.x - close_frame.origin.x;
+        for (index, button) in [
+            close,
+            minimize,
+            NSWindow::standardWindowButton_(ns_window, NSWindowButton::NSWindowZoomButton),
+        ]
+        .into_iter()
+        .filter(|button| *button != nil)
+        .enumerate()
+        {
+            let mut origin = NSView::frame(button).origin;
+            origin.x = LEFT_INSET + index as f64 * button_spacing;
+            NSView::setFrameOrigin(button, origin);
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default()
@@ -530,6 +586,10 @@ pub fn run() {
             // this alone doesn't cover.
             let cfg = Config::load();
             allow_output_dir_in_asset_scope(app, &cfg.output_dir)?;
+            #[cfg(target_os = "macos")]
+            if let Some(window) = app.get_webview_window("main") {
+                position_main_traffic_lights(&window)?;
+            }
             // Banner before detect: the detector's actions look the banner
             // state up through the app handle, so it must be managed by the
             // time the first action can possibly fire.

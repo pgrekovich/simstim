@@ -884,7 +884,7 @@ function App() {
         {showTopbar && (
         <header
           data-tauri-drag-region
-          className="flex h-14 shrink-0 items-center gap-3 px-5"
+          className="flex h-14 shrink-0 items-center gap-3 px-5 pb-[18px]"
         >
           {/* SessionView portals its Radix tab list here so the switcher is
               part of the 56 px toolbar while its context and mounted tab

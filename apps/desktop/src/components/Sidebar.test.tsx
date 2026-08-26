@@ -24,7 +24,6 @@ describe("Sidebar: recording indicator", () => {
         onDelete={vi.fn()}
         searchQuery=""
         onSearchChange={vi.fn()}
-        onOpenSettings={vi.fn()}
       />
     );
 
@@ -50,7 +49,6 @@ describe("Sidebar: recording indicator", () => {
         onDelete={vi.fn()}
         searchQuery=""
         onSearchChange={vi.fn()}
-        onOpenSettings={vi.fn()}
       />
     );
 
@@ -72,7 +70,6 @@ describe("Sidebar: recording indicator", () => {
         onDelete={vi.fn()}
         searchQuery=""
         onSearchChange={vi.fn()}
-        onOpenSettings={vi.fn()}
       />
     );
 
@@ -90,7 +87,6 @@ describe("Sidebar: recording indicator", () => {
         onDelete={vi.fn()}
         searchQuery=""
         onSearchChange={vi.fn()}
-        onOpenSettings={vi.fn()}
       />
     );
 
@@ -114,7 +110,6 @@ describe("Sidebar: session metadata", () => {
         onDelete={vi.fn()}
         searchQuery=""
         onSearchChange={vi.fn()}
-        onOpenSettings={vi.fn()}
       />
     );
 
@@ -138,7 +133,6 @@ describe("Sidebar: selected styling", () => {
         onDelete={vi.fn()}
         searchQuery=""
         onSearchChange={vi.fn()}
-        onOpenSettings={vi.fn()}
       />
     );
 
@@ -168,7 +162,6 @@ describe("Sidebar: selected styling", () => {
         onDelete={vi.fn()}
         searchQuery=""
         onSearchChange={vi.fn()}
-        onOpenSettings={vi.fn()}
       />
     );
 
@@ -198,7 +191,6 @@ describe("Sidebar: new note button", () => {
         onDelete={vi.fn()}
         searchQuery=""
         onSearchChange={vi.fn()}
-        onOpenSettings={vi.fn()}
       />
     );
 
@@ -222,7 +214,6 @@ describe("Sidebar: delete button", () => {
         onDelete={onDelete}
         searchQuery=""
         onSearchChange={vi.fn()}
-        onOpenSettings={vi.fn()}
       />
     );
 
@@ -244,7 +235,6 @@ describe("Sidebar: delete button", () => {
         onDelete={vi.fn()}
         searchQuery=""
         onSearchChange={vi.fn()}
-        onOpenSettings={vi.fn()}
       />
     );
 
@@ -253,7 +243,7 @@ describe("Sidebar: delete button", () => {
   });
 });
 
-describe("Sidebar: search and settings (stage 0.10)", () => {
+describe("Sidebar: search (stage 0.10)", () => {
   it("reports every keystroke through onSearchChange", () => {
     const onSearchChange = vi.fn();
     render(
@@ -266,7 +256,6 @@ describe("Sidebar: search and settings (stage 0.10)", () => {
         onDelete={vi.fn()}
         searchQuery=""
         onSearchChange={onSearchChange}
-        onOpenSettings={vi.fn()}
       />
     );
 
@@ -286,31 +275,10 @@ describe("Sidebar: search and settings (stage 0.10)", () => {
         onDelete={vi.fn()}
         searchQuery="quarterly"
         onSearchChange={vi.fn()}
-        onOpenSettings={vi.fn()}
       />
     );
 
     expect(screen.getByText("no matches")).toBeInTheDocument();
     expect(screen.queryByText("no sessions yet")).toBeNull();
-  });
-
-  it("opens settings from the footer button", () => {
-    const onOpenSettings = vi.fn();
-    render(
-      <Sidebar
-        sessions={[]}
-        selectedPath={null}
-        activePath={null}
-        onSelect={vi.fn()}
-        onNewSession={vi.fn()}
-        onDelete={vi.fn()}
-        searchQuery=""
-        onSearchChange={vi.fn()}
-        onOpenSettings={onOpenSettings}
-      />
-    );
-
-    screen.getByRole("button", { name: /settings/i }).click();
-    expect(onOpenSettings).toHaveBeenCalledTimes(1);
   });
 });

@@ -1,4 +1,4 @@
-import { Search, Settings, SquarePen, Trash2 } from "lucide-react";
+import { Search, SquarePen, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
@@ -17,8 +17,6 @@ interface SidebarProps {
   searchQuery: string;
   /** Keystroke-level; App debounces the actual `searchSessions` IPC call. */
   onSearchChange: (query: string) => void;
-  /** Footer Settings button; App owns the dialog. */
-  onOpenSettings: () => void;
 }
 
 interface SessionGroup {
@@ -89,7 +87,6 @@ export function Sidebar({
   onDelete,
   searchQuery,
   onSearchChange,
-  onOpenSettings,
 }: SidebarProps) {
   const groups = groupSessions(sessions);
   const searching = searchQuery.trim() !== "";
@@ -225,17 +222,6 @@ export function Sidebar({
             </div>
           ))
         )}
-      </div>
-
-      <div className="border-t border-sidebar-border px-3 py-2.5">
-        <Button
-          variant="ghost"
-          className="h-8 w-full justify-start gap-2 rounded-[7px] px-2 text-[12.5px] text-muted-foreground transition-colors duration-150 hover:bg-foreground/[0.08] hover:text-foreground active:bg-foreground/[0.15]"
-          onClick={onOpenSettings}
-        >
-          <Settings className="size-4" />
-          Settings
-        </Button>
       </div>
     </aside>
   );

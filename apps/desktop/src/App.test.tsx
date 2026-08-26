@@ -1181,7 +1181,7 @@ describe("App: note actions menu (stage 0.10)", () => {
 
     render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: /weekly sync/i }));
-    const trigger = await screen.findByRole("button", { name: /note actions/i });
+    const trigger = await screen.findByRole("button", { name: /more actions/i });
 
     fireEvent.pointerDown(trigger);
     fireEvent.click(trigger);
@@ -1196,12 +1196,17 @@ describe("App: note actions menu (stage 0.10)", () => {
     await waitFor(() =>
       expect(opener.revealItemInDir).toHaveBeenCalledExactlyOnceWith("/tmp/sync.md"),
     );
+
+    fireEvent.pointerDown(trigger);
+    fireEvent.click(trigger);
+    fireEvent.click(await screen.findByText("Settings"));
+    expect(await screen.findByRole("dialog")).toBeVisible();
   });
 
   it("hides the menu when nothing is selected", async () => {
     render(<App />);
     await screen.findByText("New Note");
-    expect(screen.queryByRole("button", { name: /note actions/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /more actions/i })).toBeNull();
   });
 });
 

@@ -130,6 +130,9 @@ behavior.
 - Keep native overlay title-bar behavior and preserve drag regions.
 - Restyle new-note, search, session rows, settings access, statuses, record
   control, and note actions using the new type and state hierarchy.
+- Settings access lives in the main toolbar overflow menu, not in a persistent
+  sidebar footer. The empty shortcut screen keeps its Settings row because its
+  toolbar is intentionally hidden.
 - Keep current search behavior. Do not replace it with Ask or a command palette.
 - Keep current two-pane layout. Do not add sidebar collapse yet.
 

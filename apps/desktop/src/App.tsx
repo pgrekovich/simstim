@@ -2,12 +2,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
-import { CircleAlert, Ellipsis, FileText, Folder, X } from "lucide-react";
+import { CircleAlert, Ellipsis, FileText, Folder, Settings, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { RecordButton } from "@/components/RecordButton";
@@ -873,7 +874,6 @@ function App() {
         onDelete={handleDeleteSession}
         searchQuery={searchQuery}
         onSearchChange={setSearchQuery}
-        onOpenSettings={() => setSettingsOpen(true)}
       />
 
       <div className="relative flex min-w-0 flex-1 flex-col">
@@ -911,28 +911,34 @@ function App() {
             onClick={sessionActive ? handleStop : () => void handleStart()}
           />
 
-          {/* File actions for the open note. Hidden while search owns the
-              main pane: the selection is invisible there, so acting on it
-              would be acting on something the user can't see. */}
-          {selectedPath !== null && searchResults === null && (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon" aria-label="Note actions">
-                  <Ellipsis />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuItem onSelect={() => void openPath(selectedPath)}>
-                  <FileText />
-                  Open file
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => void revealItemInDir(selectedPath)}>
-                  <Folder />
-                  Show in Finder
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          )}
+          {/* Global actions always live in overflow. Note-specific actions
+              only appear while the selected note owns the main pane. */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon" aria-label="More actions">
+                <Ellipsis />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              {selectedPath !== null && searchResults === null && (
+                <>
+                  <DropdownMenuItem onSelect={() => void openPath(selectedPath)}>
+                    <FileText />
+                    Open file
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => void revealItemInDir(selectedPath)}>
+                    <Folder />
+                    Show in Finder
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                </>
+              )}
+              <DropdownMenuItem onSelect={() => setSettingsOpen(true)}>
+                <Settings />
+                Settings
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </header>
         )}
 

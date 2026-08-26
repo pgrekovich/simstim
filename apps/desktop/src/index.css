@@ -111,6 +111,8 @@
     --sidebar-accent-foreground: #1E1B16;
     --sidebar-border: rgb(30 27 22 / 10%);
     --sidebar-ring: rgb(30 27 22 / 28%);
+    --scrollbar-thumb: rgb(30 27 22 / 22%);
+    --scrollbar-thumb-hover: rgb(30 27 22 / 36%);
 }
 
 .dark {
@@ -147,11 +149,39 @@
     --sidebar-accent-foreground: #F0EBDD;
     --sidebar-border: rgb(233 228 214 / 8%);
     --sidebar-ring: rgb(233 228 214 / 30%);
+    --scrollbar-thumb: rgb(233 228 214 / 24%);
+    --scrollbar-thumb-hover: rgb(233 228 214 / 40%);
 }
 
 @layer base {
   * {
     @apply border-border outline-ring/50;
+    scrollbar-color: var(--scrollbar-thumb) transparent;
+    scrollbar-width: thin;
+    }
+  *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+    }
+  *::-webkit-scrollbar-track,
+  *::-webkit-scrollbar-corner {
+    background: transparent;
+    }
+  *::-webkit-scrollbar-thumb {
+    min-height: 36px;
+    border: 2px solid transparent;
+    border-radius: 999px;
+    background: var(--scrollbar-thumb);
+    background-clip: padding-box;
+    }
+  *::-webkit-scrollbar-thumb:hover {
+    background: var(--scrollbar-thumb-hover);
+    background-clip: padding-box;
+    }
+  *::-webkit-scrollbar-button {
+    display: none;
+    width: 0;
+    height: 0;
     }
   body {
     @apply m-0 bg-background font-sans text-foreground;

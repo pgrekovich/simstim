@@ -302,6 +302,13 @@ describe("App: hot-mic fix (final review Critical finding)", () => {
     // handleStart against an already-running session instead of stopping it.
     emit("session-error", { message: "disk write failed" });
 
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Something went wrong");
+    expect(alert).toHaveTextContent("disk write failed");
+
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss error" }));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
     const button = await screen.findByRole("button", { name: /stop/i });
     expect(button).toBeVisible();
 
@@ -1226,7 +1233,7 @@ describe("App: background auto-enhance completion (stage 0.11)", () => {
     expect(document.body.textContent).toContain("by claude");
   });
 
-  it("surfaces a background enhance failure through the status line", async () => {
+  it("surfaces a background enhance failure through the global error notice", async () => {
     vi.mocked(ipc.listSessions).mockResolvedValue(one);
     render(<App />);
     await screen.findByRole("button", { name: /weekly sync/i });
@@ -1236,8 +1243,7 @@ describe("App: background auto-enhance completion (stage 0.11)", () => {
       ok: false,
       message: "Claude Code took longer than 5 minutes and was stopped",
     });
-    await waitFor(() =>
-      expect(document.body.textContent).toContain("took longer than 5 minutes"),
-    );
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("took longer than 5 minutes");
   });
 });

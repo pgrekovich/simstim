@@ -4,13 +4,8 @@ interface EmptyStateProps {
   onOpenSettings: () => void;
   /** Mirrors the Record button's gating: the row renders but stays inert. */
   recordingDisabled: boolean;
-  /**
-   * App's status line ("model not downloaded", a delete error, ...): the
-   * topbar that normally shows it is hidden on this screen, so it surfaces
-   * here instead of disappearing.
-   */
-  notice?: string;
-  noticeIsError?: boolean;
+  /** Explains why Start Recording is disabled without becoming a global notice. */
+  recordingHint?: string;
 }
 
 function Keys({ chars }: { chars: string[] }) {
@@ -63,8 +58,7 @@ export function EmptyState({
   onStartRecording,
   onOpenSettings,
   recordingDisabled,
-  notice,
-  noticeIsError = false,
+  recordingHint,
 }: EmptyStateProps) {
   return (
     <div className="flex h-full items-center justify-center">
@@ -76,19 +70,13 @@ export function EmptyState({
           onClick={onStartRecording}
           disabled={recordingDisabled}
         />
-        <div className="my-2 border-t" />
-        <Row label="Settings" keys={["⌘", ","]} onClick={onOpenSettings} />
-        {notice && (
-          <p
-            className={
-              noticeIsError
-                ? "mt-6 px-3 text-center text-xs text-destructive"
-                : "mt-6 px-3 text-center text-xs text-muted-foreground"
-            }
-          >
-            {notice}
+        {recordingHint && (
+          <p className="px-3 pb-1 font-mono text-[10.5px] text-muted-foreground">
+            {recordingHint}
           </p>
         )}
+        <div className="my-2 border-t" />
+        <Row label="Settings" keys={["⌘", ","]} onClick={onOpenSettings} />
       </div>
     </div>
   );

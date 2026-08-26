@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
-import { Ellipsis, FileText, Folder } from "lucide-react";
+import { CircleAlert, Ellipsis, FileText, Folder, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -370,7 +370,7 @@ function App() {
   }, []);
 
   // Worker-side errors (engine/VAD init, save failures) surfaced instead of
-  // living only in stderr: reflect them in the status line, same as a
+  // living only in stderr: reflect them in the global error notice, same as a
   // failed start/stop call, and refresh the sidebar (a save failure can mean
   // the on-disk session list changed underneath us).
   useEffect(() => {
@@ -566,7 +566,7 @@ function App() {
 
   // A background (auto) enhance finished (stage 0.11): refresh the open
   // note so the new summary appears without a manual switch-away-and-back,
-  // and surface failures through the status line -- an auto job has no
+  // and surface failures through the global error notice -- an auto job has no
   // awaiting promise to reject.
   useEffect(() => {
     const unlisten = listen<EnhanceDonePayload>("enhance-done", (event) => {
@@ -842,9 +842,8 @@ function App() {
   // priority, so a stale model-download reminder never masks it.
   const showModelHint = !sessionActive && !modelReady && status.kind === "idle";
   // The empty-state screen (nothing selected, no search, not recording)
-  // hides the topbar entirely -- a lone Record button floating over the
-  // shortcut menu reads as clutter -- so its branch renders a bare drag
-  // strip instead, and the status line surfaces inside EmptyState.
+  // hides the topbar entirely. A lone Record button floating over the
+  // shortcut menu reads as clutter, so its branch renders a bare drag strip.
   const showTopbar = sessionActive || searchResults !== null || selectedPath !== null;
   const statusText = showModelHint
     ? "model not downloaded"
@@ -856,9 +855,7 @@ function App() {
           ? "saving"
         : status.kind === "saved"
           ? "saved"
-          : status.kind === "error"
-            ? status.message
-            : "";
+          : "";
 
   return (
     <div className="flex h-screen bg-background text-foreground">
@@ -879,7 +876,7 @@ function App() {
         onOpenSettings={() => setSettingsOpen(true)}
       />
 
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="relative flex min-w-0 flex-1 flex-col">
         {!showTopbar && <div data-tauri-drag-region className="h-11 shrink-0" />}
         {/* Sits at the very window top, level with the traffic lights
             (overlay title bar), and doubles as that region's drag handle --
@@ -894,15 +891,11 @@ function App() {
               contents remain owned by SessionView. */}
           <div id="topbar-tabs-slot" className="flex min-w-0 flex-1 items-center" />
 
-          <span
-            className={
-              status.kind === "error"
-                ? "min-w-0 max-w-[50%] shrink-0 truncate font-mono text-[10.5px] text-destructive"
-                : "min-w-0 max-w-[50%] shrink-0 truncate font-mono text-[10.5px] text-muted-foreground"
-            }
-          >
-            {statusText}
-          </span>
+          {statusText && (
+            <span className="min-w-0 max-w-[35%] shrink-0 truncate font-mono text-[10.5px] text-muted-foreground">
+              {statusText}
+            </span>
+          )}
 
           {showModelHint && (
             <Button variant="outline" size="sm" onClick={() => setSettingsOpen(true)}>
@@ -943,6 +936,33 @@ function App() {
         </header>
         )}
 
+        {status.kind === "error" && (
+          <div
+            role="alert"
+            className="absolute right-5 top-16 z-40 flex w-[min(420px,calc(100%-40px))] items-start gap-3 rounded-[9px] border border-destructive/25 bg-card p-3.5 text-card-foreground shadow-[0_10px_30px_rgb(30_27_22/0.16)]"
+          >
+            <CircleAlert aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-destructive" />
+            <div className="min-w-0 flex-1">
+              <p className="font-mono text-[10.5px] font-semibold uppercase tracking-[0.06em] text-destructive">
+                Something went wrong
+              </p>
+              <p className="mt-1 text-[12.5px] leading-[1.45] [overflow-wrap:anywhere]">
+                {status.message}
+              </p>
+            </div>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-xs"
+              className="-mr-1 -mt-1 text-muted-foreground hover:text-foreground"
+              aria-label="Dismiss error"
+              onClick={() => setStatus(sessionActive ? { kind: "recording" } : { kind: "idle" })}
+            >
+              <X className="size-3.5" />
+            </Button>
+          </div>
+        )}
+
         <div className="flex min-h-0 flex-1 flex-col px-8 pb-7 pt-1">
           {searchResults !== null ? (
             // An active search owns the main pane: hits in context, query
@@ -962,8 +982,7 @@ function App() {
               onStartRecording={() => void handleStart()}
               onOpenSettings={() => setSettingsOpen(true)}
               recordingDisabled={busy || sessionActive || !modelReady}
-              notice={statusText || undefined}
-              noticeIsError={status.kind === "error"}
+              recordingHint={showModelHint ? "model not downloaded" : undefined}
             />
           ) : viewingActiveSession ? (
             <SessionView
@@ -992,7 +1011,25 @@ function App() {
               }}
             />
           ) : sessionDataError ? (
-            <p className="text-sm text-destructive">{sessionDataError}</p>
+            <div className="flex h-full items-center justify-center">
+              <div
+                role="alert"
+                className="flex w-full max-w-md items-start gap-3 rounded-[9px] border border-destructive/25 bg-card p-4 text-card-foreground shadow-[0_8px_24px_rgb(30_27_22/0.1)]"
+              >
+                <CircleAlert
+                  aria-hidden="true"
+                  className="mt-0.5 size-4 shrink-0 text-destructive"
+                />
+                <div className="min-w-0">
+                  <p className="font-mono text-[10.5px] font-semibold uppercase tracking-[0.06em] text-destructive">
+                    Could not open note
+                  </p>
+                  <p className="mt-1 text-[12.5px] leading-[1.45] [overflow-wrap:anywhere]">
+                    {sessionDataError}
+                  </p>
+                </div>
+              </div>
+            </div>
           ) : sessionData === null ? (
             <p className="text-sm text-muted-foreground">loading...</p>
           ) : (

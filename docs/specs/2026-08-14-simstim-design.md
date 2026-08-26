@@ -342,6 +342,12 @@ scope, design audit, discrepancies, and acceptance criteria live in
 of shipped behavior only. It does not add menu-bar, onboarding, waveform,
 chapters, diarization, calendar, or knowledge-chat behavior.
 
+Status (2026-08-27): implementation and the iterative light-theme owner review
+are complete on `codex/stage-1.2-interface-redesign`. The approved deviations
+are recorded in the interface redesign spec. Dark appearance, a real detected
+call, full-screen focus behavior, call end, and the standard full test run from
+the owner's terminal remain required before merge.
+
 ## Milestones after MVP-0
 
 1. Audio file kept next to the .md; re-transcribe command (whisper turbo).

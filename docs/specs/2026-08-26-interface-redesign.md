@@ -1,6 +1,8 @@
 # simstim interface redesign
 
-2026-08-26. Status: stage 1 in progress, owner review required.
+2026-08-27. Status: stage 1 implementation complete. Light-theme owner review
+passed after the integration polish cycle. Dark appearance and the final native
+call-detection e2e remain required before merge.
 
 This document translates the interface package in `design/` into product
 scope. The existing product rules in `2026-08-14-simstim-design.md` remain
@@ -253,3 +255,30 @@ stable, matching the existing product order.
 - No future-only control is interactive or presented as available.
 - All four repository gates pass.
 - Owner performs the final macOS e2e before the stage is merged.
+
+## Implemented deviations approved during owner review
+
+The iterative owner review on 2026-08-26 and 2026-08-27 approved these changes
+from the initial stage interpretation:
+
+1. The visible Settings navigation uses General, Audio, Models, and Summary.
+   This follows the detailed settings mockups more closely than the earlier
+   General, Recording, Transcription, and AI labels. The existing settings,
+   persistence, and internal section identifiers remain unchanged.
+2. Settings access moved to the main toolbar overflow menu. The empty shortcut
+   screen retains its Settings row because the toolbar is hidden there.
+3. The floating banner window is 392 px wide so its 8 px outer insets produce
+   the 376 px notification card shown in the detailed mockup. Its card, icon,
+   split action, menu, and hover close affordance follow that mockup.
+4. The floating banner no longer draws a visible countdown strip because the
+   approved detailed notification mockup has none. The 30 second auto-dismiss,
+   hover pause, event routing, non-activating panel behavior, and call-ended
+   lifetime are unchanged.
+5. The macOS traffic lights use a native content inset aligned to the 56 px
+   toolbar rhythm. This is presentation-only and preserves the overlay title
+   bar and drag regions.
+
+Final integration review also removed the duplicated model-missing status text
+from the toolbar. Open settings remains the single action there, preventing the
+three-tab layout from crowding Record at the default 800 px window width. The
+empty screen still explains why Start Recording is disabled.

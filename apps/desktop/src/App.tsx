@@ -896,7 +896,16 @@ function App() {
               >
                 <PanelLeftOpen className="size-4" />
               </Button>
-              <span aria-hidden="true" className="size-6 shrink-0" />
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-7"
+                aria-label="Search all notes"
+                title="Search (⌘K)"
+                onClick={() => setSearchOpen(true)}
+              >
+                <Search className="size-4" />
+              </Button>
               <Button
                 variant="ghost"
                 size="icon"
@@ -914,19 +923,6 @@ function App() {
               part of the 56 px toolbar while its context and mounted tab
               contents remain owned by SessionView. */}
           <div id="topbar-tabs-slot" className="flex min-w-0 flex-1 items-center" />
-
-          {sidebarCollapsed && (
-            <Button
-              variant="ghost"
-              size="icon"
-              className="size-7"
-              aria-label="Search all notes"
-              title="Search (⌘K)"
-              onClick={() => setSearchOpen(true)}
-            >
-              <Search className="size-4" />
-            </Button>
-          )}
 
           {showTopbar && statusText && (
             <span className="min-w-0 max-w-[35%] shrink-0 truncate font-mono text-[10.5px] text-muted-foreground">

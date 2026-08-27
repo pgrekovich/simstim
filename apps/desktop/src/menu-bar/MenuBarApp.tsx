@@ -133,7 +133,7 @@ export default function MenuBarApp({ previewState }: { previewState?: MenuBarSta
                 className="flex size-[30px] shrink-0 items-center justify-center rounded-full border border-destructive/30 bg-destructive/10 text-destructive outline-none hover:bg-destructive/20 focus-visible:ring-2 focus-visible:ring-ring"
                 onClick={() => void toggleRecording()}
               >
-                <span className="size-[9px] rounded-sm bg-current" />
+                <span className="size-[9px] rounded-[1px] bg-current" />
               </button>
             )}
           </div>

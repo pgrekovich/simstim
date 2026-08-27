@@ -126,7 +126,10 @@ impl MenuBar {
         }
         if let Some(tray) = self.app.tray_by_id(TRAY_ID) {
             let _ = tray.set_icon_with_as_template(Some(menu_icon(false)), true);
-            let _ = tray.set_title::<&str>(None);
+            // `None` leaves the previous native title visible on macOS with
+            // some tray-icon/Tauri combinations. An explicit empty title is
+            // the reliable way to remove the elapsed timer after Stop.
+            let _ = tray.set_title(Some(""));
             let _ = tray.set_tooltip(Some("simstim"));
         }
         self.emit_state();

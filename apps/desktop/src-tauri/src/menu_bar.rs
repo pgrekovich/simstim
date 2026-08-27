@@ -16,8 +16,8 @@ use tauri::{
 
 pub const WINDOW_LABEL: &str = "menu-bar";
 const TRAY_ID: &str = "simstim-menu-bar";
-const PANEL_WIDTH: f64 = 320.0;
-const PANEL_HEIGHT: f64 = 176.0;
+const PANEL_WIDTH: f64 = 352.0;
+const PANEL_HEIGHT: f64 = 180.0;
 const PANEL_GAP: f64 = 6.0;
 
 #[derive(Clone, Debug)]
@@ -147,18 +147,15 @@ impl MenuBar {
     }
 
     fn tick_timer(&self, generation: u64) -> bool {
-        let elapsed = {
-            let state = self.presentation.lock().unwrap();
-            let Some(recording) = &state.recording else {
-                return false;
-            };
-            if recording.generation != generation {
-                return false;
-            }
-            recording.started_at.elapsed()
+        let state = self.presentation.lock().unwrap();
+        let Some(recording) = &state.recording else {
+            return false;
         };
+        if recording.generation != generation {
+            return false;
+        }
         if let Some(tray) = self.app.tray_by_id(TRAY_ID) {
-            let _ = tray.set_title(Some(format_elapsed(elapsed)));
+            let _ = tray.set_title(Some(format_elapsed(recording.started_at.elapsed())));
         }
         true
     }
@@ -231,6 +228,9 @@ fn toggle_panel(app: &AppHandle, click: PhysicalPosition<f64>, rect: Rect) {
     let _ = window.set_position(position);
     let _ = window.show();
     let _ = window.set_focus();
+    if let Some(menu_bar) = app.try_state::<MenuBar>() {
+        menu_bar.emit_state();
+    }
 }
 
 fn panel_position(
@@ -346,7 +346,7 @@ mod tests {
     fn panel_stays_anchored_when_monitor_lookup_is_unavailable() {
         assert_eq!(
             panel_position(1_200.0, 48.0, 2.0, None),
-            PhysicalPosition::new(880, 60)
+            PhysicalPosition::new(848, 60)
         );
     }
 

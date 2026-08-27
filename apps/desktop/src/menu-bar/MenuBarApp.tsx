@@ -71,8 +71,8 @@ export default function MenuBarApp({ previewState }: { previewState?: MenuBarSta
 
   const recording = state.kind === "recording";
   return (
-    <main className="flex h-screen w-screen items-start p-3" aria-label="simstim menu bar">
-      <section className="relative w-full overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground shadow-[0_16px_44px_rgba(20,17,12,0.40)] dark:shadow-[0_16px_44px_rgba(0,0,0,0.60)]">
+    <main className="flex h-screen w-screen items-start justify-center pt-2.5" aria-label="simstim menu bar">
+      <section className="relative w-[296px] overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground shadow-[0_14px_26px_rgba(20,17,12,0.32)] dark:shadow-[0_14px_26px_rgba(0,0,0,0.52)]">
         {recording && (
           <div className="h-0.5 bg-[linear-gradient(90deg,transparent_0%,var(--destructive)_28%,var(--destructive)_72%,transparent_100%)]" />
         )}

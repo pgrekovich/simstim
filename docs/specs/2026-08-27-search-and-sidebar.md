@@ -1,6 +1,7 @@
 # Stage 2.0: collapsible sidebar and global search
 
-Status: approved for implementation on 2026-08-27.
+Status: implemented on `codex/stage-2.0-search-and-sidebar`; draft PR #1 is
+waiting for owner visual and end-to-end approval before merge.
 
 ## Goal
 
@@ -65,4 +66,3 @@ open anything the user has written or said. This stage adapts design sections
 - Opening and closing search never changes note data or recording state.
 - Existing session, recording, settings, and file-backed search tests stay
   green, with new focused tests for the two interaction changes.
-

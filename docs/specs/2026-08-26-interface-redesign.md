@@ -189,11 +189,12 @@ Implement the menu-bar item, idle and recording template icon, panel, and a
 global start/stop hotkey. Integrate final dock assets only after checking all
 required macOS sizes and template rendering.
 
-Status (2026-08-27): implementation started on `codex/stage-3-menu-bar`.
-The owner explicitly removed the Stage 2 waveform from the near-term plan:
-measured waveform value does not justify its implementation cost. Stage 3
-therefore starts immediately after transcript find. The bounded behavior and
-acceptance checks live in `docs/plans/2026-08-27-stage-3-menu-bar.md`.
+Status (2026-08-27): implemented on `codex/stage-3-menu-bar`, awaiting owner
+e2e. The owner explicitly removed the Stage 2 waveform from the near-term
+plan: measured waveform value does not justify its implementation cost. Stage
+3 therefore starts immediately after transcript find. The bounded behavior,
+implementation result, and acceptance checks live in
+`docs/plans/2026-08-27-stage-3-menu-bar.md`.
 
 ### Stage 4: richer transcript structure
 

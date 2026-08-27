@@ -1,6 +1,6 @@
 # Stage 3: optional app presence
 
-Date: 2026-08-27. Status: implementation in progress.
+Date: 2026-08-27. Status: implemented, awaiting owner e2e.
 
 ## Goal
 
@@ -65,3 +65,20 @@ global start/stop shortcut.
    break either action.
 8. Open window restores and focuses the main window.
 
+## Implementation result
+
+- Native Tauri tray item uses programmatically rendered black-alpha template
+  artwork, with an idle outline and filled recording centers.
+- Recording state updates the native menu-bar timer once per second and pushes
+  the same title/start-time state to the panel.
+- The compact panel is a pre-created hidden webview. It opens below the clicked
+  status item, clamps to the active monitor, follows the configured theme, and
+  hides when it loses focus.
+- Panel clicks and the global `Command+Shift+N` registration emit one toggle
+  event to the existing React recording coordinator. Menu-bar starts always
+  create a fresh session because no selected-note context is visible.
+- A debug `.app` bundle was built and ad-hoc signed successfully at
+  `target/debug/bundle/macos/simstim.app`.
+- Verification passed on 2026-08-27: `cargo test --workspace`,
+  `cargo clippy --workspace --all-targets -- -D warnings`, `pnpm test` (145
+  tests), and `pnpm build`.

@@ -196,6 +196,16 @@ plan: measured waveform value does not justify its implementation cost. Stage
 implementation result, and acceptance checks live in
 `docs/plans/2026-08-27-stage-3-menu-bar.md`.
 
+### Stage 3.1: built-in local summaries
+
+Status (2026-08-28): approved and started on
+`codex/stage-3.1-local-ai`. Add Qwen3.5 4B as an explicitly downloaded local
+Enhance provider through an embedded llama.cpp Metal backend. Existing cloud
+CLI providers remain optional alternatives. This stage deliberately stops at
+the already-shipped Summary surface; Ask and cross-note knowledge interaction
+remain Stage 5. See `docs/plans/2026-08-28-stage-3.1-local-ai.md` and
+`docs/research/local-summary-models.md`.
+
 ### Stage 4: richer transcript structure
 
 Add optional remote-speaker diarization and renameable speakers, then chapters

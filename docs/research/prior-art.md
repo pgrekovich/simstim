@@ -61,13 +61,48 @@ on by default. Storage is SQLite with "do not edit the app database directly"
 in the docs, and their own docs warn against putting the store inside an
 Obsidian vault. Markdown is a manual per-meeting export.
 
+## talat (Lumikey, proprietary, launched 2026)
+
+Update 2026-08-28: talat is now the closest direct product competitor. It is
+a polished local-first meeting recorder for Apple Silicon Macs and Windows:
+dual-stream capture without a bot, live on-device transcription, local AI
+summaries, action items and chapters, speaker recognition across meetings,
+calendar context, dictation, file import, full-text search, MCP, webhooks and
+configurable Markdown/PDF export. The built-in summary model is Qwen3.5 4B;
+cloud models and local Ollama models are optional.
+
+The overlap validates the market and the feasibility of useful summaries on
+an ordinary laptop, but the storage and ownership model is materially
+different:
+
+- talat keeps meetings in its own local database. Markdown and audio reach a
+  user-owned folder through export rules. simstim writes the durable Markdown
+  and audio artifacts directly and treats those files as the only database.
+- talat is proprietary and costs $9/month or $189 once after a ten-hour
+  trial. simstim has no accounts, subscriptions or feature gates and is
+  intended to be open source.
+- talat has no meeting-content telemetry, but its privacy policy documents
+  diagnostic and licence pings. simstim's only network activity is explicit
+  model download or an explicit text-only cloud operation.
+- talat advertises automatic recording when it detects a call. simstim never
+  starts capture without an explicit user action.
+
+Sources checked 2026-08-28: [capabilities](https://talat.app/capabilities),
+[exports](https://talat.app/docs/recordings/exports),
+[privacy](https://talat.app/privacy), and [pricing](https://talat.app/).
+
+Competitive implication: "private and local" is no longer an unoccupied
+position. simstim's defensible position is file-native, open-source and
+agent-friendly meeting memory: the user's normal files are the product, not
+an export from it.
+
 ## The gap
 
-"Transcribe -> plain .md in a folder -> nothing else" was unoccupied. Every
-local competitor reached for a database and a business model; every polished
-product reached for the cloud. The HN thread under Hyprnote's launch reads
-like a requirements doc for this app: keep the audio, plain markdown in a
-user-chosen folder, no account, real local ASR.
+"Transcribe -> plain .md in a folder -> nothing else" remains unoccupied.
+talat filled the polished local-first gap in 2026, but it still reached for a
+private database, licensing and exports. The HN thread under Hyprnote's launch
+reads like a requirements doc for this app: keep the audio, plain markdown in
+a user-chosen folder, no account, real local ASR.
 
 ## Consequences encoded in the product
 

@@ -1,7 +1,7 @@
 # Stage 2.0: collapsible sidebar and global search
 
-Status: implemented on `codex/stage-2.0-search-and-sidebar`; draft PR #1 is
-waiting for owner visual and end-to-end approval before merge.
+Status: implemented on `codex/stage-2.0-search-and-sidebar`; waiting for owner
+visual and end-to-end approval before merge.
 
 ## Goal
 

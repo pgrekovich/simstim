@@ -948,7 +948,10 @@ function App() {
               part of the 56 px toolbar while its context and mounted tab
               contents remain owned by SessionView. */}
           <div id="topbar-tabs-slot" className="flex min-w-0 flex-1 items-center overflow-hidden" />
-          <div id="topbar-transcript-find-slot" className="relative z-10 flex min-w-0 shrink-0 items-center" />
+          <div
+            id="topbar-transcript-find-slot"
+            className="relative z-10 flex min-w-0 shrink-0 items-center max-[960px]:absolute max-[960px]:right-8 max-[960px]:top-[60px]"
+          />
 
           {showTopbar && statusText && (
             <span className="min-w-0 max-w-[35%] shrink-0 truncate font-mono text-[10.5px] text-muted-foreground">

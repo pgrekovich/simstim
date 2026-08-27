@@ -28,10 +28,9 @@ Stage 2.0.
   wraps at both ends.
 - The active match scrolls into view. Escape or the close button closes find
   and removes its highlights without changing the selected tab.
-- At compact window widths, opening find temporarily reduces the tab switcher
-  to the active Transcript pill. This keeps find and recording controls from
-  overlapping; the complete switcher returns when find closes or the window
-  grows.
+- At compact window widths, find moves to a dedicated row below the toolbar.
+  The complete tab switcher and recording controls remain visible and usable,
+  and transcript content makes room for the contextual row.
 - An empty query and a query with no matches show `0 / 0`. Navigation is
   disabled in both states.
 - Live finalized lines join the current result set without stealing the active

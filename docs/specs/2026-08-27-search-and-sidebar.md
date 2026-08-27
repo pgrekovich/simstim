@@ -27,7 +27,8 @@ open anything the user has written or said. This stage adapts design sections
 ### Global search
 
 - `Command+K`, the search icon, and the former `Command+F` shortcut open the
-  same command-palette dialog.
+  same command-palette dialog. Stage 2.1 supersedes the `Command+F` alias with
+  transcript-local find when a note is selected.
 - Search reads the user's `.md` session files directly through the existing
   `search_sessions` command. No index, cache, or secondary database is added.
 - An empty query shows recent notes. A non-empty query groups results into
@@ -46,11 +47,10 @@ open anything the user has written or said. This stage adapts design sections
 - `Ask across all notes` is not included. The current app has no chat feature,
   and adding it would require product, privacy, provider, and persistence
   decisions that are outside this redesign.
-- Opening a spoken result opens its note but does not seek to an exact
-  transcript line. Precise in-note find and navigation remain a later Stage 2
-  item.
-- Search keeps `Command+F` as a compatibility alias until transcript-local
-  find exists. `Command+K` is the visible primary shortcut.
+- Opening a spoken result originally opened only its note. Stage 2.1 adds
+  precise in-note find and navigation.
+- Search originally kept `Command+F` as a compatibility alias. Stage 2.1 gives
+  it to transcript-local find while `Command+K` remains the global shortcut.
 - Search result ordering follows the existing backend order: newest notes
   first, with matching lines in file order.
 

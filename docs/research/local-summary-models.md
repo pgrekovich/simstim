@@ -3,9 +3,9 @@
 ## Decision
 
 Use Qwen3.5 4B in Q4_K_M GGUF form as simstim's first built-in local language
-model. Run it through an embedded llama.cpp backend with Metal enabled on
-Apple Silicon. Do not require Ollama, a local server, an account, or a separate
-installer.
+model. Run it through a bundled, short-lived llama.cpp helper with Metal
+enabled on Apple Silicon. Do not require Ollama, a local server, an account,
+or a separate installer.
 
 The model is a text-only dependency. The Qwen vision projector is not
 downloaded or loaded.
@@ -45,20 +45,22 @@ Primary sources checked 2026-08-28:
 ## Runtime contract
 
 - Model: `Qwen3.5-4B-Q4_K_M.gguf`, approximately 2.74 GB on disk.
-- Backend: llama.cpp embedded in the desktop binary, Metal on macOS.
+- Backend: llama.cpp in a bundled helper executable, Metal on macOS. Whisper
+  remains in the main process because both runtimes export incompatible GGML
+  symbols when linked into one executable.
 - Thinking: disabled in the chat template/request, never suppressed by
   deleting visible reasoning after generation.
 - Output: generated text only enters `## Summary`, labeled with the exact
   local model id. It never edits Notes or Transcript.
-- Context: the first slice keeps the current single-call Enhance contract.
-  Long-call chunk extraction and a second synthesis pass are the next quality
-  slice; advertising the model's maximum context is not a substitute for
-  testing useful context on an 8 GB M1.
+- Context: 8K per inference pass to bound memory on an 8 GB M1. Long calls use
+  local chunk extraction followed by local synthesis. No transcript content
+  is silently dropped.
 - Failure handling: empty output, malformed output, cancellation and memory
   pressure are normal user-facing failures. They must not leave a partial
   Summary or a stuck global enhance slot.
-- Lifecycle: load only for an explicit Enhance or enabled auto-enhance, then
-  release the model. The summary model must not compete with live ASR during
+- Lifecycle: launch only for an explicit Enhance or enabled auto-enhance, then
+  exit and release the model. The helper is not a server and never opens a
+  network port. The summary model must not compete with live ASR during
   recording.
 
 ## What this does not decide

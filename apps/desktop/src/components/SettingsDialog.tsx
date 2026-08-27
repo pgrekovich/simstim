@@ -368,6 +368,9 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
         refresh()
           .catch(() => {})
           .finally(() => {
+            listEnhanceProviders()
+              .then(setEnhanceProviders)
+              .catch(() => {});
             setProgress((prev) => {
               const next = { ...prev };
               delete next[payload.id];
@@ -622,6 +625,9 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
     try {
       await deleteModel(id);
       await refresh();
+      listEnhanceProviders()
+        .then(setEnhanceProviders)
+        .catch(() => {});
       setDeleteConfirmId(null);
     } catch (err) {
       setDeleteErrors((prev) => ({ ...prev, [id]: String(err) }));
@@ -1122,9 +1128,9 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                   className={cn("flex flex-col gap-5", activeSection !== "settings-ai" && "hidden")}
                 >
                   <p className="px-1 text-xs text-muted-foreground">
-                    Enhance runs an AI CLI you already have installed and pay for -- no API
-                    keys, nothing configured here ever phones home. Only the note's text and
-                    transcript are sent, and only when you click Enhance.
+                    Local summaries run entirely on this Mac. Claude Code and Codex are optional
+                    cloud providers: they send only the note's text and transcript, and only when
+                    you click Enhance or enable automatic summaries.
                   </p>
                   <Group>
                     {enhanceProviders.map((provider) => (
@@ -1134,13 +1140,15 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                         description={
                           provider.available
                             ? provider.version ?? "installed"
-                            : `not installed (no \`${provider.id}\` CLI found)`
+                            : provider.id === "local"
+                              ? "download Qwen3.5 4B in Models"
+                              : `not installed (no \`${provider.id}\` CLI found)`
                         }
                         error={
                           config?.enhance_provider === provider.id ? enhanceProviderError : null
                         }
                       >
-                        {provider.available && (
+                        {provider.available && provider.id !== "local" && (
                           <select
                             aria-label={`${provider.name} model`}
                             value={config?.enhance_models?.[provider.id] ?? ""}
@@ -1184,7 +1192,7 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                     {enhanceProviders.length === 0 && (
                       <Row
                         label="No providers probed yet"
-                        description="Install the claude or codex CLI and reopen Settings."
+                        description="Reopen Settings to check local and cloud providers."
                       />
                     )}
                   </Group>

@@ -36,6 +36,9 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "externalBin": [
+      "binaries/simstim-local-ai"
+    ],
     "macOS": {
       "signingIdentity": "-",
       "entitlements": "entitlements.plist",

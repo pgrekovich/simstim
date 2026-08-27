@@ -11,6 +11,7 @@ use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, State};
 
 use crate::config::Config;
+use crate::enhance::EnhanceState;
 use crate::retranscribe::RetranscribeState;
 
 /// Where a model's primary payload comes from and how it lives on disk once
@@ -509,6 +510,7 @@ fn validate_delete(
     id: &str,
     downloading: bool,
     retranscribing: bool,
+    enhancing: bool,
 ) -> Result<&'static ModelSpec, String> {
     let spec = find(id).ok_or_else(|| format!("unknown model id: {id}"))?;
 
@@ -524,9 +526,15 @@ fn validate_delete(
             spec.name
         ));
     }
-    if retranscribing {
+    if spec.role == ModelRole::Retranscribe && retranscribing {
         return Err(
             "a re-transcribe is currently running or queued; wait for it to finish before deleting a model"
+                .to_string(),
+        );
+    }
+    if spec.role == ModelRole::Summary && enhancing {
+        return Err(
+            "a summary is currently being generated; wait for it to finish before deleting the local model"
                 .to_string(),
         );
     }
@@ -575,8 +583,9 @@ fn delete_model_at(
     models_dir: &Path,
     downloading: bool,
     retranscribing: bool,
+    enhancing: bool,
 ) -> Result<(), String> {
-    let spec = validate_delete(id, downloading, retranscribing)?;
+    let spec = validate_delete(id, downloading, retranscribing, enhancing)?;
     remove_model_files(spec, models_dir)?;
     remove_tmp_download_file(id, models_dir)
 }
@@ -586,13 +595,20 @@ pub fn delete_model(
     id: String,
     downloads: State<'_, DownloadState>,
     jobs: State<'_, RetranscribeState>,
+    enhancements: State<'_, EnhanceState>,
 ) -> Result<(), String> {
     let downloading = downloads.0.lock().unwrap().contains(&id);
     // Important fix-review finding, stage 0.9: a job merely QUEUED (not yet
     // running) blocks a delete too, the same as one actively running --
     // see `RetranscribeState::has_queued_jobs`'s doc comment.
     let retranscribing = jobs.is_running() || jobs.has_queued_jobs();
-    delete_model_at(&id, &simstim_engine::models_dir(), downloading, retranscribing)
+    delete_model_at(
+        &id,
+        &simstim_engine::models_dir(),
+        downloading,
+        retranscribing,
+        enhancements.is_running(),
+    )
 }
 
 /// Streams `url` to `dest` with periodic `"download"` progress events,
@@ -1186,34 +1202,42 @@ mod tests {
 
         #[test]
         fn validate_delete_rejects_an_unknown_id() {
-            let err = validate_delete("no-such-model", false, false).unwrap_err();
+            let err = validate_delete("no-such-model", false, false, false).unwrap_err();
             assert!(err.contains("no-such-model"));
         }
 
         #[test]
         fn validate_delete_refuses_the_live_model() {
             // Global Constraints: deleting Parakeet would break recording.
-            let err = validate_delete("parakeet-tdt-0.6b-v3-int8", false, false).unwrap_err();
+            let err =
+                validate_delete("parakeet-tdt-0.6b-v3-int8", false, false, false).unwrap_err();
             assert!(err.contains("can't be deleted"), "{err}");
         }
 
         #[test]
         fn validate_delete_refuses_while_a_download_of_that_id_is_in_flight() {
             let err =
-                validate_delete("whisper-large-v3-turbo-q8", true, false).unwrap_err();
+                validate_delete("whisper-large-v3-turbo-q8", true, false, false).unwrap_err();
             assert!(err.contains("downloading"), "{err}");
         }
 
         #[test]
         fn validate_delete_refuses_while_a_retranscribe_job_is_running() {
             let err =
-                validate_delete("whisper-large-v3-turbo-q8", false, true).unwrap_err();
+                validate_delete("whisper-large-v3-turbo-q8", false, true, false).unwrap_err();
             assert!(err.contains("re-transcribe"), "{err}");
         }
 
         #[test]
         fn validate_delete_allows_an_idle_retranscribe_model() {
-            assert!(validate_delete("whisper-large-v3-turbo-q8", false, false).is_ok());
+            assert!(validate_delete("whisper-large-v3-turbo-q8", false, false, false).is_ok());
+        }
+
+        #[test]
+        fn validate_delete_refuses_the_summary_model_while_enhancing() {
+            let err =
+                validate_delete("qwen3.5-4b-q4-k-m", false, false, true).unwrap_err();
+            assert!(err.contains("summary"), "{err}");
         }
 
         #[test]
@@ -1222,7 +1246,7 @@ mod tests {
             let file_path = dir.path().join("ggml-large-v3-turbo-q8_0.bin");
             std::fs::write(&file_path, b"x").unwrap();
 
-            delete_model_at("whisper-large-v3-turbo-q8", dir.path(), false, false).unwrap();
+            delete_model_at("whisper-large-v3-turbo-q8", dir.path(), false, false, false).unwrap();
 
             assert!(!file_path.exists());
         }
@@ -1234,7 +1258,7 @@ mod tests {
             std::fs::create_dir_all(&model_dir).unwrap();
             std::fs::write(model_dir.join("tokens.txt"), b"x").unwrap();
 
-            let err = delete_model_at("parakeet-tdt-0.6b-v3-int8", dir.path(), false, false)
+            let err = delete_model_at("parakeet-tdt-0.6b-v3-int8", dir.path(), false, false, false)
                 .unwrap_err();
 
             assert!(err.contains("can't be deleted"), "{err}");
@@ -1247,7 +1271,7 @@ mod tests {
             let file_path = dir.path().join("ggml-large-v3-turbo-q8_0.bin");
             std::fs::write(&file_path, b"x").unwrap();
 
-            let err = delete_model_at("whisper-large-v3-turbo-q8", dir.path(), true, false)
+            let err = delete_model_at("whisper-large-v3-turbo-q8", dir.path(), true, false, false)
                 .unwrap_err();
 
             assert!(err.contains("downloading"), "{err}");
@@ -1260,7 +1284,7 @@ mod tests {
             let file_path = dir.path().join("ggml-large-v3-turbo-q8_0.bin");
             std::fs::write(&file_path, b"x").unwrap();
 
-            let err = delete_model_at("whisper-large-v3-turbo-q8", dir.path(), false, true)
+            let err = delete_model_at("whisper-large-v3-turbo-q8", dir.path(), false, true, false)
                 .unwrap_err();
 
             assert!(err.contains("re-transcribe"), "{err}");
@@ -1278,7 +1302,7 @@ mod tests {
             let tmp_path = dir.path().join(".download-whisper-large-v3-turbo-q8.tmp");
             std::fs::write(&tmp_path, vec![0u8; 1024]).unwrap();
 
-            delete_model_at("whisper-large-v3-turbo-q8", dir.path(), false, false).unwrap();
+            delete_model_at("whisper-large-v3-turbo-q8", dir.path(), false, false, false).unwrap();
 
             assert!(!tmp_path.exists(), "the stale tmp file must be removed");
         }
@@ -1291,7 +1315,7 @@ mod tests {
             let other_tmp_path = dir.path().join(".download-whisper-large-v3.tmp");
             std::fs::write(&other_tmp_path, vec![0u8; 1024]).unwrap();
 
-            delete_model_at("whisper-large-v3-turbo-q8", dir.path(), false, false).unwrap();
+            delete_model_at("whisper-large-v3-turbo-q8", dir.path(), false, false, false).unwrap();
 
             assert!(
                 other_tmp_path.exists(),

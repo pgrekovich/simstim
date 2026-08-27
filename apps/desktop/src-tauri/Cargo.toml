@@ -59,11 +59,6 @@ libc = "0.2"
 # cleans it up even on an early return/panic, which a hand-rolled
 # `std::env::temp_dir()` + manual removal would not.
 tempfile = "3"
-# Embedded local summaries. The binding pins a matching llama.cpp snapshot;
-# Metal is compiled into the macOS app so users do not need Ollama, Homebrew
-# or a background inference server.
-llama-cpp-2 = { version = "0.1.154", default-features = false, features = ["metal"] }
-
 [target.'cfg(target_os = "macos")'.dependencies]
 cidre = { version = "0.15", default-features = false, features = ["app", "at", "blocks", "core_audio"] }
 # AppKit must receive the titlebar frame as one atomic setFrame call. Updating

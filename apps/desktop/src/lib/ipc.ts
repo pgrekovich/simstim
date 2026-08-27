@@ -389,12 +389,12 @@ export function enhanceSession(path: string): Promise<string> {
   return invoke("enhance_session", { path });
 }
 
-/** Which AI CLIs are installed and runnable. Mirrors `enhance::list_enhance_providers`. */
+/** Which local and cloud summary providers are ready. Mirrors `enhance::list_enhance_providers`. */
 export function listEnhanceProviders(): Promise<EnhanceProviderInfo[]> {
   return invoke("list_enhance_providers");
 }
 
-/** Sets and persists which CLI `enhanceSession` runs. Mirrors `config::set_enhance_provider`. */
+/** Sets and persists which summary provider `enhanceSession` runs. */
 export function setEnhanceProvider(provider: string): Promise<void> {
   return invoke("set_enhance_provider", { provider });
 }

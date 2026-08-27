@@ -23,6 +23,7 @@ vi.mock("@/lib/ipc", () => ({
   setEnhanceModel: vi.fn().mockResolvedValue(undefined),
   setAutoEnhance: vi.fn().mockResolvedValue(undefined),
   listEnhanceProviders: vi.fn().mockResolvedValue([
+    { id: "local", name: "Local · Qwen3.5 4B", available: false, version: null },
     { id: "claude", name: "Claude Code", available: true, version: "2.0.0 (Claude Code)" },
     { id: "codex", name: "Codex", available: false, version: null },
   ]),
@@ -67,6 +68,11 @@ beforeEach(() => {
   vi.mocked(ipc.setActiveModel).mockClear().mockResolvedValue(undefined);
   vi.mocked(ipc.setRetranscribeModel).mockClear().mockResolvedValue(undefined);
   vi.mocked(ipc.deleteModel).mockClear().mockResolvedValue(undefined);
+  vi.mocked(ipc.listEnhanceProviders).mockClear().mockResolvedValue([
+    { id: "local", name: "Local · Qwen3.5 4B", available: false, version: null },
+    { id: "claude", name: "Claude Code", available: true, version: "2.0.0 (Claude Code)" },
+    { id: "codex", name: "Codex", available: false, version: null },
+  ]);
 });
 
 describe("SettingsDialog: Dock visibility (stage 3)", () => {
@@ -677,6 +683,7 @@ describe("SettingsDialog: AI enhance provider (stage 0.11)", () => {
     await openAiSection();
 
     await screen.findByText("2.0.0 (Claude Code)");
+    expect(screen.getByText(/download Qwen3.5 4B in Models/i)).toBeInTheDocument();
     expect(screen.getByText(/not installed \(no `codex` CLI found\)/i)).toBeInTheDocument();
 
     const claudeRadio = screen.getByRole("radio", { name: "Claude Code" });
@@ -687,6 +694,7 @@ describe("SettingsDialog: AI enhance provider (stage 0.11)", () => {
 
   it("persists a provider switch", async () => {
     vi.mocked(ipc.listEnhanceProviders).mockResolvedValue([
+      { id: "local", name: "Local · Qwen3.5 4B", available: true, version: "on-device · Metal" },
       { id: "claude", name: "Claude Code", available: true, version: "2.0.0" },
       { id: "codex", name: "Codex", available: true, version: "codex-cli 0.149.0" },
     ]);
@@ -698,6 +706,18 @@ describe("SettingsDialog: AI enhance provider (stage 0.11)", () => {
       expect(ipc.setEnhanceProvider).toHaveBeenCalledExactlyOnceWith("codex"),
     );
     expect(codexRadio).toBeChecked();
+  });
+
+  it("offers the downloaded local provider without a model override menu", async () => {
+    vi.mocked(ipc.getConfig).mockResolvedValue({ ...baseConfig, enhance_provider: "local" });
+    vi.mocked(ipc.listEnhanceProviders).mockResolvedValue([
+      { id: "local", name: "Local · Qwen3.5 4B", available: true, version: "on-device · Metal" },
+      { id: "claude", name: "Claude Code", available: true, version: "2.0.0" },
+    ]);
+    await openAiSection();
+
+    expect(await screen.findByRole("radio", { name: "Local · Qwen3.5 4B" })).toBeChecked();
+    expect(screen.queryByRole("combobox", { name: /local.*model/i })).not.toBeInTheDocument();
   });
 });
 

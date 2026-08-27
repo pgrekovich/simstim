@@ -200,8 +200,9 @@ implementation result, and acceptance checks live in
 
 Status (2026-08-28): approved and started on
 `codex/stage-3.1-local-ai`. Add Qwen3.5 4B as an explicitly downloaded local
-Enhance provider through an embedded llama.cpp Metal backend. Existing cloud
-CLI providers remain optional alternatives. This stage deliberately stops at
+Enhance provider through a bundled, short-lived llama.cpp Metal worker. It is
+isolated from Whisper's conflicting GGML runtime and is not a background
+server. Existing cloud CLI providers remain optional alternatives. This stage deliberately stops at
 the already-shipped Summary surface; Ask and cross-note knowledge interaction
 remain Stage 5. See `docs/plans/2026-08-28-stage-3.1-local-ai.md` and
 `docs/research/local-summary-models.md`.

@@ -1010,7 +1010,6 @@ dependencies = [
  "futures-util",
  "hound",
  "libc",
- "llama-cpp-2",
  "objc",
  "reqwest",
  "serde",
@@ -4144,6 +4143,16 @@ dependencies = [
  "hound",
  "sherpa-onnx",
  "whisper-rs",
+]
+
+[[package]]
+name = "simstim-local-ai"
+version = "0.1.0"
+dependencies = [
+ "encoding_rs",
+ "llama-cpp-2",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

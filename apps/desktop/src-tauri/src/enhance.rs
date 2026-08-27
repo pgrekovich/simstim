@@ -1,15 +1,15 @@
 //! AI enhance (stage 0.11): Granola's core mechanic on our terms.
 //!
 //! The user's rough notes are the primary signal; the transcript is backing
-//! material. `enhance_session` feeds both to a locally-installed AI CLI --
-//! `claude` (Claude Code) or `codex` (OpenAI Codex), whichever the user
-//! already pays for -- and writes the result into the note's `## Summary`
-//! section, labeled with the provider. No API keys, nothing configured
-//! beyond having the CLI logged in.
+//! material. `enhance_session` feeds both either to the embedded local Qwen
+//! model or to a locally-installed AI CLI (`claude` or `codex`) and writes
+//! the result into the note's `## Summary` section, labeled with the exact
+//! provider/model.
 //!
 //! Product rules honored here:
-//! - Text-only leaves the machine, and only on an explicit click (rule 2:
-//!   any cloud step is opt-in and text-only). Audio never goes anywhere.
+//! - The local provider sends nothing anywhere. With a cloud CLI, text-only
+//!   leaves the machine and only on an explicit click or explicit automatic
+//!   summary opt-in (rule 2). Audio never goes anywhere.
 //! - The user's words are sacred (rule 6): output lands in `## Summary`,
 //!   never inside `## Notes`. Re-enhancing replaces only the summary.
 //! - Single writer (rule 5): the currently-recording or finalizing session
@@ -42,16 +42,37 @@ use crate::AppState;
 /// transcript is a big prompt, and subscription CLIs can queue.
 const ENHANCE_TIMEOUT: Duration = Duration::from_secs(300);
 
-/// One runnable provider: the CLI this app knows how to drive.
+/// One runnable provider: either the embedded local model or a cloud CLI.
+#[derive(Clone, Copy)]
+enum ProviderKind {
+    Local { model_id: &'static str },
+    Cli { binary: &'static str },
+}
+
 struct ProviderSpec {
     id: &'static str,
     name: &'static str,
-    binary: &'static str,
+    kind: ProviderKind,
 }
 
 const PROVIDERS: &[ProviderSpec] = &[
-    ProviderSpec { id: "claude", name: "Claude Code", binary: "claude" },
-    ProviderSpec { id: "codex", name: "Codex", binary: "codex" },
+    ProviderSpec {
+        id: "local",
+        name: "Local · Qwen3.5 4B",
+        kind: ProviderKind::Local {
+            model_id: crate::local_ai::MODEL_ID,
+        },
+    },
+    ProviderSpec {
+        id: "claude",
+        name: "Claude Code",
+        kind: ProviderKind::Cli { binary: "claude" },
+    },
+    ProviderSpec {
+        id: "codex",
+        name: "Codex",
+        kind: ProviderKind::Cli { binary: "codex" },
+    },
 ];
 
 /// IPC-facing provider row for the Settings AI section. Mirrors
@@ -69,6 +90,12 @@ pub struct EnhanceProviderInfo {
 /// processes). Holds the running session's path for the error message.
 #[derive(Default)]
 pub struct EnhanceState(Mutex<Option<String>>);
+
+impl EnhanceState {
+    pub fn is_running(&self) -> bool {
+        self.0.lock().unwrap().is_some()
+    }
+}
 
 /// Resolves `binary` to an executable path. A bundled GUI app launches with
 /// a minimal PATH (no /opt/homebrew/bin), so well-known install dirs are
@@ -113,13 +140,22 @@ pub async fn list_enhance_providers() -> Vec<EnhanceProviderInfo> {
     tauri::async_runtime::spawn_blocking(|| {
         PROVIDERS
             .iter()
-            .map(|spec| {
-                let version = probe_version(spec.binary);
-                EnhanceProviderInfo {
+            .map(|spec| match spec.kind {
+                ProviderKind::Local { model_id } => EnhanceProviderInfo {
                     id: spec.id.to_string(),
                     name: spec.name.to_string(),
-                    available: version.is_some(),
-                    version,
+                    available: crate::models::model_ready(model_id),
+                    version: crate::models::model_ready(model_id)
+                        .then(|| "on-device · Metal".to_string()),
+                },
+                ProviderKind::Cli { binary } => {
+                    let version = probe_version(binary);
+                    EnhanceProviderInfo {
+                        id: spec.id.to_string(),
+                        name: spec.name.to_string(),
+                        available: version.is_some(),
+                        version,
+                    }
                 }
             })
             .collect()
@@ -134,7 +170,7 @@ pub async fn list_enhance_providers() -> Vec<EnhanceProviderInfo> {
 /// the ask flips to a fixed structure: short summary, key points, action
 /// items. Kept as a plain function of the inputs so tests can pin its shape
 /// without running any CLI.
-fn build_prompt(title: &str, notes: &str, transcript: &str) -> String {
+pub(crate) fn build_prompt(title: &str, notes: &str, transcript: &str) -> String {
     let notes_block = if notes.trim().is_empty() {
         "(the user took no notes during this call)".to_string()
     } else {
@@ -173,6 +209,9 @@ fn build_prompt(title: &str, notes: &str, transcript: &str) -> String {
 /// id on the CLI's default model, `provider/model` with an override -- the
 /// user asked to always be able to tell WHAT generated a summary.
 fn summary_label(spec: &ProviderSpec, model: Option<&str>) -> String {
+    if matches!(spec.kind, ProviderKind::Local { .. }) {
+        return crate::local_ai::SUMMARY_LABEL.to_string();
+    }
     match model {
         Some(m) => format!("{}/{}", spec.id, m),
         None => spec.id.to_string(),
@@ -183,8 +222,11 @@ fn summary_label(spec: &ProviderSpec, model: Option<&str>) -> String {
 /// default when set) and returns the generated text. Blocking -- callers
 /// run it inside `spawn_blocking`; killed at [`ENHANCE_TIMEOUT`].
 fn run_provider(spec: &ProviderSpec, model: Option<&str>, prompt: &str) -> Result<String, String> {
-    let binary = resolve_binary(spec.binary)
-        .ok_or_else(|| format!("{} isn't installed (no `{}` on this Mac)", spec.name, spec.binary))?;
+    let ProviderKind::Cli { binary } = spec.kind else {
+        return Err("the local provider must run through the embedded model".to_string());
+    };
+    let binary = resolve_binary(binary)
+        .ok_or_else(|| format!("{} isn't installed (no `{}` on this Mac)", spec.name, binary))?;
     // A fresh, empty working dir: both CLIs are agentic and would otherwise
     // read whatever project context (CLAUDE.md, git history) the cwd holds.
     let workdir = tempfile::tempdir().map_err(|e| e.to_string())?;
@@ -366,7 +408,19 @@ fn enhance_path_blocking<R: tauri::Runtime>(
     // The slot is held; release it on EVERY exit path below.
     let result = (|| {
         let prompt = build_prompt(&existing.title, &existing.notes, &existing.transcript);
-        let summary = run_provider(spec, model.as_deref(), &prompt)?;
+        let summary = match spec.kind {
+            ProviderKind::Local { model_id } => {
+                let model_path = crate::models::model_file_path(model_id)?;
+                crate::local_ai::summarize(
+                    &model_path,
+                    &existing.title,
+                    &existing.notes,
+                    &existing.transcript,
+                    &prompt,
+                )?
+            }
+            ProviderKind::Cli { .. } => run_provider(spec, model.as_deref(), &prompt)?,
+        };
         // Re-check the single-writer rule right before the write: the
         // user could have started recording into this same note while
         // the provider was thinking.
@@ -525,6 +579,12 @@ mod tests {
         }
     }
 
+    #[test]
+    fn local_summary_label_records_the_exact_model() {
+        let spec = PROVIDERS.iter().find(|spec| spec.id == "local").unwrap();
+        assert_eq!(summary_label(spec, None), crate::local_ai::SUMMARY_LABEL);
+    }
+
     /// Manual e2e: runs the REAL configured provider CLI over a tiny fake
     /// call. Needs a logged-in `claude` on this machine; costs a real
     /// (small) request. Run with:
@@ -532,7 +592,7 @@ mod tests {
     #[test]
     #[ignore = "spawns the real claude CLI; run manually"]
     fn enhance_manual_e2e_real_provider() {
-        let spec = &PROVIDERS[0];
+        let spec = PROVIDERS.iter().find(|spec| spec.id == "claude").unwrap();
         let prompt = build_prompt(
             "Test call",
             "- agreed to ship v2 friday",

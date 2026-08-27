@@ -249,7 +249,7 @@ pub fn set_show_in_dock(show_in_dock: bool, app: tauri::AppHandle) -> Result<(),
     Ok(())
 }
 
-/// Sets and persists which CLI `enhance_session` runs (stage 0.11).
+/// Sets and persists which local or cloud provider `enhance_session` runs.
 /// Validates against [`VALID_ENHANCE_PROVIDERS`] rather than persisting an
 /// id the runner wouldn't know how to spawn.
 #[tauri::command]

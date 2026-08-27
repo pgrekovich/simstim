@@ -4,6 +4,7 @@ pub mod banner;
 pub mod config;
 pub mod detect;
 pub mod enhance;
+pub mod local_ai;
 pub mod models;
 pub mod menu_bar;
 pub mod retranscribe;

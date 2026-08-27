@@ -198,8 +198,8 @@ implementation result, and acceptance checks live in
 
 ### Stage 3.1: built-in local summaries
 
-Status (2026-08-28): approved and started on
-`codex/stage-3.1-local-ai`. Add Qwen3.5 4B as an explicitly downloaded local
+Status (2026-08-28): implemented on `codex/stage-3.1-local-ai`, awaiting owner
+M1 quality and memory e2e. Qwen3.5 4B is an explicitly downloaded local
 Enhance provider through a bundled, short-lived llama.cpp Metal worker. It is
 isolated from Whisper's conflicting GGML runtime and is not a background
 server. Existing cloud CLI providers remain optional alternatives. This stage deliberately stops at

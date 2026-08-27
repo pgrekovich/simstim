@@ -231,6 +231,9 @@ Out of 0.7: meeting detection, tray, hotkeys, enhance, calendar.
 - Compression costs about 4 percent WER versus lossless (measured on English/German/French/Spanish; Russian unmeasured). AAC 32 kbps is the default because raising the bitrate does not recover that accuracy (AAC 64k measured at 4.3 percent vs 3.8 percent for 32k), so the real choice is lossless or not.
 - Continuing a recording into a note whose audio is in the other format re-encodes the combined audio into the current format.
 - FLAC block padding accumulates at seams when continuing a session: each segment's trailing block pads to up to 256ms of silence, so N continuations add up to N-1 seams of padding (accepted as a size cost, exact sync is preserved).
+- Built-in Qwen summary generation is implemented but has not completed the
+  owner's real M1 quality and peak-memory e2e. The model is not downloaded
+  automatically; Settings shows the 2.74 GB cost before the explicit download.
 
 ## Stage 1.0: call detection (approved 2026-08-16, owner: "the most important thing")
 
@@ -346,6 +349,24 @@ Status (2026-08-27): stage 1.2 shipped. The owner approved the final visual and
 native e2e after the integration polish cycle and authorized merge and release
 as v0.6.0. The approved deviations are recorded in the interface redesign
 spec.
+
+## Stage 3.1: built-in local summaries (implemented 2026-08-28)
+
+Qwen3.5 4B Q4_K_M is the default provider for new installs. The model is an
+explicit 2.74 GB download and runs through a bundled, short-lived llama.cpp
+Metal helper, with no Ollama, account, background server or network port.
+Whisper stays in the main process because the two runtimes export conflicting
+GGML symbols when linked together. Short calls use one pass; long calls use
+local chunk extraction plus local synthesis without truncating the transcript.
+Generated text replaces only `## Summary` and is labeled
+`local/qwen3.5-4b-q4-k-m`. Existing explicit Claude Code and Codex selections
+remain unchanged and available as cloud alternatives.
+
+Status (2026-08-28): implemented on `codex/stage-3.1-local-ai`; all four gates
+and a signed release bundle with the helper pass. Awaiting the owner's native
+M1 quality and peak-memory e2e before merge. See
+`docs/plans/2026-08-28-stage-3.1-local-ai.md` and
+`docs/research/local-summary-models.md`.
 
 ## Milestones after MVP-0
 

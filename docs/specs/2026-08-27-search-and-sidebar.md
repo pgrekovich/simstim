@@ -1,7 +1,6 @@
 # Stage 2.0: collapsible sidebar and global search
 
-Status: implemented on `codex/stage-2.0-search-and-sidebar`; waiting for owner
-visual and end-to-end approval before merge.
+Status: merged into `main` on 2026-08-27.
 
 ## Goal
 

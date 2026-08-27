@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <clipPath id="app-shape">
+      <rect x="64" y="64" width="896" height="896" rx="204" />
+    </clipPath>
+  </defs>
+  <g clip-path="url(#app-shape)">
+    <rect x="64" y="64" width="896" height="896" fill="#1E1B16" />
+    <g transform="translate(64 64) scale(.875)">
+      <rect x="316" y="486" width="392" height="52" rx="26" fill="#C9A24D" fill-opacity=".34" />
+      <circle cx="316" cy="512" r="140" fill="none" stroke="#C9A24D" stroke-width="50" />
+      <circle cx="708" cy="512" r="140" fill="none" stroke="#C9A24D" stroke-width="50" />
+      <circle cx="316" cy="512" r="32" fill="#C9A24D" />
+      <circle cx="708" cy="512" r="32" fill="#C9A24D" />
+    </g>
+  </g>
+</svg>

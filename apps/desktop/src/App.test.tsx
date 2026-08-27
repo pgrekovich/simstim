@@ -1186,7 +1186,10 @@ describe("App: empty state and global hotkeys (stage 0.10)", () => {
     const showSidebar = screen.getByRole("button", { name: /show sidebar/i });
     expect(showSidebar.className).not.toContain("bg-foreground/[0.06]");
     expect(showSidebar.parentElement?.className).toContain("w-56");
-    expect(showSidebar.nextElementSibling).toHaveAttribute("aria-hidden", "true");
+    expect(showSidebar.nextElementSibling).toHaveAttribute(
+      "aria-label",
+      "Search all notes",
+    );
     expect(showSidebar.nextElementSibling?.nextElementSibling).toHaveAttribute(
       "aria-label",
       "New note",

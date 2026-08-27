@@ -2,7 +2,17 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
-import { CircleAlert, Ellipsis, FileText, Folder, Settings, X } from "lucide-react";
+import {
+  CircleAlert,
+  Ellipsis,
+  FileText,
+  Folder,
+  PanelLeftOpen,
+  Search,
+  Settings,
+  SquarePen,
+  X,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -13,7 +23,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { RecordButton } from "@/components/RecordButton";
 import { EmptyState } from "@/components/EmptyState";
-import { SearchResults } from "@/components/SearchResults";
+import { GlobalSearch } from "@/components/GlobalSearch";
 import { SessionView, type SessionViewHandle } from "@/components/SessionView";
 import { Sidebar } from "@/components/Sidebar";
 import { SettingsDialog } from "@/components/SettingsDialog";
@@ -22,7 +32,6 @@ import {
   deleteSession,
   getConfig,
   listSessions,
-  searchSessions,
   readSession,
   showMainWindow,
   startRecording,
@@ -33,7 +42,6 @@ import {
   type EnhanceDonePayload,
   type ModelInfo,
   type RetranscribeProgress,
-  type SearchHit,
   type SessionData,
   type SessionErrorPayload,
   type SessionMeta,
@@ -57,6 +65,15 @@ import { initTheme } from "@/lib/theme";
  * forever.
  */
 const MODEL_LOAD_FALLBACK_MS = 15_000;
+const SIDEBAR_COLLAPSED_KEY = "simstim.sidebar-collapsed";
+
+function initialSidebarCollapsed(): boolean {
+  try {
+    return window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Starting title/notes for a freshly started recording that has no session
@@ -102,6 +119,8 @@ function App() {
   const [modelReady, setModelReady] = useState(true);
   const [busy, setBusy] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(initialSidebarCollapsed);
   const [autoStopAfterCall, setAutoStopAfterCall] = useState(false);
   const loadingFallbackRef = useRef<number | null>(null);
   const callLifecycleRef = useRef({
@@ -120,9 +139,6 @@ function App() {
 
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
-  const [searchQuery, setSearchQuery] = useState("");
-  /** `null` = not searching, show `sessions`; else the filtered hits. */
-  const [searchResults, setSearchResults] = useState<SearchHit[] | null>(null);
   // The path returned by `start_recording`, while a session is actively
   // being recorded (cleared on stop). Used to decide whether the content
   // pane should show the live in-memory `lines` instead of reading the file
@@ -246,6 +262,14 @@ function App() {
       });
   }, []);
 
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(sidebarCollapsed));
+    } catch {
+      // A blocked localStorage should not make the application unusable.
+    }
+  }, [sidebarCollapsed]);
+
   // The floating banner window (stage 1.1) owns rendering call
   // suggestions; its clicks forward here so recording keeps its single
   // code path. Same latest-value-through-a-ref pattern as handleStopRef:
@@ -292,34 +316,6 @@ function App() {
       return null;
     }
   }, []);
-
-  // Search (stage 0.10): a non-blank query swaps the sidebar's list for
-  // `search_sessions`' full-text result. Debounced per keystroke; keyed on
-  // `sessions` too, so every sidebar refresh (a stop landing, a delete, a
-  // window focus) re-runs the active search instead of leaving stale hits.
-  // The `cancelled` guard keeps an older, slower search from clobbering a
-  // newer one's result after the debounce timer already swapped queries.
-  useEffect(() => {
-    if (searchQuery.trim() === "") {
-      setSearchResults(null);
-      return;
-    }
-    let cancelled = false;
-    const timer = window.setTimeout(() => {
-      searchSessions(searchQuery)
-        .then((hits) => {
-          if (!cancelled) setSearchResults(hits);
-        })
-        .catch(() => {
-          // A transient scan failure keeps the previous hits on screen,
-          // same policy as refreshSessions.
-        });
-    }, 150);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-    };
-  }, [searchQuery, sessions]);
 
   // Refresh triggers (Global Constraints / Task 5 brief): mount, window
   // focus, recording start/stop (handled in handleStart/handleStop below),
@@ -752,6 +748,7 @@ function App() {
     newNote: () => {},
     startRecording: () => {},
     openSettings: () => {},
+    openSearch: () => {},
   });
   useEffect(() => {
     hotkeysRef.current = {
@@ -762,11 +759,15 @@ function App() {
         void handleStart();
       },
       openSettings: () => setSettingsOpen(true),
+      openSearch: () => {
+        if (!settingsOpen) setSearchOpen(true);
+      },
     };
   });
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       if (!e.metaKey || e.altKey || e.ctrlKey || e.repeat) return;
+      if (document.querySelector('[role="dialog"]')) return;
       const key = e.key.toLowerCase();
       if (key === "n" && e.shiftKey) {
         e.preventDefault();
@@ -777,11 +778,12 @@ function App() {
       } else if (key === "," && !e.shiftKey) {
         e.preventDefault();
         hotkeysRef.current.openSettings();
-      } else if (key === "f" && !e.shiftKey) {
+      } else if ((key === "k" || key === "f") && !e.shiftKey) {
         e.preventDefault();
-        const search = document.getElementById("session-search") as HTMLInputElement | null;
-        search?.focus();
-        search?.select();
+        hotkeysRef.current.openSearch();
+      } else if (key === "\\" && !e.shiftKey) {
+        e.preventDefault();
+        setSidebarCollapsed((collapsed) => !collapsed);
       }
     }
     window.addEventListener("keydown", onKeyDown);
@@ -843,10 +845,10 @@ function App() {
   // the default 800 px window width. The empty state still carries the text
   // hint because it has no toolbar action.
   const showModelHint = !sessionActive && !modelReady && status.kind === "idle";
-  // The empty-state screen (nothing selected, no search, not recording)
+  // The empty-state screen (nothing selected and not recording)
   // hides the topbar entirely. A lone Record button floating over the
   // shortcut menu reads as clutter, so its branch renders a bare drag strip.
-  const showTopbar = sessionActive || searchResults !== null || selectedPath !== null;
+  const showTopbar = sessionActive || selectedPath !== null;
   const statusText = status.kind === "loading-model"
     ? "loading model"
     : status.kind === "recording"
@@ -859,67 +861,102 @@ function App() {
 
   return (
     <div className="flex h-screen bg-background text-foreground">
-      <Sidebar
-        sessions={searchResults ?? sessions}
+      {!sidebarCollapsed && <Sidebar
+        sessions={sessions}
         selectedPath={selectedPath}
         activePath={activePath}
         onSelect={(path) => {
           setSelectedPath(path);
-          // Picking a row while searching is opening a result: clear the
-          // query so the session view replaces the results pane.
-          if (searchQuery !== "") setSearchQuery("");
         }}
         onNewSession={handleNewSession}
+        onCollapse={() => setSidebarCollapsed(true)}
+        onOpenSearch={() => setSearchOpen(true)}
         onDelete={handleDeleteSession}
-        searchQuery={searchQuery}
-        onSearchChange={setSearchQuery}
-      />
+      />}
 
       <div className="relative flex min-w-0 flex-1 flex-col">
-        {!showTopbar && <div data-tauri-drag-region className="h-11 shrink-0" />}
+        {!showTopbar && !sidebarCollapsed && <div data-tauri-drag-region className="h-11 shrink-0" />}
         {/* Sits at the very window top, level with the traffic lights
             (overlay title bar), and doubles as that region's drag handle --
             buttons inside still receive their own clicks. */}
-        {showTopbar && (
+        {(showTopbar || sidebarCollapsed) && (
         <header
           data-tauri-drag-region
-          className="flex h-14 shrink-0 items-center gap-3 px-5"
+          className={`flex h-14 shrink-0 items-center gap-3 pr-5 ${sidebarCollapsed ? "pl-[88px]" : "pl-5"}`}
         >
+          {sidebarCollapsed && (
+            <div className="flex shrink-0 items-center gap-0.5">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-7 bg-foreground/[0.06]"
+                aria-label="Show sidebar"
+                title="Show sidebar (⌘\\)"
+                onClick={() => setSidebarCollapsed(false)}
+              >
+                <PanelLeftOpen className="size-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-7"
+                aria-label="New note"
+                title="New note"
+                onClick={handleNewSession}
+              >
+                <SquarePen className="size-4" />
+              </Button>
+            </div>
+          )}
+
           {/* SessionView portals its Radix tab list here so the switcher is
               part of the 56 px toolbar while its context and mounted tab
               contents remain owned by SessionView. */}
           <div id="topbar-tabs-slot" className="flex min-w-0 flex-1 items-center" />
 
-          {statusText && (
+          {sidebarCollapsed && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-7"
+              aria-label="Search all notes"
+              title="Search (⌘K)"
+              onClick={() => setSearchOpen(true)}
+            >
+              <Search className="size-4" />
+            </Button>
+          )}
+
+          {showTopbar && statusText && (
             <span className="min-w-0 max-w-[35%] shrink-0 truncate font-mono text-[10.5px] text-muted-foreground">
               {statusText}
             </span>
           )}
 
-          {showModelHint && (
+          {showTopbar && showModelHint && (
             <Button variant="outline" size="sm" onClick={() => setSettingsOpen(true)}>
               Open settings
             </Button>
           )}
 
-          <RecordButton
+          {showTopbar && <RecordButton
             size="compact"
             recording={sessionActive}
             disabled={busy || (!sessionActive && !modelReady)}
             startedAt={recordingStartedAt}
             onClick={sessionActive ? handleStop : () => void handleStart()}
-          />
+          />}
 
           {/* Global actions always live in overflow. Note-specific actions
               only appear while the selected note owns the main pane. */}
-          <DropdownMenu>
+          {showTopbar && <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="ghost" size="icon" aria-label="More actions">
                 <Ellipsis />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
-              {selectedPath !== null && searchResults === null && (
+              {selectedPath !== null && (
                 <>
                   <DropdownMenuItem onSelect={() => void openPath(selectedPath)}>
                     <FileText />
@@ -937,7 +974,7 @@ function App() {
                 Settings
               </DropdownMenuItem>
             </DropdownMenuContent>
-          </DropdownMenu>
+          </DropdownMenu>}
         </header>
         )}
 
@@ -969,19 +1006,7 @@ function App() {
         )}
 
         <div className="flex min-h-0 flex-1 flex-col px-8 pb-7 pt-1">
-          {searchResults !== null ? (
-            // An active search owns the main pane: hits in context, query
-            // highlighted (stage 0.10). Opening a hit clears the search, so
-            // the session view below takes over.
-            <SearchResults
-              hits={searchResults}
-              query={searchQuery}
-              onOpen={(path) => {
-                setSelectedPath(path);
-                setSearchQuery("");
-              }}
-            />
-          ) : selectedPath === null ? (
+          {selectedPath === null ? (
             <EmptyState
               onNewNote={handleNewSession}
               onStartRecording={() => void handleStart()}
@@ -1061,6 +1086,12 @@ function App() {
         open={settingsOpen}
         onOpenChange={setSettingsOpen}
         onModelsChanged={handleModelsChanged}
+      />
+      <GlobalSearch
+        open={searchOpen}
+        onOpenChange={setSearchOpen}
+        sessions={sessions}
+        onOpenSession={setSelectedPath}
       />
     </div>
   );

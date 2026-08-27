@@ -1,6 +1,5 @@
-import { Search, SquarePen, Trash2 } from "lucide-react";
+import { PanelLeftClose, Search, SquarePen, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import type { SessionMeta } from "@/lib/ipc";
 
@@ -11,12 +10,12 @@ interface SidebarProps {
   activePath: string | null;
   onSelect: (path: string) => void;
   onNewSession: () => void;
+  /** Hides the note list while preserving the selected note and recording. */
+  onCollapse?: () => void;
+  /** Opens the global search palette. */
+  onOpenSearch?: () => void;
   /** Row-hover trash button; App owns the confirm dialog and the IPC call. */
   onDelete: (path: string) => void;
-  /** Current search text; `sessions` is already the filtered result for it. */
-  searchQuery: string;
-  /** Keystroke-level; App debounces the actual `searchSessions` IPC call. */
-  onSearchChange: (query: string) => void;
 }
 
 interface SessionGroup {
@@ -84,12 +83,11 @@ export function Sidebar({
   activePath,
   onSelect,
   onNewSession,
+  onCollapse,
+  onOpenSearch = () => {},
   onDelete,
-  searchQuery,
-  onSearchChange,
 }: SidebarProps) {
   const groups = groupSessions(sessions);
-  const searching = searchQuery.trim() !== "";
 
   return (
     <aside className="flex h-full w-56 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground">
@@ -102,9 +100,19 @@ export function Sidebar({
           variant="ghost"
           size="icon"
           className="size-6 rounded-md text-muted-foreground hover:bg-foreground/[0.07] hover:text-foreground active:bg-foreground/[0.14] dark:text-[#8B8578]"
-          aria-label="Focus search"
-          title="Search"
-          onClick={() => document.getElementById("session-search")?.focus()}
+          aria-label="Collapse sidebar"
+          title="Collapse sidebar (⌘\\)"
+          onClick={onCollapse}
+        >
+          <PanelLeftClose className="size-[15px]" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon"
+          className="size-6 rounded-md text-muted-foreground hover:bg-foreground/[0.07] hover:text-foreground active:bg-foreground/[0.14] dark:text-[#8B8578]"
+          aria-label="Search all notes"
+          title="Search (⌘K)"
+          onClick={onOpenSearch}
         >
           <Search className="size-[15px]" />
         </Button>
@@ -120,32 +128,10 @@ export function Sidebar({
         </Button>
       </div>
 
-      <div className="px-3 pt-1.5">
-        <div className="relative">
-          <Search
-            aria-hidden="true"
-            className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground"
-          />
-          <Input
-            id="session-search"
-            type="search"
-            placeholder="Search"
-            aria-label="Search sessions"
-            value={searchQuery}
-            onChange={(e) => onSearchChange(e.target.value)}
-            // h-8 + alpha fill AND a real border: fill alone washed out on
-            // the sidebar surface (owner contrast review). Same
-            // alpha-over-foreground trick as the row hovers so one value
-            // reads correctly in both themes.
-            className="h-[30px] rounded-[7px] border-sidebar-border bg-background pl-8 pr-2 text-[12.5px] shadow-[0_1px_2px_rgb(30_27_22/0.04)] placeholder:text-muted-foreground focus-visible:border-foreground/25 focus-visible:bg-background"
-          />
-        </div>
-      </div>
-
       <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
         {sessions.length === 0 ? (
           <p className="px-2 py-4 text-center text-xs text-muted-foreground">
-            {searching ? "no matches" : "no sessions yet"}
+            no sessions yet
           </p>
         ) : (
           groups.map((group) => (

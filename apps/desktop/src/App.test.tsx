@@ -1060,7 +1060,7 @@ describe("App: deleting a note from the sidebar (stage 0.10)", () => {
   });
 });
 
-describe("App: search (stage 0.10)", () => {
+describe("App: global search (stage 2.0)", () => {
   const all: SessionMeta[] = [
     { path: "/tmp/sync.md", title: "Weekly sync", date: new Date().toISOString(), duration_secs: null },
     { path: "/tmp/standup.md", title: "Standup", date: new Date().toISOString(), duration_secs: null },
@@ -1073,36 +1073,27 @@ describe("App: search (stage 0.10)", () => {
     total_matches: 1,
   };
 
-  it("shows debounced hits with highlighted snippets in the main pane, and restores everything when cleared", async () => {
+  it("opens a modal palette and leaves the sidebar list in place while searching", async () => {
     vi.mocked(ipc.listSessions).mockResolvedValue(all);
     vi.mocked(ipc.searchSessions).mockClear().mockResolvedValue([hit]);
 
     render(<App />);
     await screen.findByRole("button", { name: /standup/i });
 
-    const input = screen.getByRole("searchbox", { name: /search sessions/i });
+    fireEvent.click(screen.getByRole("button", { name: /search all notes/i }));
+    const input = screen.getByRole("searchbox", { name: /search all notes/i });
     fireEvent.change(input, { target: { value: "budget" } });
 
-    // Debounced: one IPC call for the settled query; the sidebar filters
-    // down and the main pane shows the hit in context with a highlight.
     await waitFor(() =>
       expect(ipc.searchSessions).toHaveBeenCalledExactlyOnceWith("budget"),
     );
-    await waitFor(() =>
-      expect(screen.queryByRole("button", { name: /standup/i })).toBeNull(),
-    );
-    expect(screen.getByText(/1 note matches/i)).toBeInTheDocument();
+    expect(screen.getByText("Standup")).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Spoken" })).toBeInTheDocument();
     const mark = document.querySelector("mark");
     expect(mark?.textContent).toBe("budget");
-
-    // Clearing restores the unfiltered list with no extra search call.
-    fireEvent.change(input, { target: { value: "" } });
-    await screen.findByRole("button", { name: /standup/i });
-    expect(ipc.searchSessions).toHaveBeenCalledTimes(1);
-    expect(document.querySelector("mark")).toBeNull();
   });
 
-  it("opens a result on click: clears the search and shows that session", async () => {
+  it("opens a spoken result and closes the palette", async () => {
     vi.mocked(ipc.listSessions).mockResolvedValue(all);
     vi.mocked(ipc.searchSessions).mockClear().mockResolvedValue([hit]);
     vi.mocked(ipc.readSession).mockResolvedValue({
@@ -1116,26 +1107,15 @@ describe("App: search (stage 0.10)", () => {
     });
 
     render(<App />);
-    fireEvent.change(screen.getByRole("searchbox", { name: /search sessions/i }), {
+    fireEvent.keyDown(window, { key: "k", metaKey: true });
+    fireEvent.change(screen.getByRole("searchbox", { name: /search all notes/i }), {
       target: { value: "budget" },
     });
-    await screen.findByText(/1 note matches/i);
+    await waitFor(() => expect(ipc.searchSessions).toHaveBeenCalledWith("budget"));
 
-    // The result card lives in the main pane; the sidebar row for the same
-    // session also matches by name, so pick the card via its snippet.
-    const card = screen
-      .getAllByRole("button", { name: /weekly sync/i })
-      .find((b) => b.textContent?.includes("about the budget"));
-    expect(card).toBeDefined();
-    fireEvent.click(card!);
+    fireEvent.click(await screen.findByRole("option", { name: /about the budget/i }));
 
-    // Search cleared, session opened.
-    await waitFor(() =>
-      expect(screen.queryByText(/1 note matches/i)).toBeNull(),
-    );
-    expect(
-      (screen.getByRole("searchbox", { name: /search sessions/i }) as HTMLInputElement).value,
-    ).toBe("");
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: /search all notes/i })).toBeNull());
     await waitFor(() =>
       expect(document.body.textContent).toContain("about the budget"),
     );
@@ -1159,7 +1139,7 @@ describe("App: empty state and global hotkeys (stage 0.10)", () => {
     await waitFor(() => expect(screen.queryByText("Start Recording")).toBeNull());
   });
 
-  it("⌘N creates a note, ⌘⇧N starts recording, ⌘F focuses search", async () => {
+  it("⌘N creates a note, ⌘⇧N starts recording, and ⌘K opens search", async () => {
     render(<App />);
     await screen.findByText("New Note");
 
@@ -1174,10 +1154,37 @@ describe("App: empty state and global hotkeys (stage 0.10)", () => {
     fireEvent.keyDown(window, { key: "n", metaKey: true, shiftKey: true });
     await waitFor(() => expect(ipc.startRecording).toHaveBeenCalledTimes(1));
 
-    fireEvent.keyDown(window, { key: "f", metaKey: true });
-    expect(document.activeElement).toBe(
-      screen.getByRole("searchbox", { name: /search sessions/i }),
-    );
+    fireEvent.keyDown(window, { key: "k", metaKey: true });
+    expect(screen.getByRole("dialog", { name: /search all notes/i })).toBeInTheDocument();
+  });
+
+  it("collapses and restores the sidebar without changing the selected note", async () => {
+    const note: SessionMeta[] = [{
+      path: "/tmp/note.md",
+      title: "Kept note",
+      date: new Date().toISOString(),
+      duration_secs: null,
+    }];
+    vi.mocked(ipc.listSessions).mockResolvedValue(note);
+    vi.mocked(ipc.readSession).mockResolvedValue({
+      title: "Kept note",
+      date: "",
+      notes: "still here",
+      transcript: "",
+      audio_path: null,
+      summary: "",
+      summary_model: null,
+    });
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /kept note/i }));
+    await screen.findByText("still here");
+    fireEvent.keyDown(window, { key: "\\", metaKey: true });
+
+    expect(screen.queryByRole("button", { name: /kept note/i })).toBeNull();
+    expect(screen.getByText("still here")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /show sidebar/i }));
+    expect(await screen.findByRole("button", { name: /kept note/i })).toBeInTheDocument();
   });
 
   it("⌘⇧N does nothing while already recording", async () => {

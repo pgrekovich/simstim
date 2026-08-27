@@ -138,6 +138,7 @@ function App() {
   const handleStopRef = useRef<() => Promise<void>>(async () => {});
   const bannerStartRef = useRef<(payload: CallDetectedPayload) => void>(() => {});
   const menuBarToggleRef = useRef<() => void>(() => {});
+  const menuBarNewNoteRef = useRef<() => void>(() => {});
   // State alone cannot reject two stop events delivered in the same React
   // tick. This synchronous guard protects the one backend recording handle.
   const stopInFlightRef = useRef(false);
@@ -314,7 +315,7 @@ function App() {
     };
   }, []);
 
-  // The native menu-bar panel and the global shortcut both send the same
+  // The native menu and the global shortcut both send the same
   // toggle event. A start always creates a fresh session because there is no
   // visible selection context while another application has focus.
   useEffect(() => {
@@ -349,6 +350,30 @@ function App() {
       void showMainWindow().then(() => {
         activeSessionViewRef.current?.focusNotes();
       });
+    });
+    return () => {
+      unlisten.then((f) => f());
+    };
+  }, []);
+
+  useEffect(() => {
+    menuBarNewNoteRef.current = () => {
+      void showMainWindow().then(() => handleNewSession());
+    };
+  });
+
+  useEffect(() => {
+    const unlisten = listen("menu-bar-new-note", () => {
+      menuBarNewNoteRef.current();
+    });
+    return () => {
+      unlisten.then((f) => f());
+    };
+  }, []);
+
+  useEffect(() => {
+    const unlisten = listen("menu-bar-open-settings", () => {
+      void showMainWindow().then(() => setSettingsOpen(true));
     });
     return () => {
       unlisten.then((f) => f());

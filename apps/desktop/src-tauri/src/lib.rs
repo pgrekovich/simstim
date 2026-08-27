@@ -221,16 +221,14 @@ fn start_recording(
             .unwrap_or(cfg.active_model.as_str());
         return Err(format!("model not downloaded: {name}"));
     }
-    let (out, continue_from, menu_bar_title) = match &path {
+    let (out, continue_from) = match &path {
         Some(p) => {
             let seed = session::load_continue_from(p).map_err(|e| e.to_string())?;
-            let menu_bar_title = seed.title.clone();
-            (p.clone(), Some(seed), menu_bar_title)
+            (p.clone(), Some(seed))
         }
         None => (
             simstim_transcript::output_path(&cfg.output_dir, chrono::Local::now()),
             None,
-            title.clone().unwrap_or_else(|| "Untitled".to_string()),
         ),
     };
     let (tx, rx) = std::sync::mpsc::channel();
@@ -276,10 +274,7 @@ fn start_recording(
     app.state::<detect::DetectHandle>()
         .recording_started(detected_bundle_id, out.display().to_string());
     app.state::<banner::Banner>().recording_started();
-    app.state::<menu_bar::MenuBar>().recording_started(
-        menu_bar_title,
-        out.display().to_string(),
-    );
+    app.state::<menu_bar::MenuBar>().recording_started();
     Ok(out.display().to_string())
 }
 
@@ -611,6 +606,12 @@ pub fn run() {
             let cfg = Config::load();
             allow_output_dir_in_asset_scope(app, &cfg.output_dir)?;
             #[cfg(target_os = "macos")]
+            app.handle().set_activation_policy(if cfg.show_in_dock {
+                tauri::ActivationPolicy::Regular
+            } else {
+                tauri::ActivationPolicy::Accessory
+            })?;
+            #[cfg(target_os = "macos")]
             if let Some(window) = app.get_webview_window("main") {
                 position_main_traffic_lights(&window)?;
             }
@@ -633,11 +634,6 @@ pub fn run() {
                     let _ = window.hide();
                 }
             }
-            if window.label() == menu_bar::WINDOW_LABEL {
-                if let tauri::WindowEvent::Focused(false) = event {
-                    let _ = window.hide();
-                }
-            }
         })
         .invoke_handler(tauri::generate_handler![
             start_recording,
@@ -648,6 +644,7 @@ pub fn run() {
             set_active_model,
             set_retranscribe_model,
             config::set_theme,
+            config::set_show_in_dock,
             config::set_keep_audio,
             config::set_audio_format,
             config::set_auto_retranscribe,
@@ -662,8 +659,6 @@ pub fn run() {
             banner::banner_dismiss,
             banner::banner_current_state,
             banner::show_main_window,
-            menu_bar::menu_bar_current_state,
-            menu_bar::menu_bar_hide,
             models::list_models,
             models::download_model,
             models::delete_model,

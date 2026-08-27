@@ -22,6 +22,10 @@ fn default_theme() -> String {
     "system".to_string()
 }
 
+fn default_show_in_dock() -> bool {
+    true
+}
+
 /// Default for `keep_audio` (Global Constraints: retention defaults on).
 fn default_keep_audio() -> bool {
     true
@@ -94,6 +98,10 @@ pub struct Config {
     /// "system") instead of failing deserialization entirely.
     #[serde(default = "default_theme")]
     pub theme: String,
+    /// Whether macOS shows simstim as a regular Dock application. Older
+    /// configs default to `true`, preserving the app's previous behavior.
+    #[serde(default = "default_show_in_dock")]
+    pub show_in_dock: bool,
     /// Whether the session worker keeps a stereo audio file (WAV during
     /// capture, FLAC after stop) next to the transcript. `serde(default)` so
     /// config.json files written before this field existed still load
@@ -170,6 +178,7 @@ impl Default for Config {
             output_dir: dirs::home_dir().expect("no home dir").join("Desktop"),
             active_model: KNOWN_MODEL_ID.to_string(),
             theme: default_theme(),
+            show_in_dock: default_show_in_dock(),
             keep_audio: default_keep_audio(),
             audio_format: default_audio_format(),
             retranscribe_model: default_retranscribe_model(),
@@ -206,6 +215,38 @@ pub fn set_theme(theme: String) -> Result<(), String> {
     let mut cfg = Config::load();
     cfg.theme = theme;
     cfg.save().map_err(|e| e.to_string())
+}
+
+/// Switches between a regular Dock application and a menu-bar-only app, then
+/// persists the choice. The change is immediate and does not hide any open
+/// windows.
+#[tauri::command]
+pub fn set_show_in_dock(show_in_dock: bool, app: tauri::AppHandle) -> Result<(), String> {
+    let mut cfg = Config::load();
+    let previous = cfg.show_in_dock;
+
+    #[cfg(target_os = "macos")]
+    app.set_activation_policy(if show_in_dock {
+        tauri::ActivationPolicy::Regular
+    } else {
+        tauri::ActivationPolicy::Accessory
+    })
+    .map_err(|error| error.to_string())?;
+
+    #[cfg(not(target_os = "macos"))]
+    let _ = (&app, previous);
+
+    cfg.show_in_dock = show_in_dock;
+    if let Err(error) = cfg.save() {
+        #[cfg(target_os = "macos")]
+        let _ = app.set_activation_policy(if previous {
+            tauri::ActivationPolicy::Regular
+        } else {
+            tauri::ActivationPolicy::Accessory
+        });
+        return Err(error.to_string());
+    }
+    Ok(())
 }
 
 /// Sets and persists which CLI `enhance_session` runs (stage 0.11).
@@ -381,6 +422,7 @@ mod tests {
             output_dir: PathBuf::from("/tmp/some-output"),
             active_model: "custom-model-id".to_string(),
             theme: "dark".to_string(),
+            show_in_dock: false,
             keep_audio: false,
             audio_format: "flac".to_string(),
             retranscribe_model: "whisper-large-v3".to_string(),
@@ -400,6 +442,11 @@ mod tests {
     #[test]
     fn theme_defaults_to_system() {
         assert_eq!(Config::default().theme, "system");
+    }
+
+    #[test]
+    fn dock_visibility_defaults_to_on() {
+        assert!(Config::default().show_in_dock);
     }
 
     #[test]
@@ -446,6 +493,7 @@ mod tests {
         let cfg = Config::load_from(&path);
         assert!(cfg.detect_calls);
         assert!(!cfg.auto_stop_after_call);
+        assert!(cfg.show_in_dock);
     }
 
     /// Stage-0.9 Global Constraints: an old config.json written before these

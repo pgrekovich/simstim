@@ -19,6 +19,7 @@ vi.mock("@/lib/ipc", () => ({
     output_dir: "/tmp",
     active_model: "m1",
     theme: "system",
+    show_in_dock: true,
     keep_audio: true,
     audio_format: "aac",
     retranscribe_model: "w1",
@@ -123,6 +124,7 @@ beforeEach(() => {
     output_dir: "/tmp",
     active_model: "m1",
     theme: "system",
+    show_in_dock: true,
     keep_audio: true,
     audio_format: "aac",
     retranscribe_model: "w1",
@@ -237,6 +239,7 @@ describe("App: call detection via the banner window (stage 1.1)", () => {
       output_dir: "/tmp",
       active_model: "m1",
       theme: "system",
+      show_in_dock: true,
       keep_audio: true,
       audio_format: "aac",
       retranscribe_model: "w1",
@@ -266,6 +269,7 @@ describe("App: call detection via the banner window (stage 1.1)", () => {
       output_dir: "/tmp",
       active_model: "m1",
       theme: "system",
+      show_in_dock: true,
       keep_audio: true,
       audio_format: "aac",
       retranscribe_model: "w1",
@@ -346,6 +350,30 @@ describe("App: menu-bar recording toggle (stage 3)", () => {
     await emitMenuBarToggle();
     await waitFor(() => expect(ipc.showMainWindow).toHaveBeenCalledTimes(1));
     expect(ipc.startRecording).not.toHaveBeenCalled();
+  });
+
+  it("creates a note and restores the window from the native menu", async () => {
+    render(<App />);
+    await waitFor(() =>
+      expect(vi.mocked(listen).mock.calls.some(([name]) => name === "menu-bar-new-note")).toBe(true),
+    );
+
+    emit("menu-bar-new-note", undefined);
+
+    await waitFor(() => expect(ipc.showMainWindow).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(ipc.createSession).toHaveBeenCalledTimes(1));
+  });
+
+  it("opens Settings from the native menu", async () => {
+    render(<App />);
+    await waitFor(() =>
+      expect(vi.mocked(listen).mock.calls.some(([name]) => name === "menu-bar-open-settings")).toBe(true),
+    );
+
+    emit("menu-bar-open-settings", undefined);
+
+    await waitFor(() => expect(ipc.showMainWindow).toHaveBeenCalledTimes(1));
+    expect(await screen.findByRole("dialog")).toBeVisible();
   });
 });
 

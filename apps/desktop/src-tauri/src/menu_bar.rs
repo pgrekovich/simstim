@@ -1,31 +1,27 @@
-//! macOS menu-bar presence for Stage 3.
+//! Native macOS menu-bar presence for Stage 3.
 //!
-//! The controller mirrors only ephemeral presentation state. Recording still
-//! starts and stops through the existing main-window coordinator, so the
-//! session worker remains the sole writer for every live file.
+//! The controller mirrors only ephemeral recording state. Every action is
+//! routed back through the existing main-window coordinator, so the session
+//! worker remains the sole writer for every live file.
 
 use std::sync::Mutex;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
-use serde::Serialize;
 use tauri::image::Image;
-use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{
-    AppHandle, Emitter, Manager, PhysicalPosition, Rect, State, WebviewUrl, WebviewWindowBuilder,
-};
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+use tauri::tray::TrayIconBuilder;
+use tauri::{AppHandle, Emitter, Manager};
 
-pub const WINDOW_LABEL: &str = "menu-bar";
 const TRAY_ID: &str = "simstim-menu-bar";
-const PANEL_WIDTH: f64 = 352.0;
-const PANEL_HEIGHT: f64 = 180.0;
-const PANEL_GAP: f64 = 6.0;
+const TOGGLE_ID: &str = "menu-bar-toggle";
+const NOTE_ID: &str = "menu-bar-note";
+const OPEN_ID: &str = "menu-bar-open";
+const SETTINGS_ID: &str = "menu-bar-settings";
+const QUIT_ID: &str = "menu-bar-quit";
 
 #[derive(Clone, Debug)]
 struct RecordingPresentation {
-    title: String,
-    path: String,
     started_at: Instant,
-    started_at_ms: u64,
     generation: u64,
 }
 
@@ -35,71 +31,81 @@ struct MenuBarPresentation {
     generation: u64,
 }
 
-#[derive(Clone, Debug, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum MenuBarPayload {
-    Idle,
-    Recording {
-        title: String,
-        path: String,
-        started_at_ms: u64,
-    },
-}
-
 pub struct MenuBar {
     app: AppHandle,
     presentation: Mutex<MenuBarPresentation>,
+    toggle_item: MenuItem<tauri::Wry>,
+    note_item: MenuItem<tauri::Wry>,
 }
 
 impl MenuBar {
     pub fn create(app: &AppHandle) -> tauri::Result<Self> {
-        WebviewWindowBuilder::new(app, WINDOW_LABEL, WebviewUrl::App("index.html".into()))
-            .decorations(false)
-            .transparent(true)
-            .shadow(false)
-            .always_on_top(true)
-            .skip_taskbar(true)
-            .resizable(false)
-            .focused(false)
-            .visible(false)
-            .inner_size(PANEL_WIDTH, PANEL_HEIGHT)
-            .build()?;
+        let toggle_item = MenuItem::with_id(app, TOGGLE_ID, "Start Recording", true, None::<&str>)?;
+        let note_item = MenuItem::with_id(app, NOTE_ID, "New Note", true, None::<&str>)?;
+        let open_item = MenuItem::with_id(app, OPEN_ID, "Open simstim", true, None::<&str>)?;
+        let settings_item = MenuItem::with_id(app, SETTINGS_ID, "Settings...", true, None::<&str>)?;
+        let quit_item = MenuItem::with_id(app, QUIT_ID, "Quit simstim", true, None::<&str>)?;
+        let separator_one = PredefinedMenuItem::separator(app)?;
+        let separator_two = PredefinedMenuItem::separator(app)?;
+        let menu = Menu::with_items(
+            app,
+            &[
+                &toggle_item,
+                &note_item,
+                &separator_one,
+                &open_item,
+                &settings_item,
+                &separator_two,
+                &quit_item,
+            ],
+        )?;
 
         TrayIconBuilder::with_id(TRAY_ID)
             .icon(menu_icon(false))
             .icon_as_template(true)
             .tooltip("simstim")
-            .show_menu_on_left_click(false)
-            .on_tray_icon_event(|tray, event| {
-                if let TrayIconEvent::Click {
-                    position,
-                    rect,
-                    button: MouseButton::Left,
-                    button_state: MouseButtonState::Up,
-                    ..
-                } = event
-                {
-                    toggle_panel(tray.app_handle(), position, rect);
+            .menu(&menu)
+            .show_menu_on_left_click(true)
+            .on_menu_event(|app, event| match event.id().as_ref() {
+                TOGGLE_ID => {
+                    let _ = app.emit_to("main", "menu-bar-toggle-recording", ());
                 }
+                NOTE_ID => {
+                    let recording = app
+                        .try_state::<MenuBar>()
+                        .is_some_and(|menu_bar| menu_bar.is_recording());
+                    let event_name = if recording {
+                        "menu-bar-add-note"
+                    } else {
+                        "menu-bar-new-note"
+                    };
+                    let _ = app.emit_to("main", event_name, ());
+                }
+                OPEN_ID => show_main_window(app),
+                SETTINGS_ID => {
+                    show_main_window(app);
+                    let _ = app.emit_to("main", "menu-bar-open-settings", ());
+                }
+                QUIT_ID => app.exit(0),
+                _ => {}
             })
             .build(app)?;
 
         Ok(Self {
             app: app.clone(),
             presentation: Mutex::new(MenuBarPresentation::default()),
+            toggle_item,
+            note_item,
         })
     }
 
-    pub fn recording_started(&self, title: String, path: String) {
+    pub fn recording_started(&self) {
         let generation = {
             let mut state = self.presentation.lock().unwrap();
             state.generation += 1;
             let generation = state.generation;
             state.recording = Some(RecordingPresentation {
-                title,
-                path,
                 started_at: Instant::now(),
-                started_at_ms: unix_time_ms(),
                 generation,
             });
             generation
@@ -124,6 +130,8 @@ impl MenuBar {
             state.generation += 1;
             state.recording = None;
         }
+        let _ = self.toggle_item.set_text("Start Recording");
+        let _ = self.note_item.set_text("New Note");
         if let Some(tray) = self.app.tray_by_id(TRAY_ID) {
             let _ = tray.set_icon_with_as_template(Some(menu_icon(false)), true);
             // `None` leaves the previous native title visible on macOS with
@@ -132,21 +140,20 @@ impl MenuBar {
             let _ = tray.set_title(Some(""));
             let _ = tray.set_tooltip(Some("simstim"));
         }
-        self.emit_state();
     }
 
-    pub fn current_payload(&self) -> MenuBarPayload {
-        let state = self.presentation.lock().unwrap();
-        payload_from(&state)
+    fn is_recording(&self) -> bool {
+        self.presentation.lock().unwrap().recording.is_some()
     }
 
     fn apply_recording_state(&self) {
+        let _ = self.toggle_item.set_text("Stop Recording");
+        let _ = self.note_item.set_text("Add Note");
         if let Some(tray) = self.app.tray_by_id(TRAY_ID) {
             let _ = tray.set_icon_with_as_template(Some(menu_icon(true)), true);
             let _ = tray.set_title(Some("00:00"));
             let _ = tray.set_tooltip(Some("simstim is recording"));
         }
-        self.emit_state();
     }
 
     fn tick_timer(&self, generation: u64) -> bool {
@@ -162,30 +169,14 @@ impl MenuBar {
         }
         true
     }
-
-    fn emit_state(&self) {
-        let _ = self
-            .app
-            .emit_to(WINDOW_LABEL, "menu-bar-state", self.current_payload());
-    }
 }
 
-fn payload_from(state: &MenuBarPresentation) -> MenuBarPayload {
-    match &state.recording {
-        None => MenuBarPayload::Idle,
-        Some(recording) => MenuBarPayload::Recording {
-            title: recording.title.clone(),
-            path: recording.path.clone(),
-            started_at_ms: recording.started_at_ms,
-        },
+fn show_main_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
     }
-}
-
-fn unix_time_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
 }
 
 fn format_elapsed(elapsed: Duration) -> String {
@@ -198,63 +189,6 @@ fn format_elapsed(elapsed: Duration) -> String {
     } else {
         format!("{minutes:02}:{seconds:02}")
     }
-}
-
-fn toggle_panel(app: &AppHandle, click: PhysicalPosition<f64>, rect: Rect) {
-    let Some(window) = app.get_webview_window(WINDOW_LABEL) else {
-        return;
-    };
-    if window.is_visible().unwrap_or(false) {
-        let _ = window.hide();
-        return;
-    }
-
-    let monitor = app.monitor_from_point(click.x, click.y).ok().flatten();
-    let scale = monitor.as_ref().map_or_else(
-        || window.scale_factor().unwrap_or(1.0),
-        |item| item.scale_factor(),
-    );
-    let tray_position = rect.position.to_physical::<f64>(scale);
-    let tray_size = rect.size.to_physical::<f64>(scale);
-    let monitor_bounds = monitor.map(|monitor| {
-        (
-            f64::from(monitor.position().x),
-            f64::from(monitor.position().x) + f64::from(monitor.size().width),
-        )
-    });
-    let position = panel_position(
-        click.x,
-        tray_position.y + tray_size.height,
-        scale,
-        monitor_bounds,
-    );
-    let _ = window.set_position(position);
-    let _ = window.show();
-    let _ = window.set_focus();
-    if let Some(menu_bar) = app.try_state::<MenuBar>() {
-        menu_bar.emit_state();
-    }
-}
-
-fn panel_position(
-    click_x: f64,
-    tray_bottom: f64,
-    scale: f64,
-    monitor_bounds: Option<(f64, f64)>,
-) -> PhysicalPosition<i32> {
-    let panel_width = PANEL_WIDTH * scale;
-    let ideal_x = click_x - panel_width / 2.0;
-    let x = match monitor_bounds {
-        Some((monitor_left, monitor_right)) => ideal_x.clamp(
-            monitor_left + 8.0 * scale,
-            monitor_right - panel_width - 8.0 * scale,
-        ),
-        None => ideal_x,
-    };
-    PhysicalPosition::new(
-        x.round() as i32,
-        (tray_bottom + PANEL_GAP * scale).round() as i32,
-    )
 }
 
 fn menu_icon(recording: bool) -> Image<'static> {
@@ -270,11 +204,7 @@ fn menu_icon(recording: bool) -> Image<'static> {
                     let py = y as f64 + (sample_y as f64 + 0.5) / SAMPLES as f64;
                     let on_bar = (11.0..=25.0).contains(&px) && (17.0..=19.0).contains(&py);
                     let mut sample_alpha = if on_bar {
-                        if recording {
-                            1.0
-                        } else {
-                            0.45
-                        }
+                        if recording { 1.0 } else { 0.45 }
                     } else {
                         0.0
                     };
@@ -295,18 +225,6 @@ fn menu_icon(recording: bool) -> Image<'static> {
         }
     }
     Image::new_owned(rgba, SIZE, SIZE)
-}
-
-#[tauri::command]
-pub fn menu_bar_current_state(menu_bar: State<MenuBar>) -> MenuBarPayload {
-    menu_bar.current_payload()
-}
-
-#[tauri::command]
-pub fn menu_bar_hide(app: AppHandle) {
-    if let Some(window) = app.get_webview_window(WINDOW_LABEL) {
-        let _ = window.hide();
-    }
 }
 
 #[cfg(test)]
@@ -343,21 +261,5 @@ mod tests {
             .iter()
             .enumerate()
             .all(|(index, channel)| index % 4 == 3 || *channel == 0));
-    }
-
-    #[test]
-    fn panel_stays_anchored_when_monitor_lookup_is_unavailable() {
-        assert_eq!(
-            panel_position(1_200.0, 48.0, 2.0, None),
-            PhysicalPosition::new(848, 60)
-        );
-    }
-
-    #[test]
-    fn panel_is_clamped_inside_the_active_monitor() {
-        assert_eq!(
-            panel_position(10.0, 48.0, 2.0, Some((0.0, 1_920.0))),
-            PhysicalPosition::new(16, 60)
-        );
     }
 }

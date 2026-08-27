@@ -26,6 +26,7 @@ import {
   setKeepAudio,
   setOutputDir,
   setRetranscribeModel,
+  setShowInDock,
   setTheme,
   type AppConfig,
   type DownloadProgress,
@@ -215,6 +216,7 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
   const [autoEnhanceError, setAutoEnhanceError] = useState<string | null>(null);
   const [choosingDir, setChoosingDir] = useState(false);
   const [themeError, setThemeError] = useState<string | null>(null);
+  const [showInDockError, setShowInDockError] = useState<string | null>(null);
   const [folderError, setFolderError] = useState<string | null>(null);
   const [keepAudioError, setKeepAudioError] = useState<string | null>(null);
   const [audioFormatError, setAudioFormatError] = useState<string | null>(null);
@@ -397,6 +399,19 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
       applyTheme(previous);
       setConfig((prev) => (prev ? { ...prev, theme: previous } : prev));
       setThemeError(String(err));
+    }
+  }
+
+  async function handleSetShowInDock(showInDock: boolean) {
+    const previous = config?.show_in_dock;
+    if (previous === undefined || showInDock === previous) return;
+    setShowInDockError(null);
+    setConfig((prev) => (prev ? { ...prev, show_in_dock: showInDock } : prev));
+    try {
+      await setShowInDock(showInDock);
+    } catch (err) {
+      setConfig((prev) => (prev ? { ...prev, show_in_dock: previous } : prev));
+      setShowInDockError(String(err));
     }
   }
 
@@ -708,6 +723,20 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                           {option.label}
                         </Button>
                       ))}
+                    </Row>
+                    <Row
+                      label="Show in Dock"
+                      htmlFor="show-in-dock"
+                      description="Turn this off to keep simstim in the menu bar only."
+                      error={showInDockError}
+                    >
+                      <Checkbox
+                        variant="switch"
+                        id="show-in-dock"
+                        checked={config?.show_in_dock ?? true}
+                        disabled={!config}
+                        onCheckedChange={(checked) => handleSetShowInDock(checked === true)}
+                      />
                     </Row>
                     <Row
                       label="Notes folder"

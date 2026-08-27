@@ -13,6 +13,7 @@ vi.mock("@/lib/ipc", () => ({
   deleteModel: vi.fn().mockResolvedValue(undefined),
   setOutputDir: vi.fn().mockResolvedValue(undefined),
   setTheme: vi.fn().mockResolvedValue(undefined),
+  setShowInDock: vi.fn().mockResolvedValue(undefined),
   setKeepAudio: vi.fn().mockResolvedValue(undefined),
   setAudioFormat: vi.fn().mockResolvedValue(undefined),
   setAutoRetranscribe: vi.fn().mockResolvedValue(undefined),
@@ -40,6 +41,7 @@ const baseConfig: AppConfig = {
   output_dir: "/tmp/calls",
   active_model: "parakeet-tdt-0.6b-v3-int8",
   theme: "system",
+  show_in_dock: true,
   keep_audio: true,
   audio_format: "aac",
   retranscribe_model: "whisper-large-v3-turbo-q8",
@@ -56,6 +58,7 @@ beforeEach(() => {
   vi.mocked(ipc.getConfig).mockClear().mockResolvedValue(baseConfig);
   vi.mocked(ipc.listModels).mockClear().mockResolvedValue([]);
   vi.mocked(ipc.setKeepAudio).mockClear().mockResolvedValue(undefined);
+  vi.mocked(ipc.setShowInDock).mockClear().mockResolvedValue(undefined);
   vi.mocked(ipc.setAudioFormat).mockClear().mockResolvedValue(undefined);
   vi.mocked(ipc.setAutoRetranscribe).mockClear().mockResolvedValue(undefined);
   vi.mocked(ipc.setDeleteAudioAfterRetranscribe).mockClear().mockResolvedValue(undefined);
@@ -64,6 +67,19 @@ beforeEach(() => {
   vi.mocked(ipc.setActiveModel).mockClear().mockResolvedValue(undefined);
   vi.mocked(ipc.setRetranscribeModel).mockClear().mockResolvedValue(undefined);
   vi.mocked(ipc.deleteModel).mockClear().mockResolvedValue(undefined);
+});
+
+describe("SettingsDialog: Dock visibility (stage 3)", () => {
+  it("persists menu-bar-only mode from General settings", async () => {
+    render(<SettingsDialog open onOpenChange={() => {}} />);
+    const toggle = await screen.findByRole("checkbox", { name: /show in dock/i });
+
+    expect(toggle).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(toggle);
+
+    await waitFor(() => expect(ipc.setShowInDock).toHaveBeenCalledWith(false));
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+  });
 });
 
 describe("SettingsDialog: call detection (stage 1.0)", () => {

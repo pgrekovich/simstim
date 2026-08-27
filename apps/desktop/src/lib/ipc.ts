@@ -14,6 +14,8 @@ export interface AppConfig {
   active_model: string;
   /** `"system" | "light" | "dark"`. */
   theme: string;
+  /** Whether simstim appears in the macOS Dock. Defaults to `true`. */
+  show_in_dock: boolean;
   /**
    * Whether recordings keep a stereo audio file (wav during capture,
    * encoded to `audio_format` after stop) next to the transcript. Defaults
@@ -108,24 +110,6 @@ export function bannerDismiss(): Promise<void> {
 /** The banner's "Open simstim": shows and focuses the main window. */
 export function showMainWindow(): Promise<void> {
   return invoke("show_main_window");
-}
-
-/** Ephemeral state mirrored by the native menu-bar controller. */
-export type MenuBarStatePayload =
-  | { kind: "idle" }
-  | {
-      kind: "recording";
-      title: string;
-      path: string;
-      started_at_ms: number;
-    };
-
-export function menuBarCurrentState(): Promise<MenuBarStatePayload> {
-  return invoke("menu_bar_current_state");
-}
-
-export function menuBarHide(): Promise<void> {
-  return invoke("menu_bar_hide");
 }
 
 export interface CallEndedPayload {
@@ -331,6 +315,10 @@ export function stopRecording(): Promise<string> {
 
 export function setTheme(theme: string): Promise<void> {
   return invoke("set_theme", { theme });
+}
+
+export function setShowInDock(showInDock: boolean): Promise<void> {
+  return invoke("set_show_in_dock", { showInDock });
 }
 
 /**

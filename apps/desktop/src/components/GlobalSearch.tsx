@@ -323,8 +323,8 @@ export function GlobalSearch({
           Search note titles, notes, and spoken transcript text.
         </DialogDescription>
 
-        <div className="flex h-[52px] items-center gap-3 border-b px-4">
-          <Search aria-hidden="true" className="size-[17px] shrink-0 text-muted-foreground" />
+        <div className="flex h-[52px] items-center gap-3 border-b px-[18px]">
+          <Search aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
           <input
             ref={inputRef}
             type="search"

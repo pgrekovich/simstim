@@ -198,6 +198,13 @@
   [role="menuitem"] {
     cursor: default;
     }
+  /* The global search palette provides Escape and keyboard navigation;
+     WebKit's native blue clear glyph does not belong to the design and
+     crowds the result count at narrow widths. */
+  input[type="search"]::-webkit-search-cancel-button {
+    display: none;
+    appearance: none;
+    }
   /* The banner window is a transparent layer around a floating card
      (main.tsx tags <html> with .banner-window); the default opaque body
      would paint the whole window rectangle. Smoothing matches how macOS

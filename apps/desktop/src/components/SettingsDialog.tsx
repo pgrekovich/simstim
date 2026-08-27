@@ -636,6 +636,7 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
 
   const liveModels = models.filter((m) => m.role === "live");
   const retranscribeModels = models.filter((m) => m.role === "retranscribe");
+  const summaryModels = models.filter((m) => m.role === "summary");
   const selectedRetranscribeModel = models.find((m) => m.id === config?.retranscribe_model);
   // True when the configured re-transcribe model is a retired entry that's
   // still on disk (stage 0.8.x curation): distinct from "missing" below,
@@ -996,6 +997,82 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
 
                         <div className="flex shrink-0 items-center gap-1.5">
                           {!model.downloaded && !model.retired && (!p || p.phase === "error") && (
+                            <Button variant="outline" size="sm" onClick={() => handleDownload(model.id)}>
+                              Download
+                            </Button>
+                          )}
+                          {model.downloaded && !confirming && (
+                            <Button
+                              variant="ghost"
+                              size="icon-sm"
+                              aria-label={`Delete ${model.name}`}
+                              disabled={busy}
+                              className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                              onClick={() => handleDeleteClick(model.id)}
+                            >
+                              <Trash2 />
+                            </Button>
+                          )}
+                          {model.downloaded && confirming && (
+                            <>
+                              <Button
+                                variant="destructive"
+                                size="sm"
+                                disabled={busy}
+                                onClick={() => handleConfirmDelete(model.id)}
+                              >
+                                Delete {humanBytes(freedBytes(model))}?
+                              </Button>
+                              <Button variant="ghost" size="sm" disabled={busy} onClick={handleCancelDelete}>
+                                Cancel
+                              </Button>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                      {!model.downloaded && <ModelProgress progress={p} />}
+                      {deleteErrors[model.id] && (
+                        <span className="text-xs text-destructive">{deleteErrors[model.id]}</span>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+
+            {/* Local text-generation models are downloaded and removed in
+                the same manager as the ASR models, but are never selectable
+                as a recording or re-transcribe engine. The Summary page
+                exposes them as providers once their files are present. */}
+            <div className="flex flex-col gap-1.5">
+              <div className="flex items-baseline justify-between gap-2">
+                <h4 className="font-mono text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+                  Local summaries
+                </h4>
+                <span className="font-mono text-[10.5px] text-muted-foreground">
+                  Summary models: {humanBytes(totalDiskUsed(summaryModels))} on disk
+                </span>
+              </div>
+              <span className="text-xs text-muted-foreground">
+                Runs entirely on this Mac. Notes and transcripts stay private.
+              </span>
+              <ul className="flex flex-col divide-y divide-border border-y border-border">
+                {summaryModels.map((model) => {
+                  const p = progress[model.id];
+                  const busy = busyIds.has(model.id);
+                  const confirming = deleteConfirmId === model.id;
+                  return (
+                    <li key={model.id} className="flex flex-col gap-2 px-0.5 py-3.5">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex min-w-0 flex-col">
+                          <span className="truncate text-sm font-medium">{model.name}</span>
+                          {model.tagline && (
+                            <span className="text-xs text-muted-foreground">{model.tagline}</span>
+                          )}
+                          <span className="text-xs text-muted-foreground">{humanSizeMb(model.size_mb)}</span>
+                        </div>
+                        <div className="flex shrink-0 items-center gap-1.5">
+                          {!model.downloaded && (!p || p.phase === "error") && (
                             <Button variant="outline" size="sm" onClick={() => handleDownload(model.id)}>
                               Download
                             </Button>

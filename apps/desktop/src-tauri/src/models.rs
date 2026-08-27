@@ -6,7 +6,7 @@
 
 use serde::Serialize;
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, State};
 
@@ -36,8 +36,7 @@ pub enum ModelLayout {
     },
 }
 
-/// Whether a model can drive the live recording pipeline, or is only usable
-/// for the offline whisper re-transcribe pass. Stage 0.8: generalizes stage
+/// What work a model is installed for. Stage 0.8 generalized stage
 /// 0.7's `selectable: bool` (`true` meant `Live`, `false` meant
 /// `Retranscribe`) now that there's more than one non-live entry -- the
 /// Settings UI groups models by this field rather than testing a bare bool,
@@ -53,6 +52,9 @@ pub enum ModelRole {
     /// Offline-only: usable as `Config::retranscribe_model`, never as
     /// `Config::active_model`. All four whisper entries.
     Retranscribe,
+    /// Text-only local generation for summaries. Never used by either ASR
+    /// pipeline and never receives audio.
+    Summary,
 }
 
 impl ModelRole {
@@ -61,6 +63,7 @@ impl ModelRole {
         match self {
             ModelRole::Live => "live",
             ModelRole::Retranscribe => "retranscribe",
+            ModelRole::Summary => "summary",
         }
     }
 }
@@ -189,6 +192,19 @@ pub static REGISTRY: &[ModelSpec] = &[
         role: ModelRole::Retranscribe,
         retired: false,
     },
+    ModelSpec {
+        id: "qwen3.5-4b-q4-k-m",
+        name: "Qwen3.5 4B",
+        tagline: Some("private summaries on this Mac"),
+        size_mb: 2740,
+        layout: ModelLayout::File {
+            url: "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf",
+            file_name: "Qwen3.5-4B-Q4_K_M.gguf",
+        },
+        extra_files: &[],
+        role: ModelRole::Summary,
+        retired: false,
+    },
 ];
 
 /// Looks up a model spec by id.
@@ -233,6 +249,20 @@ pub fn model_ready(id: &str) -> bool {
     match find(id) {
         Some(spec) => is_downloaded(spec, &simstim_engine::models_dir()),
         None => false,
+    }
+}
+
+/// Returns the downloaded payload path for a single-file model. Local
+/// inference uses this instead of duplicating registry filenames.
+pub fn model_file_path(id: &str) -> Result<PathBuf, String> {
+    let spec = find(id).ok_or_else(|| format!("unknown model id: {id}"))?;
+    let models_dir = simstim_engine::models_dir();
+    if !is_downloaded(spec, &models_dir) {
+        return Err(format!("{} is not downloaded", spec.name));
+    }
+    match spec.layout {
+        ModelLayout::File { file_name, .. } => Ok(models_dir.join(file_name)),
+        ModelLayout::Archive { .. } => Err(format!("{} is not a single-file model", spec.name)),
     }
 }
 
@@ -298,7 +328,7 @@ pub struct ModelInfo {
     pub size_mb: u64,
     pub downloaded: bool,
     pub active: bool,
-    /// `"live" | "retranscribe"` (stage 0.8): the Settings UI's model
+    /// `"live" | "retranscribe" | "summary"`: the Settings UI's model
     /// manager groups rows by this field (Recording vs Re-transcribe)
     /// instead of testing a bare bool. Replaces the stage-0.7 `selectable`
     /// field outright now that the stage-0.8 model manager UI (this field's
@@ -748,25 +778,25 @@ mod tests {
     }
 
     #[test]
-    fn registry_has_exactly_five_entries() {
+    fn registry_has_exactly_six_entries() {
         // Stage 0.5 shipped Parakeet alone; stage 0.7 added one whisper
         // re-transcribe model; stage 0.8 added three more whisper entries
         // (four total). Stage 0.8.x curation retires two of those four
         // rather than deleting them outright (an already-downloaded retired
         // model must stay resolvable so it can be found and deleted), so the
-        // registry is still five entries total -- see
-        // `registry_has_exactly_three_non_retired_entries` for the curated,
+        // Stage 3.1 adds one local summary model, making six total. See
+        // `registry_has_exactly_four_non_retired_entries` for the curated,
         // user-facing count.
-        assert_eq!(REGISTRY.len(), 5);
+        assert_eq!(REGISTRY.len(), 6);
     }
 
     #[test]
-    fn registry_has_exactly_three_non_retired_entries() {
+    fn registry_has_exactly_four_non_retired_entries() {
         // Stage 0.8.x curation, owner's ruling: Parakeet (live) plus exactly
         // two whisper options (turbo, large-v3) -- the other two whisper
         // entries are retired, not deleted.
         let non_retired = REGISTRY.iter().filter(|spec| !spec.retired).count();
-        assert_eq!(non_retired, 3);
+        assert_eq!(non_retired, 4);
     }
 
     #[test]
@@ -787,6 +817,7 @@ mod tests {
         assert!(validate_not_retired(find("whisper-large-v3-turbo-q8").unwrap()).is_ok());
         assert!(validate_not_retired(find("whisper-large-v3").unwrap()).is_ok());
         assert!(validate_not_retired(find("parakeet-tdt-0.6b-v3-int8").unwrap()).is_ok());
+        assert!(validate_not_retired(find("qwen3.5-4b-q4-k-m").unwrap()).is_ok());
     }
 
     #[test]
@@ -971,6 +1002,12 @@ mod tests {
     }
 
     #[test]
+    fn qwen_registry_entry_has_the_summary_role() {
+        let qwen = find("qwen3.5-4b-q4-k-m").unwrap();
+        assert_eq!(qwen.role, ModelRole::Summary);
+    }
+
+    #[test]
     fn list_models_role_reflects_the_registry() {
         let models = list_models();
         let parakeet = models
@@ -984,6 +1021,12 @@ mod tests {
             .find(|m| m.id == "whisper-large-v3-turbo-q8")
             .unwrap();
         assert_eq!(whisper.role, "retranscribe");
+
+        let qwen = models
+            .iter()
+            .find(|m| m.id == "qwen3.5-4b-q4-k-m")
+            .unwrap();
+        assert_eq!(qwen.role, "summary");
     }
 
     #[test]

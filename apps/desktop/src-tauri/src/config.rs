@@ -72,7 +72,7 @@ fn default_delete_audio_after_retranscribe() -> bool {
 
 /// Call detection only suggests recording and therefore defaults on.
 /// The enhance provider ids `enhance::PROVIDERS` knows how to run.
-pub const VALID_ENHANCE_PROVIDERS: &[&str] = &["claude", "codex"];
+pub const VALID_ENHANCE_PROVIDERS: &[&str] = &["local", "claude", "codex"];
 
 /// Claude first: the owner's own subscription, and the provider the enhance
 /// prompt was tuned against.

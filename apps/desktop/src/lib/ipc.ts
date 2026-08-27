@@ -57,8 +57,8 @@ export interface AppConfig {
    */
   delete_audio_after_retranscribe: boolean;
   /**
-   * Which CLI `enhance_session` runs (stage 0.11): `"claude" | "codex"`.
-   * The user's own subscription does the work; no API keys.
+   * Which summary provider `enhance_session` runs: built-in `"local"`, or
+   * the opt-in cloud CLIs `"claude" | "codex"`.
    */
   enhance_provider: string;
   /**
@@ -180,7 +180,7 @@ export interface ModelInfo {
   downloaded: boolean;
   active: boolean;
   /**
-   * `"live" | "retranscribe"` (stage 0.8): the Settings dialog's model
+   * `"live" | "retranscribe" | "summary"`: the Settings dialog's model
    * manager groups rows by this field (Recording vs Re-transcribe) rather
    * than testing a bare bool. Replaces the stage-0.7 `selectable` field
    * outright now that the model manager UI (this field's only remaining

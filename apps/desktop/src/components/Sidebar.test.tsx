@@ -199,7 +199,9 @@ describe("Sidebar: collapse button", () => {
       />
     );
 
-    screen.getByRole("button", { name: /collapse sidebar/i }).click();
+    const collapse = screen.getByRole("button", { name: /collapse sidebar/i });
+    expect(collapse.parentElement?.className).toContain("pl-[88px]");
+    collapse.click();
     expect(onCollapse).toHaveBeenCalledTimes(1);
     expect(screen.getByRole("button", { name: /session a/i })).toBeInTheDocument();
   });

@@ -95,7 +95,7 @@ export function Sidebar({
           `titleBarStyle: Overlay`), so the sidebar background runs to the
           very top and the traffic lights float over this strip. It doubles
           as the drag handle for that region. */}
-      <div data-tauri-drag-region className="flex h-14 shrink-0 items-center justify-end gap-0.5 px-2.5">
+      <div data-tauri-drag-region className="flex h-14 shrink-0 items-center justify-start gap-0.5 pl-[88px] pr-2.5">
         <Button
           variant="ghost"
           size="icon"

@@ -344,6 +344,17 @@ function App() {
     };
   }, []);
 
+  useEffect(() => {
+    const unlisten = listen("menu-bar-add-note", () => {
+      void showMainWindow().then(() => {
+        activeSessionViewRef.current?.focusNotes();
+      });
+    });
+    return () => {
+      unlisten.then((f) => f());
+    };
+  }, []);
+
   const refreshSessions = useCallback(async () => {
     try {
       const fresh = await listSessions();

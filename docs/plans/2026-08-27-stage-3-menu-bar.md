@@ -15,8 +15,8 @@ global start/stop shortcut.
 2. While recording, the menu-bar item shows an elapsed timer. The icon and
    timer are the persistent recording signal. There is no colored status dot.
 3. Clicking the item opens a compact panel. Idle state offers Start recording
-   and Open window. Recording state shows the current note, elapsed time, Open
-   window, and Stop.
+   and Open window. Recording state shows the current note, elapsed time, Add
+   note, Open window, and Stop.
 4. `Command+Shift+N` is registered as a global start/stop shortcut, matching
    the shortcut already shown and handled inside the app.
 5. Menu-bar and shortcut actions route through the existing main-window
@@ -64,6 +64,8 @@ global start/stop shortcut.
 7. Closing or hiding the main window does not remove the menu-bar item or
    break either action.
 8. Open window restores and focuses the main window.
+9. Add note restores the main window, switches the active session to Notes,
+   and focuses its editor.
 
 ## Implementation result
 
@@ -72,13 +74,14 @@ global start/stop shortcut.
 - Recording state updates the native menu-bar timer once per second and pushes
   the same title/start-time state to the panel.
 - The compact panel is a pre-created hidden webview. It opens below the clicked
-  status item, clamps to the active monitor, follows the configured theme, and
-  hides when it loses focus.
+  status item even if macOS does not resolve the active monitor, clamps to the
+  monitor when available, follows the configured theme, and hides when it
+  loses focus.
 - Panel clicks and the global `Command+Shift+N` registration emit one toggle
   event to the existing React recording coordinator. Menu-bar starts always
   create a fresh session because no selected-note context is visible.
 - A debug `.app` bundle was built and ad-hoc signed successfully at
   `target/debug/bundle/macos/simstim.app`.
 - Verification passed on 2026-08-27: `cargo test --workspace`,
-  `cargo clippy --workspace --all-targets -- -D warnings`, `pnpm test` (145
+  `cargo clippy --workspace --all-targets -- -D warnings`, `pnpm test` (146
   tests), and `pnpm build`.

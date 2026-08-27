@@ -17,7 +17,7 @@ use tauri::{
 pub const WINDOW_LABEL: &str = "menu-bar";
 const TRAY_ID: &str = "simstim-menu-bar";
 const PANEL_WIDTH: f64 = 320.0;
-const PANEL_HEIGHT: f64 = 160.0;
+const PANEL_HEIGHT: f64 = 176.0;
 const PANEL_GAP: f64 = 6.0;
 
 #[derive(Clone, Debug)]
@@ -209,23 +209,49 @@ fn toggle_panel(app: &AppHandle, click: PhysicalPosition<f64>, rect: Rect) {
         return;
     }
 
-    if let Ok(Some(monitor)) = app.monitor_from_point(click.x, click.y) {
-        let scale = monitor.scale_factor();
-        let tray_position = rect.position.to_physical::<f64>(scale);
-        let tray_size = rect.size.to_physical::<f64>(scale);
-        let monitor_left = f64::from(monitor.position().x);
-        let monitor_right = monitor_left + f64::from(monitor.size().width);
-        let panel_width = PANEL_WIDTH * scale;
-        let ideal_x = click.x - panel_width / 2.0;
-        let x = ideal_x.clamp(
-            monitor_left + 8.0 * scale,
-            monitor_right - panel_width - 8.0 * scale,
-        );
-        let y = tray_position.y + tray_size.height + PANEL_GAP * scale;
-        let _ = window.set_position(PhysicalPosition::new(x.round() as i32, y.round() as i32));
-    }
+    let monitor = app.monitor_from_point(click.x, click.y).ok().flatten();
+    let scale = monitor.as_ref().map_or_else(
+        || window.scale_factor().unwrap_or(1.0),
+        |item| item.scale_factor(),
+    );
+    let tray_position = rect.position.to_physical::<f64>(scale);
+    let tray_size = rect.size.to_physical::<f64>(scale);
+    let monitor_bounds = monitor.map(|monitor| {
+        (
+            f64::from(monitor.position().x),
+            f64::from(monitor.position().x) + f64::from(monitor.size().width),
+        )
+    });
+    let position = panel_position(
+        click.x,
+        tray_position.y + tray_size.height,
+        scale,
+        monitor_bounds,
+    );
+    let _ = window.set_position(position);
     let _ = window.show();
     let _ = window.set_focus();
+}
+
+fn panel_position(
+    click_x: f64,
+    tray_bottom: f64,
+    scale: f64,
+    monitor_bounds: Option<(f64, f64)>,
+) -> PhysicalPosition<i32> {
+    let panel_width = PANEL_WIDTH * scale;
+    let ideal_x = click_x - panel_width / 2.0;
+    let x = match monitor_bounds {
+        Some((monitor_left, monitor_right)) => ideal_x.clamp(
+            monitor_left + 8.0 * scale,
+            monitor_right - panel_width - 8.0 * scale,
+        ),
+        None => ideal_x,
+    };
+    PhysicalPosition::new(
+        x.round() as i32,
+        (tray_bottom + PANEL_GAP * scale).round() as i32,
+    )
 }
 
 fn menu_icon(recording: bool) -> Image<'static> {
@@ -314,5 +340,21 @@ mod tests {
             .iter()
             .enumerate()
             .all(|(index, channel)| index % 4 == 3 || *channel == 0));
+    }
+
+    #[test]
+    fn panel_stays_anchored_when_monitor_lookup_is_unavailable() {
+        assert_eq!(
+            panel_position(1_200.0, 48.0, 2.0, None),
+            PhysicalPosition::new(880, 60)
+        );
+    }
+
+    #[test]
+    fn panel_is_clamped_inside_the_active_monitor() {
+        assert_eq!(
+            panel_position(10.0, 48.0, 2.0, Some((0.0, 1_920.0))),
+            PhysicalPosition::new(16, 60)
+        );
     }
 }

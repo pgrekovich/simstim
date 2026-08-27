@@ -62,6 +62,22 @@ describe("MenuBarApp", () => {
     expect(emitTo).toHaveBeenCalledWith("main", "menu-bar-toggle-recording");
   });
 
+  it("opens the active note editor from a recording", async () => {
+    render(
+      <MenuBarApp
+        previewState={{
+          kind: "recording",
+          title: "Pricing forum",
+          path: "/tmp/pricing.md",
+          started_at_ms: Date.now(),
+        }}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: /add note/i }));
+    expect(emitTo).toHaveBeenCalledWith("main", "menu-bar-add-note");
+    await vi.waitFor(() => expect(ipc.menuBarHide).toHaveBeenCalledTimes(1));
+  });
+
   it("seeds a recording that began before the panel opened", async () => {
     vi.mocked(ipc.menuBarCurrentState).mockResolvedValue({
       kind: "recording",

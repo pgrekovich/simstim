@@ -125,6 +125,7 @@ export interface TranscriptFindRequest {
  */
 export interface SessionViewHandle {
   flushPendingEdits: () => Promise<void>;
+  focusNotes: () => void;
 }
 
 /**
@@ -327,6 +328,7 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
   // that must never close over a stale render's value.
   const titleRef = useRef(title);
   const notesRef = useRef(notes);
+  const notesInputRef = useRef<HTMLTextAreaElement>(null);
   const savedTitleRef = useRef(title);
   const savedNotesRef = useRef(notes);
   const isActiveRef = useRef(isActive);
@@ -424,6 +426,10 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
     flushPendingEdits: async () => {
       await commitNotes();
       await commitTitle();
+    },
+    focusNotes: () => {
+      setActiveTab("notes");
+      window.requestAnimationFrame(() => notesInputRef.current?.focus());
     },
   }));
 
@@ -759,6 +765,7 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
         >
           <div className="shrink-0 px-6 pt-0.5">{titleInput}</div>
           <textarea
+            ref={notesInputRef}
             value={notes}
             onChange={handleNotesChange}
             onBlur={commitNotes}

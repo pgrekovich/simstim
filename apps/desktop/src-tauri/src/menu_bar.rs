@@ -17,7 +17,7 @@ use tauri::{
 pub const WINDOW_LABEL: &str = "menu-bar";
 const TRAY_ID: &str = "simstim-menu-bar";
 const PANEL_WIDTH: f64 = 320.0;
-const PANEL_HEIGHT: f64 = 184.0;
+const PANEL_HEIGHT: f64 = 160.0;
 const PANEL_GAP: f64 = 6.0;
 
 #[derive(Clone, Debug)]

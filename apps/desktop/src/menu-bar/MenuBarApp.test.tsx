@@ -56,7 +56,8 @@ describe("MenuBarApp", () => {
       started_at_ms: Date.now() - 72_000,
     });
     expect(screen.getByText("Pricing forum")).toBeVisible();
-    expect(screen.getByText(/Recording locally · 01:12/)).toBeVisible();
+    expect(screen.getByText("Recording locally")).toBeVisible();
+    expect(screen.getByText("01:12")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: /^stop$/i }));
     expect(emitTo).toHaveBeenCalledWith("main", "menu-bar-toggle-recording");
   });
@@ -70,7 +71,8 @@ describe("MenuBarApp", () => {
     });
     render(<MenuBarApp />);
     expect(await screen.findByText("Daily")).toBeVisible();
-    expect(screen.getByText(/Recording locally · 00:05/)).toBeVisible();
+    expect(screen.getByText("Recording locally")).toBeVisible();
+    expect(screen.getByText("00:05")).toBeVisible();
   });
 
   it("opens and focuses the main window then hides", async () => {

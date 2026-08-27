@@ -622,14 +622,20 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
   const tabList = (
     <TabsList className="h-[34px] gap-[3px] rounded-full bg-foreground/[0.06] p-[3px] dark:bg-foreground/[0.07]">
       <TabsTrigger
-        className="h-7 gap-[7px] rounded-full px-[13px] font-mono text-[11px] font-normal hover:bg-foreground/[0.05] data-[state=active]:bg-background data-[state=active]:font-semibold data-[state=active]:tracking-[0.04em] data-[state=active]:shadow-[0_1px_2px_rgb(30_27_22/0.14)] dark:data-[state=active]:bg-foreground/[0.14]"
+        className={cn(
+          "h-7 gap-[7px] rounded-full px-[13px] font-mono text-[11px] font-normal hover:bg-foreground/[0.05] data-[state=active]:bg-background data-[state=active]:font-semibold data-[state=active]:tracking-[0.04em] data-[state=active]:shadow-[0_1px_2px_rgb(30_27_22/0.14)] dark:data-[state=active]:bg-foreground/[0.14]",
+          findOpen && "max-[960px]:hidden",
+        )}
         value="notes"
       >
         Notes
       </TabsTrigger>
       {summary && (
         <TabsTrigger
-          className="h-7 gap-[7px] rounded-full px-[13px] font-mono text-[11px] font-normal hover:bg-foreground/[0.05] data-[state=active]:bg-background data-[state=active]:font-semibold data-[state=active]:tracking-[0.04em] data-[state=active]:shadow-[0_1px_2px_rgb(30_27_22/0.14)] dark:data-[state=active]:bg-foreground/[0.14]"
+          className={cn(
+            "h-7 gap-[7px] rounded-full px-[13px] font-mono text-[11px] font-normal hover:bg-foreground/[0.05] data-[state=active]:bg-background data-[state=active]:font-semibold data-[state=active]:tracking-[0.04em] data-[state=active]:shadow-[0_1px_2px_rgb(30_27_22/0.14)] dark:data-[state=active]:bg-foreground/[0.14]",
+            findOpen && "max-[960px]:hidden",
+          )}
           value="summary"
         >
           Summary

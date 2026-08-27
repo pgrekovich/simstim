@@ -889,7 +889,7 @@ function App() {
               <Button
                 variant="ghost"
                 size="icon"
-                className="size-7 bg-foreground/[0.06]"
+                className="size-7"
                 aria-label="Show sidebar"
                 title="Show sidebar (⌘\\)"
                 onClick={() => setSidebarCollapsed(false)}

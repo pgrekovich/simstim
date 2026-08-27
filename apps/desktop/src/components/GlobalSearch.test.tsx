@@ -112,6 +112,28 @@ describe("GlobalSearch", () => {
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
+  it("hands the global query and timestamp to spoken-result navigation", async () => {
+    const onOpenSession = vi.fn();
+    render(
+      <GlobalSearch
+        open
+        onOpenChange={vi.fn()}
+        sessions={sessions}
+        onOpenSession={onOpenSession}
+      />,
+    );
+
+    fireEvent.change(screen.getByRole("searchbox", { name: /search all notes/i }), {
+      target: { value: "budget" },
+    });
+    fireEvent.click(await screen.findByRole("option", { name: /about the budget/i }));
+
+    expect(onOpenSession).toHaveBeenCalledExactlyOnceWith("/tmp/sync.md", {
+      query: "budget",
+      timestamp: "00:00:04",
+    });
+  });
+
   it("keeps failures inside the dialog", async () => {
     vi.mocked(searchSessions).mockRejectedValue("folder unavailable");
     render(

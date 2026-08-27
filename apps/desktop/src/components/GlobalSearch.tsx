@@ -13,7 +13,12 @@ interface GlobalSearchProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   sessions: SessionMeta[];
-  onOpenSession: (path: string) => void;
+  onOpenSession: (path: string, spoken?: SpokenSearchTarget) => void;
+}
+
+export interface SpokenSearchTarget {
+  query: string;
+  timestamp?: string;
 }
 
 interface SearchRow {
@@ -215,7 +220,11 @@ export function GlobalSearch({
   }, [activeIndex]);
 
   function openRow(row: SearchRow) {
-    onOpenSession(row.path);
+    if (row.kind === "spoken") {
+      onOpenSession(row.path, { query: query.trim(), timestamp: row.timestamp });
+    } else {
+      onOpenSession(row.path);
+    }
     handleOpenChange(false);
   }
 

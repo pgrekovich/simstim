@@ -1119,6 +1119,32 @@ describe("App: global search (stage 2.0)", () => {
     await waitFor(() =>
       expect(document.body.textContent).toContain("about the budget"),
     );
+    expect(screen.getByRole("searchbox", { name: "Find in transcript" })).toHaveValue("budget");
+    expect(document.querySelector('[data-current-match="true"]')).toHaveTextContent("budget");
+  });
+
+  it("uses Command+F for the selected transcript and keeps Command+K global", async () => {
+    vi.mocked(ipc.listSessions).mockResolvedValue(all);
+    vi.mocked(ipc.readSession).mockResolvedValue({
+      title: "Weekly sync",
+      date: "",
+      notes: "",
+      transcript: "[00:00:04] Me: about the budget",
+      audio_path: null,
+      summary: "",
+      summary_model: null,
+    });
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /weekly sync/i }));
+    await screen.findByText("about the budget");
+
+    fireEvent.keyDown(window, { key: "f", metaKey: true });
+    expect(await screen.findByRole("searchbox", { name: "Find in transcript" })).toHaveFocus();
+    expect(screen.getByRole("tab", { name: "Transcript" })).toHaveAttribute("data-state", "active");
+
+    fireEvent.keyDown(window, { key: "k", metaKey: true });
+    expect(screen.getByRole("dialog", { name: /search all notes/i })).toBeInTheDocument();
   });
 });
 

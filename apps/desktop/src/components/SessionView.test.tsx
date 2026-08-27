@@ -480,6 +480,62 @@ describe("SessionView: notes/transcript tabs (stage 0.10)", () => {
   });
 });
 
+describe("SessionView: transcript find (stage 2.1)", () => {
+  const transcript = [
+    "[00:00:03] Me: Berlin first",
+    "[00:00:09] Them: then Berlin again",
+  ].join("\n");
+
+  it("opens Transcript, targets the requested timestamp, and wraps navigation", async () => {
+    render(
+      <SessionView
+        path="/tmp/call.md"
+        isActive={false}
+        initialData={{ ...baseData, transcript }}
+        liveLines={[]}
+        interimMe=""
+        interimThem=""
+        retranscribingJob={null}
+        transcriptFindRequest={{ id: 1, query: "berlin", timestamp: "00:00:09" }}
+      />
+    );
+
+    const input = await screen.findByRole("searchbox", { name: "Find in transcript" });
+    expect(input).toHaveValue("berlin");
+    expect(screen.getByRole("tab", { name: "Transcript" })).toHaveAttribute("data-state", "active");
+    expect(screen.getByText("2 / 2")).toBeInTheDocument();
+    expect(screen.getAllByText(/berlin/i)[1]).toHaveAttribute("data-current-match", "true");
+
+    fireEvent.click(screen.getByRole("button", { name: "Next transcript match" }));
+    expect(screen.getByText("1 / 2")).toBeInTheDocument();
+    expect(screen.getAllByText(/berlin/i)[0]).toHaveAttribute("data-current-match", "true");
+
+    fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
+    expect(screen.getByText("2 / 2")).toBeInTheDocument();
+  });
+
+  it("shows an empty count and removes highlights when closed", async () => {
+    render(
+      <SessionView
+        path="/tmp/call.md"
+        isActive={false}
+        initialData={{ ...baseData, transcript }}
+        liveLines={[]}
+        interimMe=""
+        interimThem=""
+        retranscribingJob={null}
+        transcriptFindRequest={{ id: 1, query: "missing" }}
+      />
+    );
+
+    expect(await screen.findByText("0 / 0")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Next transcript match" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Close transcript find" }));
+    expect(screen.queryByRole("searchbox", { name: "Find in transcript" })).toBeNull();
+    expect(document.querySelectorAll("mark")).toHaveLength(0);
+  });
+});
+
 describe("SessionView: enhance (stage 0.11)", () => {
   it("enhances, re-reads the file and shows the summary labeled with its model", async () => {
     vi.mocked(ipc.enhanceSession).mockResolvedValue("- **ship v2 friday**");

@@ -1,12 +1,12 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
-import { Sparkles } from "lucide-react";
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
+import { ChevronDown, ChevronUp, Sparkles, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { createPortal } from "react-dom";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { AudioPlayer, type AudioPlayerHandle } from "@/components/AudioPlayer";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { TranscriptView } from "@/components/TranscriptView";
+import { findTranscriptMatches, TranscriptView } from "@/components/TranscriptView";
 import {
   enhanceSession,
   readSession,
@@ -89,6 +89,14 @@ interface SessionViewProps {
    * case, not detect it.
    */
   onRetranscribeEnd?: (path: string) => void;
+  transcriptFindRequest?: TranscriptFindRequest | null;
+}
+
+export interface TranscriptFindRequest {
+  id: number;
+  /** `null` closes find; an empty string opens a fresh local find. */
+  query: string | null;
+  timestamp?: string;
 }
 
 /**
@@ -180,6 +188,7 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
     onActiveEdit,
     onRetranscribeStart,
     onRetranscribeEnd,
+    transcriptFindRequest,
   },
   ref
 ) {
@@ -215,6 +224,13 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
   // ever read while the SAME click's promise is still in flight.
   const [clicking, setClicking] = useState(false);
   const [retranscribeError, setRetranscribeError] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState("notes");
+  const [findOpen, setFindOpen] = useState(false);
+  const [findQuery, setFindQuery] = useState("");
+  const [activeFindIndex, setActiveFindIndex] = useState(0);
+  const findInputRef = useRef<HTMLInputElement>(null);
+  const handledFindRequestRef = useRef<number | null>(null);
+  const pendingFindTargetRef = useRef<{ query: string; timestamp?: string } | null>(null);
   const playerRef = useRef<AudioPlayerHandle>(null);
   const jobRunningHere = retranscribingJob?.path === path;
   // App's toolbar renders an empty `#topbar-tabs-slot`; the tab switcher is
@@ -222,8 +238,10 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
   // Tabs React tree. Looked up in an effect because the slot is a sibling DOM
   // subtree. Component tests have no slot and use the inline fallback.
   const [toolbarSlot, setToolbarSlot] = useState<HTMLElement | null>(null);
+  const [toolbarFindSlot, setToolbarFindSlot] = useState<HTMLElement | null>(null);
   useEffect(() => {
     setToolbarSlot(document.getElementById("topbar-tabs-slot"));
+    setToolbarFindSlot(document.getElementById("topbar-transcript-find-slot"));
   }, []);
 
   // "Latest value" mirrors of the controlled state above, read from
@@ -459,9 +477,66 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
     }, NOTES_DEBOUNCE_MS);
   }
 
-  const transcriptLines = isActive
-    ? liveLines
-    : transcript.split("\n").filter((line) => line.length > 0);
+  const transcriptLines = useMemo(
+    () => isActive ? liveLines : transcript.split("\n").filter((line) => line.length > 0),
+    [isActive, liveLines, transcript],
+  );
+  const transcriptMatches = useMemo(
+    () => findTranscriptMatches(transcriptLines, findQuery),
+    [transcriptLines, findQuery],
+  );
+
+  useEffect(() => {
+    if (!transcriptFindRequest) return;
+    if (handledFindRequestRef.current === transcriptFindRequest.id) return;
+    handledFindRequestRef.current = transcriptFindRequest.id;
+    if (transcriptFindRequest.query === null) {
+      setFindOpen(false);
+      setFindQuery("");
+      setActiveFindIndex(0);
+      return;
+    }
+    setActiveTab("transcript");
+    setFindOpen(true);
+    setFindQuery(transcriptFindRequest.query);
+    pendingFindTargetRef.current = {
+      query: transcriptFindRequest.query,
+      timestamp: transcriptFindRequest.timestamp,
+    };
+    setActiveFindIndex(0);
+    window.requestAnimationFrame(() => findInputRef.current?.focus());
+  }, [transcriptFindRequest]);
+
+  useEffect(() => {
+    const pending = pendingFindTargetRef.current;
+    if (pending && pending.query === findQuery) {
+      const targetLine = pending.timestamp
+        ? transcriptLines.findIndex((line) => line.startsWith(`[${pending.timestamp}]`))
+        : -1;
+      const targetMatch = targetLine === -1
+        ? 0
+        : transcriptMatches.findIndex((match) => match.lineIndex === targetLine);
+      setActiveFindIndex(Math.max(0, targetMatch));
+      pendingFindTargetRef.current = null;
+      return;
+    }
+    setActiveFindIndex((current) =>
+      transcriptMatches.length === 0 ? 0 : Math.min(current, transcriptMatches.length - 1),
+    );
+  }, [findQuery, transcriptLines, transcriptMatches]);
+
+  function moveFind(direction: 1 | -1) {
+    if (transcriptMatches.length === 0) return;
+    setActiveFindIndex((current) =>
+      (current + direction + transcriptMatches.length) % transcriptMatches.length,
+    );
+  }
+
+  function closeFind() {
+    setFindOpen(false);
+    setFindQuery("");
+    setActiveFindIndex(0);
+  }
   const audioPath = initialData.audio_path;
   const retranscribeBusy = clicking || jobRunningHere;
   const retranscribeStatusText = jobRunningHere
@@ -480,6 +555,69 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
       className="w-full min-w-0 bg-transparent font-serif text-[26px] font-semibold leading-[1.25] tracking-[-0.01em] outline-none placeholder:text-muted-foreground"
     />
   );
+
+  const findControls = findOpen && activeTab === "transcript" ? (
+    <div className="flex h-7 shrink-0 items-center gap-2 rounded-full border border-input bg-background py-0 pl-[11px] pr-[5px] shadow-none focus-within:border-foreground focus-within:ring-[3px] focus-within:ring-ring/35">
+      <input
+        ref={findInputRef}
+        type="search"
+        aria-label="Find in transcript"
+        value={findQuery}
+        onChange={(event) => {
+          setFindQuery(event.target.value);
+          setActiveFindIndex(0);
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            moveFind(event.shiftKey ? -1 : 1);
+          } else if (event.key === "Escape") {
+            event.preventDefault();
+            closeFind();
+          }
+        }}
+        placeholder="Find"
+        className="w-[clamp(64px,8vw,120px)] min-w-0 bg-transparent text-[11.5px] outline-none placeholder:text-muted-foreground"
+      />
+      <span className="shrink-0 font-mono text-[10px] text-muted-foreground" aria-live="polite">
+        {transcriptMatches.length === 0 ? 0 : activeFindIndex + 1} / {transcriptMatches.length}
+      </span>
+      <span className="flex shrink-0 gap-0.5">
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-xs"
+          className="size-[18px] rounded-full bg-foreground/[0.07]"
+          aria-label="Previous transcript match"
+          disabled={transcriptMatches.length === 0}
+          onClick={() => moveFind(-1)}
+        >
+          <ChevronUp className="size-[11px]" />
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-xs"
+          className="size-[18px] rounded-full bg-foreground/[0.07]"
+          aria-label="Next transcript match"
+          disabled={transcriptMatches.length === 0}
+          onClick={() => moveFind(1)}
+        >
+          <ChevronDown className="size-[11px]" />
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-xs"
+          className="size-[18px] rounded-full text-muted-foreground"
+          aria-label="Close transcript find"
+          onClick={closeFind}
+        >
+          <X className="size-[11px]" />
+        </Button>
+      </span>
+    </div>
+  ) : null;
 
   const tabList = (
     <TabsList className="h-[34px] gap-[3px] rounded-full bg-foreground/[0.06] p-[3px] dark:bg-foreground/[0.07]">
@@ -513,10 +651,21 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
           only appears after Enhance has produced it. Tab contents are
           force-mounted and CSS-hidden so a switch does not kill playback or
           reset TranscriptView's scroll. */}
-      <Tabs defaultValue="notes" className="min-h-0 flex-1 gap-0">
+      <Tabs
+        value={activeTab}
+        onValueChange={(value) => {
+          setActiveTab(value);
+          if (value !== "transcript") closeFind();
+        }}
+        className="min-h-0 flex-1 gap-0"
+      >
         {toolbarSlot ? createPortal(tabList, toolbarSlot) : (
-          <div className="flex h-11 shrink-0 items-center justify-start">{tabList}</div>
+          <div className="flex h-11 shrink-0 items-center justify-between gap-3">
+            {tabList}
+            {findControls}
+          </div>
         )}
+        {toolbarFindSlot && findControls ? createPortal(findControls, toolbarFindSlot) : null}
 
         <TabsContent
           value="notes"
@@ -586,6 +735,8 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
             interimMe={isActive ? interimMe : undefined}
             interimThem={isActive ? interimThem : undefined}
             onSeek={audioPath ? handleSeek : undefined}
+            matches={transcriptMatches}
+            activeMatchIndex={findOpen ? activeFindIndex : -1}
           />
 
           {retranscribeStatusText && (

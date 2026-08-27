@@ -14,8 +14,8 @@ function ReelMark({ recording }: { recording: boolean }) {
   return (
     <svg aria-hidden="true" viewBox="0 0 36 36" className="size-7 text-foreground">
       <rect x="11" y="17" width="14" height="2" fill="currentColor" opacity={recording ? 1 : 0.52} />
-      <circle cx="11" cy="18" r="6" fill="none" stroke="currentColor" strokeWidth="3" opacity={recording ? 1 : 0.52} />
-      <circle cx="25" cy="18" r="6" fill="none" stroke="currentColor" strokeWidth="3" opacity={recording ? 1 : 0.52} />
+      <circle cx="11" cy="18" r="6" fill="none" stroke="currentColor" strokeWidth="3" />
+      <circle cx="25" cy="18" r="6" fill="none" stroke="currentColor" strokeWidth="3" />
       {recording && (
         <>
           <circle cx="11" cy="18" r="2.6" fill="currentColor" />

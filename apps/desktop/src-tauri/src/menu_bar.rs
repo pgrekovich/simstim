@@ -230,25 +230,39 @@ fn toggle_panel(app: &AppHandle, click: PhysicalPosition<f64>, rect: Rect) {
 
 fn menu_icon(recording: bool) -> Image<'static> {
     const SIZE: u32 = 36;
+    const SAMPLES: u32 = 8;
     let mut rgba = vec![0_u8; (SIZE * SIZE * 4) as usize];
-    let stroke_alpha = if recording { 255 } else { 138 };
     for y in 0..SIZE {
         for x in 0..SIZE {
-            let px = x as f64 + 0.5;
-            let py = y as f64 + 0.5;
-            let on_bar = (10.5..=25.5).contains(&px) && (16.5..=19.5).contains(&py);
-            let mut alpha = if on_bar { stroke_alpha } else { 0 };
-            for center_x in [11.0, 25.0] {
-                let distance = ((px - center_x).powi(2) + (py - 18.0).powi(2)).sqrt();
-                if (4.4..=7.0).contains(&distance) {
-                    alpha = alpha.max(stroke_alpha);
-                }
-                if recording && distance <= 2.8 {
-                    alpha = 255;
+            let mut coverage = 0.0;
+            for sample_y in 0..SAMPLES {
+                for sample_x in 0..SAMPLES {
+                    let px = x as f64 + (sample_x as f64 + 0.5) / SAMPLES as f64;
+                    let py = y as f64 + (sample_y as f64 + 0.5) / SAMPLES as f64;
+                    let on_bar = (11.0..=25.0).contains(&px) && (17.0..=19.0).contains(&py);
+                    let mut sample_alpha = if on_bar {
+                        if recording {
+                            1.0
+                        } else {
+                            0.45
+                        }
+                    } else {
+                        0.0
+                    };
+                    for center_x in [11.0, 25.0] {
+                        let distance = ((px - center_x).powi(2) + (py - 18.0).powi(2)).sqrt();
+                        if (4.5..=7.5).contains(&distance) {
+                            sample_alpha = 1.0;
+                        }
+                        if recording && distance <= 2.6 {
+                            sample_alpha = 1.0;
+                        }
+                    }
+                    coverage += sample_alpha;
                 }
             }
             let offset = ((y * SIZE + x) * 4) as usize;
-            rgba[offset + 3] = alpha;
+            rgba[offset + 3] = (coverage * 255.0 / f64::from(SAMPLES * SAMPLES)).round() as u8;
         }
     }
     Image::new_owned(rgba, SIZE, SIZE)
@@ -282,7 +296,7 @@ mod tests {
         let idle = menu_icon(false);
         let recording = menu_icon(true);
         let center = ((18 * 36 + 11) * 4 + 3) as usize;
-        assert_eq!(idle.rgba()[center], 138);
+        assert!(idle.rgba()[center] >= 100 && idle.rgba()[center] <= 130);
         assert_eq!(recording.rgba()[center], 255);
     }
 
@@ -290,8 +304,12 @@ mod tests {
     fn idle_icon_is_translucent_template_art() {
         let icon = menu_icon(false);
         let pixels = icon.rgba();
-        assert!(pixels.iter().skip(3).step_by(4).any(|alpha| *alpha == 138));
-        assert!(pixels.iter().skip(3).step_by(4).all(|alpha| *alpha <= 138));
+        assert!(pixels.iter().skip(3).step_by(4).any(|alpha| *alpha == 255));
+        assert!(pixels
+            .iter()
+            .skip(3)
+            .step_by(4)
+            .any(|alpha| *alpha > 0 && *alpha < 255));
         assert!(pixels
             .iter()
             .enumerate()

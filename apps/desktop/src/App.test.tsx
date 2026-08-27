@@ -1183,7 +1183,9 @@ describe("App: empty state and global hotkeys (stage 0.10)", () => {
 
     expect(screen.queryByRole("button", { name: /kept note/i })).toBeNull();
     expect(screen.getByText("still here")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /show sidebar/i }));
+    const showSidebar = screen.getByRole("button", { name: /show sidebar/i });
+    expect(showSidebar.className).not.toContain("bg-foreground/[0.06]");
+    fireEvent.click(showSidebar);
     expect(await screen.findByRole("button", { name: /kept note/i })).toBeInTheDocument();
   });
 

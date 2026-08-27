@@ -950,7 +950,7 @@ function App() {
           <div id="topbar-tabs-slot" className="flex min-w-0 flex-1 items-center overflow-hidden" />
           <div
             id="topbar-transcript-find-slot"
-            className="relative z-10 flex min-w-0 shrink-0 items-center max-[960px]:absolute max-[960px]:right-8 max-[960px]:top-[60px]"
+            className="relative z-10 flex min-w-0 shrink-0 items-center"
           />
 
           {showTopbar && statusText && (

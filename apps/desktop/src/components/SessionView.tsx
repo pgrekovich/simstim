@@ -1,4 +1,12 @@
-import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
+import {
+  forwardRef,
+  useEffect,
+  useImperativeHandle,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { ChevronDown, ChevronUp, Sparkles, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { createPortal } from "react-dom";
@@ -19,6 +27,17 @@ import { isTranscriptUpdatedButAudioDeleteFailed, type RetranscribeJob } from "@
 
 /** Global Constraints (Task 6): notes save 500ms after the last keystroke. */
 const NOTES_DEBOUNCE_MS = 500;
+const TOPBAR_GAP_PX = 12;
+const MIN_FIND_GAP_PX = 16;
+
+export function shouldStackTranscriptFind(
+  tabsRight: number,
+  actionsLeft: number,
+  findWidth: number,
+): boolean {
+  const candidateFindLeft = actionsLeft - TOPBAR_GAP_PX - findWidth;
+  return candidateFindLeft - tabsRight < MIN_FIND_GAP_PX;
+}
 
 interface SessionViewProps {
   path: string;
@@ -228,7 +247,10 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
   const [findOpen, setFindOpen] = useState(false);
   const [findQuery, setFindQuery] = useState("");
   const [activeFindIndex, setActiveFindIndex] = useState(0);
+  const [findStacked, setFindStacked] = useState(false);
   const findInputRef = useRef<HTMLInputElement>(null);
+  const findControlsRef = useRef<HTMLDivElement>(null);
+  const tabListRef = useRef<HTMLDivElement>(null);
   const handledFindRequestRef = useRef<number | null>(null);
   const pendingFindTargetRef = useRef<{ query: string; timestamp?: string } | null>(null);
   const playerRef = useRef<AudioPlayerHandle>(null);
@@ -239,10 +261,66 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
   // subtree. Component tests have no slot and use the inline fallback.
   const [toolbarSlot, setToolbarSlot] = useState<HTMLElement | null>(null);
   const [toolbarFindSlot, setToolbarFindSlot] = useState<HTMLElement | null>(null);
-  useEffect(() => {
+  useLayoutEffect(() => {
     setToolbarSlot(document.getElementById("topbar-tabs-slot"));
     setToolbarFindSlot(document.getElementById("topbar-transcript-find-slot"));
   }, []);
+
+  useLayoutEffect(() => {
+    if (!findOpen || !toolbarFindSlot) {
+      setFindStacked(false);
+      return;
+    }
+    const header = toolbarFindSlot.parentElement;
+    if (!header) return;
+
+    let frame: number | null = null;
+    const measure = () => {
+      frame = null;
+      const tabs = tabListRef.current;
+      const find = findControlsRef.current;
+      if (!tabs || !find) return;
+
+      const children = Array.from(header.children);
+      const slotIndex = children.indexOf(toolbarFindSlot);
+      const nextVisible = children.slice(slotIndex + 1).find((element) => {
+        const rect = element.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+      });
+      if (!nextVisible) return;
+
+      setFindStacked(shouldStackTranscriptFind(
+        tabs.getBoundingClientRect().right,
+        nextVisible.getBoundingClientRect().left,
+        find.getBoundingClientRect().width,
+      ));
+    };
+    const scheduleMeasure = () => {
+      if (frame !== null) window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(measure);
+    };
+
+    const observer = new ResizeObserver(scheduleMeasure);
+    const mutationObserver = new MutationObserver(scheduleMeasure);
+    observer.observe(header);
+    observer.observe(tabListRef.current ?? toolbarFindSlot);
+    observer.observe(findControlsRef.current ?? toolbarFindSlot);
+    mutationObserver.observe(header, {
+      attributes: true,
+      characterData: true,
+      childList: true,
+      subtree: true,
+    });
+    window.addEventListener("resize", scheduleMeasure);
+    measure();
+
+    return () => {
+      if (frame !== null) window.cancelAnimationFrame(frame);
+      observer.disconnect();
+      mutationObserver.disconnect();
+      window.removeEventListener("resize", scheduleMeasure);
+    };
+  }, [findOpen, toolbarFindSlot]);
 
   // "Latest value" mirrors of the controlled state above, read from
   // callbacks (blur handlers, the debounce timeout, the unmount cleanup)
@@ -557,7 +635,13 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
   );
 
   const findControls = findOpen && activeTab === "transcript" ? (
-    <div className="flex h-7 shrink-0 items-center gap-2 rounded-full border border-input bg-background py-0 pl-[11px] pr-[5px] shadow-none focus-within:border-foreground focus-within:ring-[3px] focus-within:ring-ring/35">
+    <div
+      ref={findControlsRef}
+      className={cn(
+        "flex h-7 shrink-0 items-center gap-2 rounded-full border border-input bg-background py-0 pl-[11px] pr-[5px] shadow-none focus-within:border-foreground focus-within:ring-[3px] focus-within:ring-ring/35",
+        findStacked && "fixed right-8 top-[60px] z-20",
+      )}
+    >
       <input
         ref={findInputRef}
         type="search"
@@ -620,7 +704,7 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
   ) : null;
 
   const tabList = (
-    <TabsList className="h-[34px] gap-[3px] rounded-full bg-foreground/[0.06] p-[3px] dark:bg-foreground/[0.07]">
+    <TabsList ref={tabListRef} className="h-[34px] shrink-0 gap-[3px] rounded-full bg-foreground/[0.06] p-[3px] dark:bg-foreground/[0.07]">
       <TabsTrigger
         className="h-7 gap-[7px] rounded-full px-[13px] font-mono text-[11px] font-normal hover:bg-foreground/[0.05] data-[state=active]:bg-background data-[state=active]:font-semibold data-[state=active]:tracking-[0.04em] data-[state=active]:shadow-[0_1px_2px_rgb(30_27_22/0.14)] dark:data-[state=active]:bg-foreground/[0.14]"
         value="notes"
@@ -730,7 +814,7 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
           forceMount
           className={cn(
             "flex min-h-0 flex-1 flex-col gap-3 data-[state=inactive]:hidden",
-            findOpen && "max-[960px]:pt-10",
+            findStacked && "pt-10",
           )}
         >
           <TranscriptView

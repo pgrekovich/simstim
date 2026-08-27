@@ -1,7 +1,11 @@
 import { createRef } from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { SessionView, type SessionViewHandle } from "@/components/SessionView";
+import {
+  SessionView,
+  shouldStackTranscriptFind,
+  type SessionViewHandle,
+} from "@/components/SessionView";
 import * as ipc from "@/lib/ipc";
 import type { SessionData } from "@/lib/ipc";
 
@@ -485,6 +489,11 @@ describe("SessionView: transcript find (stage 2.1)", () => {
     "[00:00:03] Me: Berlin first",
     "[00:00:09] Them: then Berlin again",
   ].join("\n");
+
+  it("stacks only when the measured tab-to-find gap would be under 16 px", () => {
+    expect(shouldStackTranscriptFind(500, 728, 200)).toBe(false);
+    expect(shouldStackTranscriptFind(501, 728, 200)).toBe(true);
+  });
 
   it("opens Transcript, targets the requested timestamp, and wraps navigation", async () => {
     render(

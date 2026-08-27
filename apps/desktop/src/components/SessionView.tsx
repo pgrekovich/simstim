@@ -644,6 +644,7 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
     >
       <input
         ref={findInputRef}
+        autoFocus
         type="search"
         aria-label="Find in transcript"
         value={findQuery}

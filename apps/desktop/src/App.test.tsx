@@ -289,6 +289,66 @@ describe("App: call detection via the banner window (stage 1.1)", () => {
   });
 });
 
+describe("App: menu-bar recording toggle (stage 3)", () => {
+  async function emitMenuBarToggle() {
+    await waitFor(() =>
+      expect(
+        vi.mocked(listen).mock.calls.some(([name]) => name === "menu-bar-toggle-recording"),
+      ).toBe(true),
+    );
+    emit("menu-bar-toggle-recording", undefined);
+  }
+
+  it("starts a fresh session even when an old note is selected", async () => {
+    vi.mocked(ipc.listSessions).mockResolvedValueOnce([
+      {
+        path: "/tmp/old.md",
+        title: "Old note",
+        date: "2026-08-27T10:00:00+02:00",
+        duration_secs: 10,
+      },
+    ]);
+    render(<App />);
+    fireEvent.click(await screen.findByText("Old note"));
+
+    await emitMenuBarToggle();
+    await waitFor(() => expect(ipc.startRecording).toHaveBeenCalledTimes(1));
+    expect(ipc.startRecording).toHaveBeenCalledWith(null);
+  });
+
+  it("stops the active session through the normal stop path", async () => {
+    render(<App />);
+    await emitMenuBarToggle();
+    await waitFor(() => expect(ipc.startRecording).toHaveBeenCalledTimes(1));
+
+    await emitMenuBarToggle();
+    await waitFor(() => expect(ipc.stopRecording).toHaveBeenCalledTimes(1));
+    expect(ipc.startRecording).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens the main window when the live model is unavailable", async () => {
+    vi.mocked(ipc.listModels).mockResolvedValueOnce([
+      {
+        id: "m1",
+        name: "Test model",
+        tagline: null,
+        size_mb: 100,
+        downloaded: false,
+        active: true,
+        role: "live",
+        size_on_disk_bytes: 0,
+        retired: false,
+      },
+    ]);
+    render(<App />);
+    await screen.findByText("model not downloaded");
+
+    await emitMenuBarToggle();
+    await waitFor(() => expect(ipc.showMainWindow).toHaveBeenCalledTimes(1));
+    expect(ipc.startRecording).not.toHaveBeenCalled();
+  });
+});
+
 describe("App: hot-mic fix (final review Critical finding)", () => {
   it("leaves recording mode immediately while slow finalization stays in the background", async () => {
     let finishStop!: (path: string) => void;

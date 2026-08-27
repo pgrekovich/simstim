@@ -20,9 +20,10 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 # macos-private-api: the only way to get a transparent webview window on
 # macOS (the banner window is a transparent layer around a rounded card).
-tauri = { version = "2", features = ["protocol-asset", "macos-private-api"] }
+tauri = { version = "2", features = ["protocol-asset", "macos-private-api", "tray-icon"] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
+tauri-plugin-global-shortcut = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = { workspace = true }

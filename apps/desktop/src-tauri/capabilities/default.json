@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main and banner windows (the banner needs event IPC: listen for banner-state, emitTo toward main)",
-  "windows": ["main", "banner"],
+  "description": "Capability for the main, banner, and menu-bar panel windows",
+  "windows": ["main", "banner", "menu-bar"],
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",

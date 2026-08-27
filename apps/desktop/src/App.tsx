@@ -137,6 +137,7 @@ function App() {
   });
   const handleStopRef = useRef<() => Promise<void>>(async () => {});
   const bannerStartRef = useRef<(payload: CallDetectedPayload) => void>(() => {});
+  const menuBarToggleRef = useRef<() => void>(() => {});
   // State alone cannot reject two stop events delivered in the same React
   // tick. This synchronous guard protects the one backend recording handle.
   const stopInFlightRef = useRef(false);
@@ -307,6 +308,36 @@ function App() {
     const unlisten = listen("banner-stop", () => {
       // handleStop carries its own busy/in-flight guards.
       void handleStopRef.current();
+    });
+    return () => {
+      unlisten.then((f) => f());
+    };
+  }, []);
+
+  // The native menu-bar panel and the global shortcut both send the same
+  // toggle event. A start always creates a fresh session because there is no
+  // visible selection context while another application has focus.
+  useEffect(() => {
+    menuBarToggleRef.current = () => {
+      if (busy) {
+        void showMainWindow();
+        return;
+      }
+      if (activePath !== null) {
+        void handleStopRef.current();
+        return;
+      }
+      if (!modelReady) {
+        void showMainWindow();
+        return;
+      }
+      void handleStart(undefined, true);
+    };
+  });
+
+  useEffect(() => {
+    const unlisten = listen("menu-bar-toggle-recording", () => {
+      menuBarToggleRef.current();
     });
     return () => {
       unlisten.then((f) => f());
@@ -601,7 +632,7 @@ function App() {
     }
   }
 
-  async function handleStart(detected?: CallDetectedPayload) {
+  async function handleStart(detected?: CallDetectedPayload, forceFresh = false) {
     if (busy) return;
     setBusy(true);
     setInterimMe("");
@@ -614,7 +645,7 @@ function App() {
     // "Untitled"/empty placeholder -- new lines from this recording are
     // appended after it by the `transcript-line` listener above, never
     // re-rendering what's already seeded.
-    const continuePath = detected ? null : selectedPath;
+    const continuePath = detected || forceFresh ? null : selectedPath;
     try {
       // Flush any pending, still-debouncing title/notes edit on the
       // currently mounted SessionView (whichever session is selected, still

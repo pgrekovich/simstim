@@ -1,5 +1,11 @@
 @import "tailwindcss";
 
+html.menu-bar-window,
+html.menu-bar-window body,
+html.menu-bar-window #root {
+    background: transparent;
+}
+
 @font-face {
     font-family: "Source Serif 4";
     src: url("./assets/fonts/SourceSerif4-Variable.ttf") format("truetype");

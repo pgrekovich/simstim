@@ -110,6 +110,24 @@ export function showMainWindow(): Promise<void> {
   return invoke("show_main_window");
 }
 
+/** Ephemeral state mirrored by the native menu-bar controller. */
+export type MenuBarStatePayload =
+  | { kind: "idle" }
+  | {
+      kind: "recording";
+      title: string;
+      path: string;
+      started_at_ms: number;
+    };
+
+export function menuBarCurrentState(): Promise<MenuBarStatePayload> {
+  return invoke("menu_bar_current_state");
+}
+
+export function menuBarHide(): Promise<void> {
+  return invoke("menu_bar_hide");
+}
+
 export interface CallEndedPayload {
   bundle_id: string;
   recording_id: string;

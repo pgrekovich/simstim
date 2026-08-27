@@ -5,6 +5,7 @@ pub mod config;
 pub mod detect;
 pub mod enhance;
 pub mod models;
+pub mod menu_bar;
 pub mod retranscribe;
 pub mod session;
 pub mod sessions;
@@ -220,14 +221,16 @@ fn start_recording(
             .unwrap_or(cfg.active_model.as_str());
         return Err(format!("model not downloaded: {name}"));
     }
-    let (out, continue_from) = match &path {
+    let (out, continue_from, menu_bar_title) = match &path {
         Some(p) => {
             let seed = session::load_continue_from(p).map_err(|e| e.to_string())?;
-            (p.clone(), Some(seed))
+            let menu_bar_title = seed.title.clone();
+            (p.clone(), Some(seed), menu_bar_title)
         }
         None => (
             simstim_transcript::output_path(&cfg.output_dir, chrono::Local::now()),
             None,
+            title.clone().unwrap_or_else(|| "Untitled".to_string()),
         ),
     };
     let (tx, rx) = std::sync::mpsc::channel();
@@ -273,6 +276,10 @@ fn start_recording(
     app.state::<detect::DetectHandle>()
         .recording_started(detected_bundle_id, out.display().to_string());
     app.state::<banner::Banner>().recording_started();
+    app.state::<menu_bar::MenuBar>().recording_started(
+        menu_bar_title,
+        out.display().to_string(),
+    );
     Ok(out.display().to_string())
 }
 
@@ -319,6 +326,7 @@ async fn stop_recording(app: AppHandle) -> Result<String, String> {
     // stop path so a failed finalization cannot poison the next call.
     app.state::<detect::DetectHandle>().recording_stopped();
     app.state::<banner::Banner>().recording_stopped();
+    app.state::<menu_bar::MenuBar>().recording_stopped();
 
     let finalizing_guard = FinalizingGuard {
         app: app.clone(),
@@ -572,7 +580,18 @@ fn position_main_traffic_lights(window: &tauri::WebviewWindow) -> tauri::Result<
 pub fn run() {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_dialog::init());
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_shortcut("CommandOrControl+Shift+N")
+                .expect("invalid global recording shortcut")
+                .with_handler(|app, _shortcut, event| {
+                    if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                        let _ = app.emit_to("main", "menu-bar-toggle-recording", ());
+                    }
+                })
+                .build(),
+        );
     #[cfg(target_os = "macos")]
     let builder = builder.plugin(tauri_nspanel::init());
     builder
@@ -599,6 +618,7 @@ pub fn run() {
             // state up through the app handle, so it must be managed by the
             // time the first action can possibly fire.
             app.manage(banner::Banner::create(app.handle())?);
+            app.manage(menu_bar::MenuBar::create(app.handle())?);
             app.manage(detect::start(app.handle().clone(), cfg.detect_calls));
             Ok(())
         })
@@ -610,6 +630,11 @@ pub fn run() {
             if window.label() == "main" {
                 if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                     api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
+            if window.label() == menu_bar::WINDOW_LABEL {
+                if let tauri::WindowEvent::Focused(false) = event {
                     let _ = window.hide();
                 }
             }
@@ -637,6 +662,8 @@ pub fn run() {
             banner::banner_dismiss,
             banner::banner_current_state,
             banner::show_main_window,
+            menu_bar::menu_bar_current_state,
+            menu_bar::menu_bar_hide,
             models::list_models,
             models::download_model,
             models::delete_model,

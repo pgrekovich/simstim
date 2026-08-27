@@ -74,10 +74,10 @@ fn default_delete_audio_after_retranscribe() -> bool {
 /// The enhance provider ids `enhance::PROVIDERS` knows how to run.
 pub const VALID_ENHANCE_PROVIDERS: &[&str] = &["local", "claude", "codex"];
 
-/// Claude first: the owner's own subscription, and the provider the enhance
-/// prompt was tuned against.
+/// Local first for new installs and pre-Enhance configs. An existing config
+/// that explicitly selected Claude or Codex keeps that value through serde.
 fn default_enhance_provider() -> String {
-    "claude".to_string()
+    "local".to_string()
 }
 
 fn default_detect_calls() -> bool {
@@ -442,6 +442,11 @@ mod tests {
     #[test]
     fn theme_defaults_to_system() {
         assert_eq!(Config::default().theme, "system");
+    }
+
+    #[test]
+    fn summaries_default_to_the_private_local_provider() {
+        assert_eq!(Config::default().enhance_provider, "local");
     }
 
     #[test]

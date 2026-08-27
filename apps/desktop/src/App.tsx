@@ -882,10 +882,10 @@ function App() {
         {(showTopbar || sidebarCollapsed) && (
         <header
           data-tauri-drag-region
-          className={`flex h-14 shrink-0 items-center gap-3 pr-5 ${sidebarCollapsed ? "pl-[88px]" : "pl-5"}`}
+          className={`flex h-14 shrink-0 items-center gap-3 pr-5 ${sidebarCollapsed ? "pl-0" : "pl-5"}`}
         >
           {sidebarCollapsed && (
-            <div className="flex shrink-0 items-center gap-0.5">
+            <div className="flex w-56 shrink-0 items-center justify-end gap-0.5 px-2.5">
               <Button
                 variant="ghost"
                 size="icon"
@@ -896,6 +896,7 @@ function App() {
               >
                 <PanelLeftOpen className="size-4" />
               </Button>
+              <span aria-hidden="true" className="size-6 shrink-0" />
               <Button
                 variant="ghost"
                 size="icon"

@@ -1185,6 +1185,12 @@ describe("App: empty state and global hotkeys (stage 0.10)", () => {
     expect(screen.getByText("still here")).toBeInTheDocument();
     const showSidebar = screen.getByRole("button", { name: /show sidebar/i });
     expect(showSidebar.className).not.toContain("bg-foreground/[0.06]");
+    expect(showSidebar.parentElement?.className).toContain("w-56");
+    expect(showSidebar.nextElementSibling).toHaveAttribute("aria-hidden", "true");
+    expect(showSidebar.nextElementSibling?.nextElementSibling).toHaveAttribute(
+      "aria-label",
+      "New note",
+    );
     fireEvent.click(showSidebar);
     expect(await screen.findByRole("button", { name: /kept note/i })).toBeInTheDocument();
   });

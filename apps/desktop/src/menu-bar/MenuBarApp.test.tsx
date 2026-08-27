@@ -91,6 +91,22 @@ describe("MenuBarApp", () => {
     expect(screen.getByText("00:05")).toBeVisible();
   });
 
+  it("refreshes native state whenever the hidden panel receives focus", async () => {
+    render(<MenuBarApp />);
+    expect(await screen.findByText("Ready to record")).toBeVisible();
+
+    vi.mocked(ipc.menuBarCurrentState).mockResolvedValue({
+      kind: "recording",
+      title: "Focused call",
+      path: "/tmp/focused.md",
+      started_at_ms: Date.now() - 3_000,
+    });
+    fireEvent.focus(window);
+
+    expect(await screen.findByText("Focused call")).toBeVisible();
+    expect(screen.getByRole("button", { name: /stop/i })).toBeVisible();
+  });
+
   it("opens and focuses the main window then hides", async () => {
     render(<MenuBarApp />);
     fireEvent.click(await screen.findByRole("button", { name: /open window/i }));

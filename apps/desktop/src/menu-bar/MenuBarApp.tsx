@@ -49,6 +49,27 @@ export default function MenuBarApp({ previewState }: { previewState?: MenuBarSta
   }, [previewState]);
 
   useEffect(() => {
+    if (previewState) return;
+    const syncCurrentState = () => {
+      void menuBarCurrentState()
+        .then((current) => {
+          setState(current);
+          setNow(Date.now());
+        })
+        .catch(() => {});
+    };
+    const syncWhenVisible = () => {
+      if (document.visibilityState === "visible") syncCurrentState();
+    };
+    window.addEventListener("focus", syncCurrentState);
+    document.addEventListener("visibilitychange", syncWhenVisible);
+    return () => {
+      window.removeEventListener("focus", syncCurrentState);
+      document.removeEventListener("visibilitychange", syncWhenVisible);
+    };
+  }, [previewState]);
+
+  useEffect(() => {
     if (state.kind !== "recording") return;
     const id = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(id);

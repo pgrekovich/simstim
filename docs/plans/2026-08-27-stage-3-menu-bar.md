@@ -83,5 +83,5 @@ global start/stop shortcut.
 - A debug `.app` bundle was built and ad-hoc signed successfully at
   `target/debug/bundle/macos/simstim.app`.
 - Verification passed on 2026-08-27: `cargo test --workspace`,
-  `cargo clippy --workspace --all-targets -- -D warnings`, `pnpm test` (146
+  `cargo clippy --workspace --all-targets -- -D warnings`, `pnpm test` (147
   tests), and `pnpm build`.

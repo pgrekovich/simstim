@@ -15,6 +15,11 @@ describe("TranscriptView: transcript find (stage 2.1)", () => {
     ]);
   });
 
+  it("treats regular-expression punctuation as plain text", () => {
+    expect(findTranscriptMatches(["[00:00:01] Me: ship v2.1, not v201"], "v2.1"))
+      .toEqual([{ lineIndex: 0, start: 5, end: 9 }]);
+  });
+
   it("preserves text while distinguishing the active match", () => {
     const lines = ["[00:00:01] Me: Berlin then berlin"];
     const matches = findTranscriptMatches(lines, "berlin");

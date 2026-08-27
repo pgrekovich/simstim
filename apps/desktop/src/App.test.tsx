@@ -1146,6 +1146,16 @@ describe("App: global search (stage 2.0)", () => {
     fireEvent.keyDown(window, { key: "k", metaKey: true });
     expect(screen.getByRole("dialog", { name: /search all notes/i })).toBeInTheDocument();
   });
+
+  it("falls back to global search for Command+F when no note is selected", async () => {
+    vi.mocked(ipc.listSessions).mockResolvedValue([]);
+    render(<App />);
+    await screen.findByText("New Note");
+
+    fireEvent.keyDown(window, { key: "f", metaKey: true });
+
+    expect(screen.getByRole("dialog", { name: /search all notes/i })).toBeInTheDocument();
+  });
 });
 
 describe("App: empty state and global hotkeys (stage 0.10)", () => {

@@ -1,6 +1,7 @@
 # Stage 2.1: transcript find and spoken-result navigation
 
-Status: implementation in progress on `codex/stage-2.1-transcript-find`.
+Status: implementation complete on `codex/stage-2.1-transcript-find`; automated
+gates pass, awaiting owner visual and end-to-end review before merge.
 
 ## Goal
 

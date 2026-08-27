@@ -23,8 +23,12 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { RecordButton } from "@/components/RecordButton";
 import { EmptyState } from "@/components/EmptyState";
-import { GlobalSearch } from "@/components/GlobalSearch";
-import { SessionView, type SessionViewHandle } from "@/components/SessionView";
+import { GlobalSearch, type SpokenSearchTarget } from "@/components/GlobalSearch";
+import {
+  SessionView,
+  type SessionViewHandle,
+  type TranscriptFindRequest,
+} from "@/components/SessionView";
 import { Sidebar } from "@/components/Sidebar";
 import { SettingsDialog } from "@/components/SettingsDialog";
 import {
@@ -120,6 +124,10 @@ function App() {
   const [busy, setBusy] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [transcriptFindRequest, setTranscriptFindRequest] = useState<
+    (TranscriptFindRequest & { path: string }) | null
+  >(null);
+  const transcriptFindRequestIdRef = useRef(0);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(initialSidebarCollapsed);
   const [autoStopAfterCall, setAutoStopAfterCall] = useState(false);
   const loadingFallbackRef = useRef<number | null>(null);
@@ -740,7 +748,8 @@ function App() {
   // start selected, not a substitute for `handleStart`. Recording always
   // creates its own file via `start_recording`, independent of this one.
   // Global hotkeys (stage 0.10): ⌘N new note, ⌘⇧N start recording, ⌘,
-  // settings, ⌘F focus search. The listener is attached exactly once; it
+  // settings, ⌘K global search, ⌘F transcript find. The listener is attached
+  // exactly once; it
   // reads the CURRENT handlers through a ref refreshed on every render, so
   // it never closes over stale state (`busy`, `sessionActive`, ...) the way
   // a once-captured closure would.
@@ -749,6 +758,7 @@ function App() {
     startRecording: () => {},
     openSettings: () => {},
     openSearch: () => {},
+    openTranscriptFind: () => {},
   });
   useEffect(() => {
     hotkeysRef.current = {
@@ -761,6 +771,18 @@ function App() {
       openSettings: () => setSettingsOpen(true),
       openSearch: () => {
         if (!settingsOpen) setSearchOpen(true);
+      },
+      openTranscriptFind: () => {
+        if (settingsOpen) return;
+        if (selectedPath === null) {
+          setSearchOpen(true);
+          return;
+        }
+        setTranscriptFindRequest({
+          id: ++transcriptFindRequestIdRef.current,
+          path: selectedPath,
+          query: "",
+        });
       },
     };
   });
@@ -778,9 +800,12 @@ function App() {
       } else if (key === "," && !e.shiftKey) {
         e.preventDefault();
         hotkeysRef.current.openSettings();
-      } else if ((key === "k" || key === "f") && !e.shiftKey) {
+      } else if (key === "k" && !e.shiftKey) {
         e.preventDefault();
         hotkeysRef.current.openSearch();
+      } else if (key === "f" && !e.shiftKey) {
+        e.preventDefault();
+        hotkeysRef.current.openTranscriptFind();
       } else if (key === "\\" && !e.shiftKey) {
         e.preventDefault();
         setSidebarCollapsed((collapsed) => !collapsed);
@@ -922,7 +947,11 @@ function App() {
           {/* SessionView portals its Radix tab list here so the switcher is
               part of the 56 px toolbar while its context and mounted tab
               contents remain owned by SessionView. */}
-          <div id="topbar-tabs-slot" className="flex min-w-0 flex-1 items-center" />
+          <div id="topbar-tabs-slot" className="flex min-w-0 flex-1 items-center overflow-hidden" />
+          <div
+            id="topbar-transcript-find-slot"
+            className="relative z-10 flex min-w-0 shrink-0 items-center"
+          />
 
           {showTopbar && statusText && (
             <span className="min-w-0 max-w-[35%] shrink-0 truncate font-mono text-[10.5px] text-muted-foreground">
@@ -1036,6 +1065,9 @@ function App() {
                 setActiveTitle(title);
                 setActiveNotes(notes);
               }}
+              transcriptFindRequest={
+                transcriptFindRequest?.path === selectedPath ? transcriptFindRequest : null
+              }
             />
           ) : sessionDataError ? (
             <div className="flex h-full items-center justify-center">
@@ -1074,6 +1106,9 @@ function App() {
               onSaveError={(message) => setStatus({ kind: "error", message })}
               onRetranscribeStart={handleManualRetranscribeStart}
               onRetranscribeEnd={handleManualRetranscribeEnd}
+              transcriptFindRequest={
+                transcriptFindRequest?.path === selectedPath ? transcriptFindRequest : null
+              }
             />
           )}
         </div>
@@ -1088,7 +1123,15 @@ function App() {
         open={searchOpen}
         onOpenChange={setSearchOpen}
         sessions={sessions}
-        onOpenSession={setSelectedPath}
+        onOpenSession={(path: string, spoken?: SpokenSearchTarget) => {
+          setSelectedPath(path);
+          setTranscriptFindRequest({
+            id: ++transcriptFindRequestIdRef.current,
+            path,
+            query: spoken?.query ?? null,
+            timestamp: spoken?.timestamp,
+          });
+        }}
       />
     </div>
   );

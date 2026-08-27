@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { Card } from "@/components/ui/card";
 
 /** Matches the `[hh:mm:ss] Who: text` format `session::format_line` emits. */
@@ -16,6 +16,65 @@ function parseLine(raw: string): ParsedLine {
   if (!match) return { raw };
   const [, timestamp, speaker, text] = match;
   return { raw, timestamp, speaker: speaker as "Me" | "Them", text };
+}
+
+export interface TranscriptMatch {
+  lineIndex: number;
+  start: number;
+  end: number;
+}
+
+/** Plain, case-insensitive matches over finalized spoken text. */
+export function findTranscriptMatches(lines: string[], query: string): TranscriptMatch[] {
+  const needle = query.trim();
+  if (needle === "") return [];
+  const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+  const matches: TranscriptMatch[] = [];
+  lines.forEach((raw, lineIndex) => {
+    const parsed = parseLine(raw);
+    const text = parsed.text ?? raw;
+    for (const match of text.matchAll(new RegExp(escaped, "giu"))) {
+      const start = match.index;
+      matches.push({ lineIndex, start, end: start + match[0].length });
+    }
+  });
+  return matches;
+}
+
+function highlightedText(
+  text: string,
+  lineIndex: number,
+  matches: TranscriptMatch[],
+  activeMatchIndex: number,
+): ReactNode {
+  const lineMatches = matches
+    .map((match, matchIndex) => ({ match, matchIndex }))
+    .filter(({ match }) => match.lineIndex === lineIndex);
+  if (lineMatches.length === 0) return text;
+
+  const parts: ReactNode[] = [];
+  let cursor = 0;
+  lineMatches.forEach(({ match, matchIndex }) => {
+    if (match.start > cursor) parts.push(text.slice(cursor, match.start));
+    const active = matchIndex === activeMatchIndex;
+    parts.push(
+      <mark
+        key={`${match.start}:${match.end}`}
+        data-current-match={active ? "true" : undefined}
+        className={
+          active
+            ? "rounded-[3px] bg-destructive px-0.5 text-primary-foreground"
+            : "rounded-[3px] bg-[rgb(168_132_60_/_28%)] px-0.5 text-inherit dark:bg-[rgb(201_162_77_/_28%)]"
+        }
+      >
+        {text.slice(match.start, match.end)}
+      </mark>,
+    );
+    cursor = match.end;
+  });
+  if (cursor < text.length) parts.push(text.slice(cursor));
+  return parts;
 }
 
 /** Parses a `hh:mm:ss` timestamp (as `parseLine` extracts it) into whole seconds. */
@@ -47,10 +106,20 @@ interface TranscriptViewProps {
    * there is no offset to seek to for either.
    */
   onSeek?: (offsetSecs: number) => void;
+  matches?: TranscriptMatch[];
+  activeMatchIndex?: number;
 }
 
-export function TranscriptView({ lines, interimMe, interimThem, onSeek }: TranscriptViewProps) {
+export function TranscriptView({
+  lines,
+  interimMe,
+  interimThem,
+  onSeek,
+  matches = [],
+  activeMatchIndex = -1,
+}: TranscriptViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const lineRefs = useRef<Array<HTMLElement | null>>([]);
   // Tracks whether the user was scrolled to the bottom right before this
   // render's lines changed. Auto-scroll only replays that intent: it never
   // yanks the view back down if the user has scrolled up to read history.
@@ -70,6 +139,16 @@ export function TranscriptView({ lines, interimMe, interimThem, onSeek }: Transc
     el.scrollTop = el.scrollHeight;
   }, [lines, interimMe, interimThem]);
 
+  useEffect(() => {
+    const match = matches[activeMatchIndex];
+    if (!match) return;
+    wasAtBottomRef.current = false;
+    const line = lineRefs.current[match.lineIndex];
+    if (line && typeof line.scrollIntoView === "function") {
+      line.scrollIntoView({ block: "center" });
+    }
+  }, [activeMatchIndex, matches]);
+
   return (
     <Card className="min-h-0 flex-1 flex-col overflow-hidden border-0 bg-transparent p-0 shadow-none">
       <div ref={scrollRef} onScroll={handleScroll} className="h-full overflow-y-auto px-6 pb-5 pt-[6px]">
@@ -83,8 +162,12 @@ export function TranscriptView({ lines, interimMe, interimThem, onSeek }: Transc
               const parsed = parseLine(raw);
               if (!parsed.timestamp) {
                 return (
-                  <p key={i} className="whitespace-pre-wrap font-serif text-[15px] leading-[1.6] text-card-foreground">
-                    {raw}
+                  <p
+                    key={i}
+                    ref={(element) => { lineRefs.current[i] = element; }}
+                    className="whitespace-pre-wrap font-serif text-[15px] leading-[1.6] text-card-foreground"
+                  >
+                    {highlightedText(raw, i, matches, activeMatchIndex)}
                   </p>
                 );
               }
@@ -105,13 +188,17 @@ export function TranscriptView({ lines, interimMe, interimThem, onSeek }: Transc
                     </span>
                   </span>
                   <span className="block whitespace-pre-wrap font-serif text-[15px] leading-[1.6] text-card-foreground">
-                    {parsed.text}
+                    {highlightedText(parsed.text ?? "", i, matches, activeMatchIndex)}
                   </span>
                 </>
               );
               if (!onSeek) {
                 return (
-                  <div key={i} className="flex flex-col gap-[3px]">
+                  <div
+                    key={i}
+                    ref={(element) => { lineRefs.current[i] = element; }}
+                    className="flex flex-col gap-[3px]"
+                  >
                     {content}
                   </div>
                 );
@@ -120,6 +207,7 @@ export function TranscriptView({ lines, interimMe, interimThem, onSeek }: Transc
               return (
                 <button
                   key={i}
+                  ref={(element) => { lineRefs.current[i] = element; }}
                   type="button"
                   onClick={() => onSeek(offsetSecs)}
                   className="-mx-2 flex w-[calc(100%+1rem)] flex-col gap-[3px] rounded-[7px] px-2 text-left transition-colors hover:bg-foreground/[0.05] focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"

@@ -1,7 +1,11 @@
 import { createRef } from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { SessionView, type SessionViewHandle } from "@/components/SessionView";
+import {
+  SessionView,
+  shouldStackTranscriptFind,
+  type SessionViewHandle,
+} from "@/components/SessionView";
 import * as ipc from "@/lib/ipc";
 import type { SessionData } from "@/lib/ipc";
 
@@ -477,6 +481,67 @@ describe("SessionView: notes/transcript tabs (stage 0.10)", () => {
       .getByPlaceholderText("your notes...")
       .closest('[data-slot="tabs-content"]');
     expect(notesPanel).toHaveAttribute("data-state", "inactive");
+  });
+});
+
+describe("SessionView: transcript find (stage 2.1)", () => {
+  const transcript = [
+    "[00:00:03] Me: Berlin first",
+    "[00:00:09] Them: then Berlin again",
+  ].join("\n");
+
+  it("stacks only when the measured tab-to-find gap would be under 16 px", () => {
+    expect(shouldStackTranscriptFind(500, 728, 200)).toBe(false);
+    expect(shouldStackTranscriptFind(501, 728, 200)).toBe(true);
+  });
+
+  it("opens Transcript, targets the requested timestamp, and wraps navigation", async () => {
+    render(
+      <SessionView
+        path="/tmp/call.md"
+        isActive={false}
+        initialData={{ ...baseData, transcript }}
+        liveLines={[]}
+        interimMe=""
+        interimThem=""
+        retranscribingJob={null}
+        transcriptFindRequest={{ id: 1, query: "berlin", timestamp: "00:00:09" }}
+      />
+    );
+
+    const input = await screen.findByRole("searchbox", { name: "Find in transcript" });
+    expect(input).toHaveValue("berlin");
+    expect(screen.getByRole("tab", { name: "Transcript" })).toHaveAttribute("data-state", "active");
+    expect(screen.getByText("2 / 2")).toBeInTheDocument();
+    expect(screen.getAllByText(/berlin/i)[1]).toHaveAttribute("data-current-match", "true");
+
+    fireEvent.click(screen.getByRole("button", { name: "Next transcript match" }));
+    expect(screen.getByText("1 / 2")).toBeInTheDocument();
+    expect(screen.getAllByText(/berlin/i)[0]).toHaveAttribute("data-current-match", "true");
+
+    fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
+    expect(screen.getByText("2 / 2")).toBeInTheDocument();
+  });
+
+  it("shows an empty count and removes highlights when closed", async () => {
+    render(
+      <SessionView
+        path="/tmp/call.md"
+        isActive={false}
+        initialData={{ ...baseData, transcript }}
+        liveLines={[]}
+        interimMe=""
+        interimThem=""
+        retranscribingJob={null}
+        transcriptFindRequest={{ id: 1, query: "missing" }}
+      />
+    );
+
+    expect(await screen.findByText("0 / 0")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Next transcript match" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Close transcript find" }));
+    expect(screen.queryByRole("searchbox", { name: "Find in transcript" })).toBeNull();
+    expect(document.querySelectorAll("mark")).toHaveLength(0);
   });
 });
 

@@ -1,6 +1,37 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { TranscriptView } from "@/components/TranscriptView";
+import { findTranscriptMatches, TranscriptView } from "@/components/TranscriptView";
+
+describe("TranscriptView: transcript find (stage 2.1)", () => {
+  it("finds every case-insensitive occurrence in finalized spoken text", () => {
+    expect(findTranscriptMatches([
+      "[00:00:01] Me: Berlin then berlin",
+      "[00:00:02] Them: no match",
+      "hand-added Berlin annotation",
+    ], "berlin")).toEqual([
+      { lineIndex: 0, start: 0, end: 6 },
+      { lineIndex: 0, start: 12, end: 18 },
+      { lineIndex: 2, start: 11, end: 17 },
+    ]);
+  });
+
+  it("treats regular-expression punctuation as plain text", () => {
+    expect(findTranscriptMatches(["[00:00:01] Me: ship v2.1, not v201"], "v2.1"))
+      .toEqual([{ lineIndex: 0, start: 5, end: 9 }]);
+  });
+
+  it("preserves text while distinguishing the active match", () => {
+    const lines = ["[00:00:01] Me: Berlin then berlin"];
+    const matches = findTranscriptMatches(lines, "berlin");
+    render(<TranscriptView lines={lines} matches={matches} activeMatchIndex={1} />);
+
+    const marks = screen.getAllByText(/berlin/i);
+    expect(marks).toHaveLength(2);
+    expect(marks[0]).not.toHaveAttribute("data-current-match");
+    expect(marks[1]).toHaveAttribute("data-current-match", "true");
+    expect(screen.getByText(/then/, { selector: "span" })).toHaveTextContent("Berlin then berlin");
+  });
+});
 
 describe("TranscriptView: click-to-seek (Task 4, stage-0.7)", () => {
   it("calls onSeek with the offset in seconds parsed from a clicked line's timestamp", () => {

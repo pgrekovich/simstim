@@ -70,7 +70,6 @@ fn default_delete_audio_after_retranscribe() -> bool {
     false
 }
 
-/// Call detection only suggests recording and therefore defaults on.
 /// These are the enhance provider ids `enhance::PROVIDERS` knows how to run.
 pub const VALID_ENHANCE_PROVIDERS: &[&str] = &["local", "claude", "codex"];
 
@@ -80,6 +79,7 @@ fn default_enhance_provider() -> String {
     "local".to_string()
 }
 
+/// Call detection only suggests recording and therefore defaults on.
 fn default_detect_calls() -> bool {
     true
 }

@@ -43,8 +43,8 @@ export interface AppConfig {
    * Whether `stop_recording` automatically queues a re-transcribe job for
    * the session that just stopped (stage 0.9). Only actually fires when
    * `keep_audio` is also on and the session has audio. Defaults to `false`.
-   * Toggled from the Settings dialog's Output section (Task 2) via
-   * `setAutoRetranscribe`.
+   * Toggled from the Settings dialog's Models section (Re-transcribe group)
+   * via `setAutoRetranscribe`.
    */
   auto_retranscribe: boolean;
   /**
@@ -52,7 +52,7 @@ export interface AppConfig {
    * depend on how it was triggered -- deletes the session's audio file
    * afterward (stage 0.9). Irreversible: once the audio is gone, the call
    * can never be re-transcribed again. Defaults to `false`. Toggled from
-   * the Settings dialog's Output section (Task 2) via
+   * the Settings dialog's Models section (Re-transcribe group) via
    * `setDeleteAudioAfterRetranscribe`.
    */
   delete_audio_after_retranscribe: boolean;

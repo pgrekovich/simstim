@@ -223,8 +223,24 @@
   animation: recording-tally 1.6s ease-in-out infinite;
 }
 
+/* The design language's second (and last) sanctioned animation: the
+   indeterminate work spinner, a hairline ring whose top arc carries
+   currentColor while the rest stays a faint track. Used wherever the app is
+   doing machine work the user waits on (summarizing, re-transcribing). */
+@keyframes working-spin {
+  to { transform: rotate(360deg); }
+}
+
+.working-spinner {
+  border-radius: 9999px;
+  border: 1.5px solid color-mix(in srgb, currentColor 25%, transparent);
+  border-top-color: currentColor;
+  animation: working-spin 0.9s linear infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .recording-tally,
+  .working-spinner,
   .animate-pulse,
   .animate-spin {
     animation: none !important;

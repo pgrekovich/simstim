@@ -12,8 +12,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-pub const FAST_MODEL_ID: &str = "qwen3.5-4b-q4-k-m";
-pub const QUALITY_MODEL_ID: &str = "qwen3.5-9b-q4-k-m";
+pub const MODEL_ID: &str = "qwen3.5-9b-q4-k-m";
 const WORKER_TIMEOUT: Duration = Duration::from_secs(300);
 
 #[derive(Serialize)]
@@ -134,8 +133,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn local_model_ids_are_stable() {
-        assert_eq!(FAST_MODEL_ID, "qwen3.5-4b-q4-k-m");
-        assert_eq!(QUALITY_MODEL_ID, "qwen3.5-9b-q4-k-m");
+    fn local_model_id_is_stable() {
+        assert_eq!(MODEL_ID, "qwen3.5-9b-q4-k-m");
     }
 }

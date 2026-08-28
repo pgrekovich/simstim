@@ -71,9 +71,8 @@ fn default_delete_audio_after_retranscribe() -> bool {
 }
 
 /// Call detection only suggests recording and therefore defaults on.
-/// The enhance provider ids `enhance::PROVIDERS` knows how to run. `local`
-/// is the fast 4B option; `local-quality` is the 9B option for 16 GB Macs.
-pub const VALID_ENHANCE_PROVIDERS: &[&str] = &["local", "local-quality", "claude", "codex"];
+/// These are the enhance provider ids `enhance::PROVIDERS` knows how to run.
+pub const VALID_ENHANCE_PROVIDERS: &[&str] = &["local", "claude", "codex"];
 
 /// Local first for new installs and pre-Enhance configs. An existing config
 /// that explicitly selected Claude or Codex keeps that value through serde.
@@ -144,10 +143,9 @@ pub struct Config {
     /// failing deserialization entirely.
     #[serde(default = "default_delete_audio_after_retranscribe")]
     pub delete_audio_after_retranscribe: bool,
-    /// Which CLI `enhance_session` runs (stage 0.11): `"claude" | "codex"`.
-    /// The user's own subscription does the work -- no API keys, text-only,
-    /// and only ever on an explicit click. `serde(default)` so older
-    /// config.json files still load.
+    /// Which local or cloud provider `enhance_session` runs. The CLI providers
+    /// use the user's own subscription with no API keys and receive text only.
+    /// `serde(default)` keeps older config.json files loadable.
     #[serde(default = "default_enhance_provider")]
     pub enhance_provider: String,
     /// Per-provider model override (stage 0.11), keyed by provider id: e.g.
@@ -385,10 +383,17 @@ impl Config {
     /// dir on the live asset scope) without clobbering the developer's own
     /// `~/Library/Application Support/simstim/config.json`.
     pub(crate) fn load_from(path: &Path) -> Self {
-        std::fs::read_to_string(path)
+        let mut config: Self = std::fs::read_to_string(path)
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        // Stage 3.1 briefly exposed the 9B model as `local-quality`. It is now
+        // the only local model, so preserve that selection under the stable
+        // `local` provider id rather than silently falling back or failing.
+        if config.enhance_provider == "local-quality" {
+            config.enhance_provider = "local".to_string();
+        }
+        config
     }
 
     /// See `load_from`'s doc comment for why this is `pub(crate)`.
@@ -448,6 +453,19 @@ mod tests {
     #[test]
     fn summaries_default_to_the_private_local_provider() {
         assert_eq!(Config::default().enhance_provider, "local");
+    }
+
+    #[test]
+    fn legacy_local_quality_provider_migrates_to_local() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        let config = Config {
+            enhance_provider: "local-quality".to_string(),
+            ..Config::default()
+        };
+        config.save_to(&path).unwrap();
+
+        assert_eq!(Config::load_from(&path).enhance_provider, "local");
     }
 
     #[test]

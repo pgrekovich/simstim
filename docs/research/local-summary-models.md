@@ -2,11 +2,11 @@
 
 ## Decision
 
-Offer two Qwen3.5 Q4_K_M profiles through the same bundled, short-lived
-llama.cpp helper with Metal enabled on Apple Silicon. Qwen3.5 4B is the fast
-default and works on an 8 GB M1. Qwen3.5 9B is an explicit quality download
-for 16 GB or larger Macs. Do not require Ollama, a local server, an account or
-a separate installer.
+Offer Qwen3.5 9B Q4_K_M through a bundled, short-lived llama.cpp helper with
+Metal enabled on Apple Silicon. It is an explicit download for Macs with at
+least 16 GB. Do not expose the tested 4B checkpoint as a second mode: its speed
+and smaller footprint do not justify its weaker factual accuracy. Do not
+require Ollama, a local server, an account or a separate installer.
 
 The model is a text-only dependency. The Qwen vision projector is not
 downloaded or loaded.
@@ -47,8 +47,7 @@ Primary sources checked 2026-08-28:
 
 ## Runtime contract
 
-- Fast model: `Qwen3.5-4B-Q4_K_M.gguf`, approximately 2.74 GB on disk.
-- Quality model: `Qwen3.5-9B-Q4_K_M.gguf`, approximately 5.68 GB on disk.
+- Model: `Qwen3.5-9B-Q4_K_M.gguf`, approximately 5.68 GB on disk.
 - Backend: llama.cpp in a bundled helper executable, Metal on macOS. Whisper
   remains in the main process because both runtimes export incompatible GGML
   symbols when linked into one executable.
@@ -105,8 +104,9 @@ anecdote near the end.
 - A second self-review pass with 4B took about 32 seconds and repeated the same
   factual mistakes. It is rejected: it costs as much as 9B without the quality.
 
-The result supports retaining 4B for speed and constrained memory while making
-9B the recommended local quality profile when the Mac has enough memory.
+The result supports 9B as the only local profile. The 4B checkpoint is useful
+research evidence but not an acceptable product default because it makes more
+factual errors, so it is absent from the model registry.
 
 ## What this does not decide
 

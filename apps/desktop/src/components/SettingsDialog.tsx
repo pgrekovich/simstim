@@ -1141,9 +1141,7 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                           provider.available
                             ? provider.version ?? "installed"
                             : provider.id === "local"
-                              ? "download Qwen3.5 4B in Models"
-                              : provider.id === "local-quality"
-                                ? "download Qwen3.5 9B in Models"
+                              ? "download Qwen3.5 9B in Models"
                               : `not installed (no \`${provider.id}\` CLI found)`
                         }
                         error={

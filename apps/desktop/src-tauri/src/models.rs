@@ -194,22 +194,9 @@ pub static REGISTRY: &[ModelSpec] = &[
         retired: false,
     },
     ModelSpec {
-        id: "qwen3.5-4b-q4-k-m",
-        name: "Qwen3.5 4B",
-        tagline: Some("fast private summaries, works on 8 GB"),
-        size_mb: 2740,
-        layout: ModelLayout::File {
-            url: "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf",
-            file_name: "Qwen3.5-4B-Q4_K_M.gguf",
-        },
-        extra_files: &[],
-        role: ModelRole::Summary,
-        retired: false,
-    },
-    ModelSpec {
         id: "qwen3.5-9b-q4-k-m",
         name: "Qwen3.5 9B",
-        tagline: Some("better summary accuracy, needs 16 GB"),
+        tagline: Some("private summaries, needs 16 GB"),
         size_mb: 5680,
         layout: ModelLayout::File {
             url: "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q4_K_M.gguf",
@@ -807,25 +794,25 @@ mod tests {
     }
 
     #[test]
-    fn registry_has_exactly_seven_entries() {
+    fn registry_has_exactly_six_entries() {
         // Stage 0.5 shipped Parakeet alone; stage 0.7 added one whisper
         // re-transcribe model; stage 0.8 added three more whisper entries
         // (four total). Stage 0.8.x curation retires two of those four
         // rather than deleting them outright (an already-downloaded retired
         // model must stay resolvable so it can be found and deleted), so the
-        // Stage 3.1 adds two local summary models, making seven total. See
-        // `registry_has_exactly_five_non_retired_entries` for the curated,
+        // Stage 3.1 adds one local summary model, making six total. See
+        // `registry_has_exactly_four_non_retired_entries` for the curated,
         // user-facing count.
-        assert_eq!(REGISTRY.len(), 7);
+        assert_eq!(REGISTRY.len(), 6);
     }
 
     #[test]
-    fn registry_has_exactly_five_non_retired_entries() {
+    fn registry_has_exactly_four_non_retired_entries() {
         // Stage 0.8.x curation, owner's ruling: Parakeet (live) plus exactly
-        // two whisper options (turbo, large-v3) -- the other two whisper
-        // entries are retired, not deleted.
+        // two whisper options (turbo, large-v3) plus one live and one summary
+        // model. Retired whisper entries remain resolvable for deletion.
         let non_retired = REGISTRY.iter().filter(|spec| !spec.retired).count();
-        assert_eq!(non_retired, 5);
+        assert_eq!(non_retired, 4);
     }
 
     #[test]
@@ -846,7 +833,7 @@ mod tests {
         assert!(validate_not_retired(find("whisper-large-v3-turbo-q8").unwrap()).is_ok());
         assert!(validate_not_retired(find("whisper-large-v3").unwrap()).is_ok());
         assert!(validate_not_retired(find("parakeet-tdt-0.6b-v3-int8").unwrap()).is_ok());
-        assert!(validate_not_retired(find("qwen3.5-4b-q4-k-m").unwrap()).is_ok());
+        assert!(validate_not_retired(find("qwen3.5-9b-q4-k-m").unwrap()).is_ok());
     }
 
     #[test]
@@ -913,7 +900,6 @@ mod tests {
                 "parakeet-tdt-0.6b-v3-int8",
                 "whisper-large-v3-turbo-q8",
                 "whisper-large-v3",
-                "qwen3.5-4b-q4-k-m",
                 "qwen3.5-9b-q4-k-m",
             ] {
                 let m = models.iter().find(|m| m.id == id).expect(id);
@@ -1033,10 +1019,11 @@ mod tests {
     }
 
     #[test]
-    fn qwen_registry_entries_have_the_summary_role() {
-        for id in ["qwen3.5-4b-q4-k-m", "qwen3.5-9b-q4-k-m"] {
-            assert_eq!(find(id).unwrap().role, ModelRole::Summary);
-        }
+    fn qwen_registry_entry_has_the_summary_role() {
+        assert_eq!(
+            find("qwen3.5-9b-q4-k-m").unwrap().role,
+            ModelRole::Summary
+        );
     }
 
     #[test]
@@ -1056,7 +1043,7 @@ mod tests {
 
         let qwen = models
             .iter()
-            .find(|m| m.id == "qwen3.5-4b-q4-k-m")
+            .find(|m| m.id == "qwen3.5-9b-q4-k-m")
             .unwrap();
         assert_eq!(qwen.role, "summary");
     }
@@ -1252,7 +1239,7 @@ mod tests {
         #[test]
         fn validate_delete_refuses_the_summary_model_while_enhancing() {
             let err =
-                validate_delete("qwen3.5-4b-q4-k-m", false, false, true).unwrap_err();
+                validate_delete("qwen3.5-9b-q4-k-m", false, false, true).unwrap_err();
             assert!(err.contains("summary"), "{err}");
         }
 

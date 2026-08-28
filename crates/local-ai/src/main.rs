@@ -9,6 +9,7 @@
 use std::io::{Read, Write};
 use std::num::NonZeroU32;
 use std::path::PathBuf;
+use std::process::Command;
 use std::time::{Duration, Instant};
 
 use encoding_rs::UTF_8;
@@ -20,10 +21,12 @@ use llama_cpp_2::model::{AddBos, LlamaModel};
 use llama_cpp_2::sampling::LlamaSampler;
 use serde::{Deserialize, Serialize};
 
-const CONTEXT_TOKENS: u32 = 8192;
-const BATCH_TOKENS: usize = 512;
-const FINAL_OUTPUT_TOKENS: usize = 1400;
-const MAP_OUTPUT_TOKENS: usize = 600;
+const BASE_CONTEXT_TOKENS: u32 = 8192;
+const BATCH_TOKENS: usize = 1024;
+const MICRO_BATCH_TOKENS: u32 = 512;
+const FINAL_OUTPUT_TOKENS: usize = 800;
+const MAP_OUTPUT_TOKENS: usize = 320;
+const RETRY_PROMPT_RESERVE: usize = 128;
 const GENERATION_TIMEOUT: Duration = Duration::from_secs(300);
 
 #[derive(Deserialize)]
@@ -69,7 +72,9 @@ fn read_request() -> Result<Request, String> {
 
 fn run(request: Request) -> Result<String, String> {
     let mut backend = LlamaBackend::init().map_err(|e| format!("couldn't start local AI: {e}"))?;
-    backend.void_logs();
+    if std::env::var_os("SIMSTIM_LOCAL_AI_DEBUG").is_none() {
+        backend.void_logs();
+    }
     if !backend.supports_gpu_offload() {
         return Err("local AI needs Metal acceleration on this Mac".to_string());
     }
@@ -80,20 +85,32 @@ fn run(request: Request) -> Result<String, String> {
     let model = LlamaModel::load_from_file(&backend, &request.model_path, &model_params)
         .map_err(|e| format!("couldn't load the local summary model: {e}"))?;
 
-    if prompt_fits(&model, &request.full_prompt, FINAL_OUTPUT_TOKENS)? {
+    let context_tokens = context_tokens_for_this_mac();
+    let output_language = OutputLanguage::detect(&request.notes, &request.transcript);
+    if prompt_fits(
+        &model,
+        &request.full_prompt,
+        FINAL_OUTPUT_TOKENS,
+        context_tokens,
+    )? {
         return generate_validated(
             &backend,
             &model,
             &request.full_prompt,
             FINAL_OUTPUT_TOKENS,
+            output_language,
+            context_tokens,
         );
     }
 
+    let language_rule = output_language.rule();
     let chunks = transcript_chunks(
         &model,
         &request.title,
         &request.notes,
         &request.transcript,
+        language_rule,
+        context_tokens,
     )?;
     let mut evidence = Vec::with_capacity(chunks.len());
     for (index, chunk) in chunks.iter().enumerate() {
@@ -103,27 +120,52 @@ fn run(request: Request) -> Result<String, String> {
             chunk,
             index + 1,
             chunks.len(),
+            language_rule,
         );
-        let partial = generate_validated(&backend, &model, &prompt, MAP_OUTPUT_TOKENS)?;
+        let partial = generate_validated(
+            &backend,
+            &model,
+            &prompt,
+            MAP_OUTPUT_TOKENS,
+            output_language,
+            context_tokens,
+        )?;
         evidence.push(format!("### Part {}\n{}", index + 1, partial));
     }
 
     let reduced_transcript = evidence.join("\n\n");
-    let final_prompt = build_summary_prompt(&request.title, &request.notes, &reduced_transcript);
-    if !prompt_fits(&model, &final_prompt, FINAL_OUTPUT_TOKENS)? {
+    let final_prompt = build_summary_prompt(
+        &request.title,
+        &request.notes,
+        &reduced_transcript,
+        language_rule,
+    );
+    if !prompt_fits(&model, &final_prompt, FINAL_OUTPUT_TOKENS, context_tokens)? {
         return Err(
             "this call is too long for the local model; use a cloud provider for this summary"
                 .to_string(),
         );
     }
-    generate_validated(&backend, &model, &final_prompt, FINAL_OUTPUT_TOKENS)
+    generate_validated(
+        &backend,
+        &model,
+        &final_prompt,
+        FINAL_OUTPUT_TOKENS,
+        output_language,
+        context_tokens,
+    )
 }
 
-fn prompt_fits(model: &LlamaModel, prompt: &str, output_tokens: usize) -> Result<bool, String> {
+fn prompt_fits(
+    model: &LlamaModel,
+    prompt: &str,
+    output_tokens: usize,
+    context_tokens: u32,
+) -> Result<bool, String> {
     let tokens = model
         .str_to_token(&chat_prompt(prompt), AddBos::Never)
         .map_err(|e| format!("couldn't tokenize the note: {e}"))?;
-    Ok(tokens.len() + output_tokens < CONTEXT_TOKENS as usize)
+    Ok(tokens.len() + output_tokens + RETRY_PROMPT_RESERVE < context_tokens as usize)
 }
 
 fn transcript_chunks(
@@ -131,13 +173,15 @@ fn transcript_chunks(
     title: &str,
     notes: &str,
     transcript: &str,
+    language_rule: &str,
+    context_tokens: u32,
 ) -> Result<Vec<String>, String> {
-    let empty_prompt = chunk_prompt(title, notes, "", 1, 1);
+    let empty_prompt = chunk_prompt(title, notes, "", 1, 1, language_rule);
     let overhead = model
         .str_to_token(&chat_prompt(&empty_prompt), AddBos::Never)
         .map_err(|e| format!("couldn't tokenize the note: {e}"))?
         .len();
-    let budget = CONTEXT_TOKENS as usize - MAP_OUTPUT_TOKENS - overhead - 128;
+    let budget = context_tokens as usize - MAP_OUTPUT_TOKENS - overhead - 128;
 
     let mut chunks = Vec::new();
     let mut current = String::new();
@@ -173,7 +217,14 @@ fn transcript_chunks(
     Ok(chunks)
 }
 
-fn chunk_prompt(title: &str, notes: &str, transcript: &str, part: usize, total: usize) -> String {
+fn chunk_prompt(
+    title: &str,
+    notes: &str,
+    transcript: &str,
+    part: usize,
+    total: usize,
+    language_rule: &str,
+) -> String {
     let notes = if notes.trim().is_empty() {
         "(the user took no notes during this call)"
     } else {
@@ -183,7 +234,8 @@ fn chunk_prompt(title: &str, notes: &str, transcript: &str, part: usize, total: 
         "Extract concise evidence for a later meeting summary. This is transcript part {part} of {total}.\n\
          The user's rough notes are the primary signal. Preserve relevant decisions, names,\n\
          numbers, key points and action items from this part. Never invent facts.\n\
-         Write in the language used in the call. Output only short Markdown bullets.\n\
+         {language_rule}. Output at most 8 short Markdown bullets, with no more\n\
+         than 12 words per bullet. Include only evidence needed by the final summary.\n\
          \n\
          Call title: {title}\n\
          \n\
@@ -195,11 +247,17 @@ fn chunk_prompt(title: &str, notes: &str, transcript: &str, part: usize, total: 
     )
 }
 
-fn build_summary_prompt(title: &str, notes: &str, transcript: &str) -> String {
-    let notes = if notes.trim().is_empty() {
+fn build_summary_prompt(title: &str, notes: &str, transcript: &str, language_rule: &str) -> String {
+    let notes_are_empty = notes.trim().is_empty();
+    let notes = if notes_are_empty {
         "(the user took no notes during this call)"
     } else {
         notes.trim()
+    };
+    let length_rule = if notes_are_empty {
+        "Keep the entire answer under 220 words: 2-3 summary sentences, at most 6 key-point bullets and at most 5 action items"
+    } else {
+        "Preserve every distinct point from the user's rough notes, but keep transcript-derived detail concise and avoid repetition"
     };
     format!(
         "You are enhancing notes taken during a call, in the style of Granola.\n\
@@ -213,7 +271,8 @@ fn build_summary_prompt(title: &str, notes: &str, transcript: &str) -> String {
          that matter, then \"Action items\" (only if the call produced any).\n\
          \n\
          Rules:\n\
-         - Write in the language the notes and transcript are in.\n\
+         - {language_rule}.\n\
+         - {length_rule}.\n\
          - Output Markdown: short sections, bullet points, bold the decisions.\n\
          - Include an \"Action items\" section only if the call actually produced any.\n\
          - Never invent facts that are in neither the notes nor the transcript.\n\
@@ -235,24 +294,48 @@ fn generate_validated(
     model: &LlamaModel,
     prompt: &str,
     max_output_tokens: usize,
+    output_language: OutputLanguage,
+    context_tokens: u32,
 ) -> Result<String, String> {
-    let first = generate_once(backend, model, prompt, max_output_tokens, 42)?;
-    match validate_output(first) {
+    let first = generate_once(
+        backend,
+        model,
+        prompt,
+        max_output_tokens,
+        42,
+        context_tokens,
+    )?;
+    match validate_output(first, output_language) {
         Ok(text) => Ok(text),
         Err(_) => {
-            let retry = generate_once(backend, model, prompt, max_output_tokens, 1337)?;
-            validate_output(retry)
+            let retry_prompt = format!("{prompt}\n\n{}", output_language.retry_rule());
+            let retry = generate_once(
+                backend,
+                model,
+                &retry_prompt,
+                max_output_tokens,
+                1337,
+                context_tokens,
+            )?;
+            validate_output(retry, output_language)
         }
     }
 }
 
-fn validate_output(text: String) -> Result<String, String> {
+fn validate_output(text: String, output_language: OutputLanguage) -> Result<String, String> {
     let text = text.trim().to_string();
     if text.is_empty() {
         return Err("the local model returned an empty response".to_string());
     }
     if text.contains("<think>") || text.contains("</think>") {
         return Err("the local model returned hidden reasoning instead of a summary".to_string());
+    }
+    if output_language == OutputLanguage::Cyrillic {
+        let cyrillic = text.chars().filter(|ch| is_cyrillic(*ch)).count();
+        let latin = text.chars().filter(|ch| ch.is_ascii_alphabetic()).count();
+        if cyrillic < 8 || cyrillic * 2 < latin {
+            return Err("the local model returned the summary in the wrong language".to_string());
+        }
     }
     Ok(text)
 }
@@ -263,15 +346,16 @@ fn generate_once(
     prompt: &str,
     max_output_tokens: usize,
     seed: u32,
+    context_tokens: u32,
 ) -> Result<String, String> {
     let deadline = Instant::now() + GENERATION_TIMEOUT;
     let threads = std::thread::available_parallelism()
         .map(|n| n.get().min(8) as i32)
         .unwrap_or(4);
     let context_params = LlamaContextParams::default()
-        .with_n_ctx(NonZeroU32::new(CONTEXT_TOKENS))
+        .with_n_ctx(NonZeroU32::new(context_tokens))
         .with_n_batch(BATCH_TOKENS as u32)
-        .with_n_ubatch(BATCH_TOKENS as u32)
+        .with_n_ubatch(MICRO_BATCH_TOKENS)
         .with_n_threads(threads)
         .with_n_threads_batch(threads);
     let mut context = model
@@ -281,7 +365,7 @@ fn generate_once(
     let tokens = model
         .str_to_token(&chat_prompt(prompt), AddBos::Never)
         .map_err(|e| format!("couldn't tokenize the note: {e}"))?;
-    if tokens.len() + max_output_tokens >= CONTEXT_TOKENS as usize {
+    if tokens.len() + max_output_tokens >= context_tokens as usize {
         return Err("the local summary prompt does not fit in memory".to_string());
     }
 
@@ -347,6 +431,28 @@ fn ensure_before_deadline(deadline: Instant) -> Result<(), String> {
     }
 }
 
+/// Use the base-M1-safe 8K context on an 8 GB machine, but avoid expensive
+/// map/reduce passes when unified memory has room for a larger prompt.
+fn context_tokens_for_this_mac() -> u32 {
+    let bytes = Command::new("/usr/sbin/sysctl")
+        .args(["-n", "hw.memsize"])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .and_then(|value| value.trim().parse::<u64>().ok());
+    context_tokens_for_memory(bytes)
+}
+
+fn context_tokens_for_memory(bytes: Option<u64>) -> u32 {
+    const GIB: u64 = 1024 * 1024 * 1024;
+    match bytes {
+        Some(bytes) if bytes >= 24 * GIB => 32_768,
+        Some(bytes) if bytes >= 12 * GIB => 16_384,
+        _ => BASE_CONTEXT_TOKENS,
+    }
+}
+
 /// Qwen3.5's official non-thinking template. Ending with an already-closed
 /// empty think block is the model's supported non-thinking path.
 fn chat_prompt(user_prompt: &str) -> String {
@@ -354,6 +460,43 @@ fn chat_prompt(user_prompt: &str) -> String {
     format!(
         "<|im_start|>user\n{safe_prompt}<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
     )
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum OutputLanguage {
+    Transcript,
+    Cyrillic,
+}
+
+impl OutputLanguage {
+    fn detect(notes: &str, transcript: &str) -> Self {
+        let text = format!("{notes}\n{transcript}");
+        let cyrillic = text.chars().filter(|ch| is_cyrillic(*ch)).count();
+        let latin = text.chars().filter(|ch| ch.is_ascii_alphabetic()).count();
+        if cyrillic >= 20 && cyrillic > latin {
+            Self::Cyrillic
+        } else {
+            Self::Transcript
+        }
+    }
+
+    fn rule(self) -> &'static str {
+        match self {
+            Self::Cyrillic => "The spoken content is predominantly Cyrillic. Write exclusively in that same language and script. Never translate it to English. Ignore the English Me/Them labels, title, timestamps, headings and these instructions when choosing the output language",
+            Self::Transcript => "Write exclusively in the dominant natural language of the spoken transcript. Never choose English merely because the Me/Them labels, title, timestamps, headings or these instructions are English",
+        }
+    }
+
+    fn retry_rule(self) -> &'static str {
+        match self {
+            Self::Cyrillic => "CRITICAL: Your previous answer used the wrong language. Return only a Cyrillic summary in the same language as the spoken transcript. Do not translate it to English.",
+            Self::Transcript => "Return only the requested summary in the dominant language of the spoken transcript.",
+        }
+    }
+}
+
+fn is_cyrillic(ch: char) -> bool {
+    matches!(ch as u32, 0x0400..=0x052f)
 }
 
 #[cfg(test)]
@@ -375,13 +518,62 @@ mod tests {
 
     #[test]
     fn rejects_visible_reasoning() {
-        let err = validate_output("<think>secret</think> answer".to_string()).unwrap_err();
+        let err = validate_output(
+            "<think>secret</think> answer".to_string(),
+            OutputLanguage::Transcript,
+        )
+        .unwrap_err();
         assert!(err.contains("hidden reasoning"));
     }
 
     #[test]
     fn reduction_prompt_keeps_notes_before_evidence() {
-        let prompt = build_summary_prompt("Sync", "- ship Friday", "### Part 1\n- agreed");
+        let prompt = build_summary_prompt(
+            "Sync",
+            "- ship Friday",
+            "### Part 1\n- agreed",
+            "Write in English",
+        );
         assert!(prompt.find("- ship Friday").unwrap() < prompt.find("### Part 1").unwrap());
+    }
+
+    #[test]
+    fn cyrillic_language_hint_overrides_english_wrapper_tokens() {
+        let language = OutputLanguage::detect(
+            "",
+            "[00:00:01] Me: Давайте выпустим новую версию в пятницу и проверим тесты",
+        );
+        assert_eq!(language, OutputLanguage::Cyrillic);
+        assert!(language.rule().contains("Never translate it to English"));
+    }
+
+    #[test]
+    fn rejects_english_output_for_a_cyrillic_call() {
+        let err = validate_output(
+            "## Summary\n\nThe team agreed to ship on Friday.".to_string(),
+            OutputLanguage::Cyrillic,
+        )
+        .unwrap_err();
+        assert!(err.contains("wrong language"));
+    }
+
+    #[test]
+    fn rejects_an_english_summary_with_a_small_cyrillic_quote() {
+        let err = validate_output(
+            "The meeting covered the release plan, payments and team communication. The user said: Давайте выпустим в пятницу. The team agreed to follow up with a checklist."
+                .to_string(),
+            OutputLanguage::Cyrillic,
+        )
+        .unwrap_err();
+        assert!(err.contains("wrong language"));
+    }
+
+    #[test]
+    fn context_scales_without_exceeding_the_base_m1_budget() {
+        let gib = 1024 * 1024 * 1024;
+        assert_eq!(context_tokens_for_memory(Some(8 * gib)), 8192);
+        assert_eq!(context_tokens_for_memory(Some(16 * gib)), 16_384);
+        assert_eq!(context_tokens_for_memory(Some(32 * gib)), 32_768);
+        assert_eq!(context_tokens_for_memory(None), 8192);
     }
 }

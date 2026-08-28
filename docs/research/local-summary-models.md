@@ -52,9 +52,15 @@ Primary sources checked 2026-08-28:
   deleting visible reasoning after generation.
 - Output: generated text only enters `## Summary`, labeled with the exact
   local model id. It never edits Notes or Transcript.
-- Context: 8K per inference pass to bound memory on an 8 GB M1. Long calls use
-  local chunk extraction followed by local synthesis. No transcript content
-  is silently dropped.
+- Context: scale with unified memory: 8K on an 8 GB Mac, 16K on a 16 GB Mac
+  and 32K on a 24 GB or larger Mac. Long calls use local chunk extraction
+  followed by local synthesis. No transcript content is silently dropped.
+- Language: derive the output language from the spoken transcript rather than
+  the English prompt, speaker labels or Markdown headings. A Cyrillic call must
+  produce Cyrillic output; a wrong-language result is rejected and retried.
+- Latency: use the largest safe single pass for the Mac and cap long-call
+  evidence to short bullets before synthesis. This avoids both premature
+  chunking and needlessly long intermediate generations.
 - Failure handling: empty output, malformed output, cancellation and memory
   pressure are normal user-facing failures. They must not leave a partial
   Summary or a stuck global enhance slot.

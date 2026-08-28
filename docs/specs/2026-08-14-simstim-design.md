@@ -231,9 +231,14 @@ Out of 0.7: meeting detection, tray, hotkeys, enhance, calendar.
 - Compression costs about 4 percent WER versus lossless (measured on English/German/French/Spanish; Russian unmeasured). AAC 32 kbps is the default because raising the bitrate does not recover that accuracy (AAC 64k measured at 4.3 percent vs 3.8 percent for 32k), so the real choice is lossless or not.
 - Continuing a recording into a note whose audio is in the other format re-encodes the combined audio into the current format.
 - FLAC block padding accumulates at seams when continuing a session: each segment's trailing block pads to up to 256ms of silence, so N continuations add up to N-1 seams of padding (accepted as a size cost, exact sync is preserved).
-- Built-in Qwen summary generation is implemented but has not completed the
-  owner's real M1 quality and peak-memory e2e. The model is not downloaded
-  automatically; Settings shows the 2.74 GB cost before the explicit download.
+- The first built-in Qwen M1 e2e completed and exposed slow long-call summaries
+  plus English output for a Russian call. The branch now uses an adaptive 8K,
+  16K or 32K context based on unified memory, shortens map/reduce output,
+  derives the language from transcript text and rejects a wrong-script result.
+  A local benchmark on a real 41 KB Russian transcript completed in one pass
+  in about 30 seconds on the owner's M1 Max and returned Russian output. The
+  owner's second app e2e is pending. The model is not downloaded automatically;
+  Settings shows the 2.74 GB cost before the explicit download.
 
 ## Stage 1.0: call detection (approved 2026-08-16, owner: "the most important thing")
 

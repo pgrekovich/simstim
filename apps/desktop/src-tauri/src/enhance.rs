@@ -171,11 +171,18 @@ pub async fn list_enhance_providers() -> Vec<EnhanceProviderInfo> {
 /// items. Kept as a plain function of the inputs so tests can pin its shape
 /// without running any CLI.
 pub(crate) fn build_prompt(title: &str, notes: &str, transcript: &str) -> String {
-    let notes_block = if notes.trim().is_empty() {
+    let notes_are_empty = notes.trim().is_empty();
+    let notes_block = if notes_are_empty {
         "(the user took no notes during this call)".to_string()
     } else {
         notes.trim().to_string()
     };
+    let length_rule = if notes_are_empty {
+        "Keep the entire answer under 220 words: 2-3 summary sentences, at most 6 key-point bullets and at most 5 action items"
+    } else {
+        "Preserve every distinct point from the user's rough notes, but keep transcript-derived detail concise and avoid repetition"
+    };
+    let language_rule = output_language_rule(notes, transcript);
     format!(
         "You are enhancing notes taken during a call, in the style of Granola.\n\
          \n\
@@ -188,7 +195,8 @@ pub(crate) fn build_prompt(title: &str, notes: &str, transcript: &str) -> String
          that matter, then \"Action items\" (only if the call produced any).\n\
          \n\
          Rules:\n\
-         - Write in the language the notes and transcript are in.\n\
+         - {language_rule}\n\
+         - {length_rule}.\n\
          - Output Markdown: short sections, bullet points, bold the decisions.\n\
          - Include an \"Action items\" section only if the call actually produced any.\n\
          - Never invent facts that are in neither the notes nor the transcript.\n\
@@ -203,6 +211,25 @@ pub(crate) fn build_prompt(title: &str, notes: &str, transcript: &str) -> String
          === TRANSCRIPT ===\n\
          {transcript}\n"
     )
+}
+
+/// Speaker labels and prompt instructions are English even when the call is
+/// not. Give the model a deterministic script hint so those wrapper tokens
+/// cannot make it translate a Russian call into English.
+fn output_language_rule(notes: &str, transcript: &str) -> String {
+    let text = format!("{notes}\n{transcript}");
+    let cyrillic = text
+        .chars()
+        .filter(|ch| matches!(*ch as u32, 0x0400..=0x052f))
+        .count();
+    let latin = text.chars().filter(|ch| ch.is_ascii_alphabetic()).count();
+    if cyrillic >= 20 && cyrillic > latin {
+        "The spoken content is predominantly Cyrillic. Write exclusively in that same language and script. Never translate it to English. Ignore the English Me/Them labels, title, timestamps, headings and these instructions when choosing the output language"
+            .to_string()
+    } else {
+        "Write exclusively in the dominant natural language of the spoken transcript. Never choose English merely because the Me/Them labels, title, timestamps, headings or these instructions are English"
+            .to_string()
+    }
 }
 
 /// The label written into the note's `summary_model:` field: bare provider
@@ -504,6 +531,19 @@ mod tests {
         fn empty_notes_ask_for_a_structured_summary_instead() {
             let p = build_prompt("Untitled", "   ", "[00:00:01] Them: hello");
             assert!(p.contains("took no notes"));
+            assert!(p.contains("under 220 words"));
+            assert!(p.contains("at most 6 key-point bullets"));
+        }
+
+        #[test]
+        fn cyrillic_call_explicitly_forbids_an_english_translation() {
+            let p = build_prompt(
+                "Weekly sync",
+                "",
+                "[00:00:01] Me: Давайте выпустим новую версию в пятницу и проверим тесты",
+            );
+            assert!(p.contains("predominantly Cyrillic"));
+            assert!(p.contains("Never translate it to English"));
         }
     }
 

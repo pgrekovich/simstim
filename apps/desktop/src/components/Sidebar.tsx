@@ -8,6 +8,14 @@ interface SidebarProps {
   selectedPath: string | null;
   /** The path currently being recorded, if any; shows a pulsing dot next to that row's title. */
   activePath: string | null;
+  /**
+   * Paths with machine work in flight (a re-transcribe or an enhance),
+   * mapped to the lowercase status word shown under the title
+   * ("transcribing" / "summarizing"). Owned by App, which watches both
+   * backends' progress events; a row in this map shows the indeterminate
+   * work spinner where the recording row shows its tally dot.
+   */
+  busyPaths?: Record<string, string>;
   onSelect: (path: string) => void;
   onNewSession: () => void;
   /** Hides the note list while preserving the selected note and recording. */
@@ -81,6 +89,7 @@ export function Sidebar({
   sessions,
   selectedPath,
   activePath,
+  busyPaths,
   onSelect,
   onNewSession,
   onCollapse,
@@ -142,6 +151,9 @@ export function Sidebar({
               {group.sessions.map((session) => {
                 const selected = selectedPath === session.path;
                 const recording = activePath === session.path;
+                // Recording wins over a (theoretically simultaneous) busy
+                // word: red tally is the loudest state this list has.
+                const busyWord = recording ? undefined : busyPaths?.[session.path];
                 const duration = formatDuration(session.duration_secs);
                 return (
                   // A wrapper div, not one button: the delete affordance is
@@ -158,7 +170,9 @@ export function Sidebar({
                           : "text-quiet-foreground hover:bg-foreground/[0.05] hover:text-foreground active:bg-foreground/[0.10]",
                         recording
                           ? "flex items-center gap-2 bg-background shadow-[0_1px_2px_rgb(30_27_22/0.07)] dark:border dark:border-destructive/[0.28] dark:bg-destructive/[0.14]"
-                          : "flex flex-col gap-px"
+                          : busyWord
+                            ? "flex items-center gap-2"
+                            : "flex flex-col gap-px"
                       )}
                     >
                       {recording ? (
@@ -173,6 +187,21 @@ export function Sidebar({
                             <span className="font-mono text-[10.5px] text-destructive">recording</span>
                           </span>
                         </>
+                      ) : busyWord ? (
+                        <>
+                          {/* Machine work, not capture: the quiet ink work
+                              spinner where the recording row has its red
+                              tally, and the status word in muted mono. */}
+                          <span
+                            data-testid="working-dot"
+                            aria-hidden="true"
+                            className="working-spinner size-3 shrink-0 text-muted-foreground"
+                          />
+                          <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                            <span className="truncate text-[12.5px] text-inherit">{session.title}</span>
+                            <span className="font-mono text-[10.5px] text-muted-foreground">{busyWord}</span>
+                          </span>
+                        </>
                       ) : (
                         <>
                           <span className={cn("w-full truncate pr-6 text-[12.5px]", selected && "font-medium")}>{session.title}</span>
@@ -183,7 +212,7 @@ export function Sidebar({
                         </>
                       )}
                     </button>
-                    {!recording && (
+                    {!recording && !busyWord && (
                       <button
                         type="button"
                         // The accessible name deliberately does NOT include

@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "@/App";
 import * as ipc from "@/lib/ipc";
@@ -1377,12 +1377,12 @@ describe("App: note actions menu (stage 0.10)", () => {
   });
 });
 
-describe("App: background auto-enhance completion (stage 0.11)", () => {
+describe("App: enhance progress (stage 0.11)", () => {
   const one: SessionMeta[] = [
     { path: "/tmp/sync.md", title: "Weekly sync", date: new Date().toISOString(), duration_secs: null },
   ];
 
-  it("refreshes the open note when its background enhance lands", async () => {
+  it("refreshes the open note when its enhance lands", async () => {
     vi.mocked(ipc.listSessions).mockResolvedValue(one);
     vi.mocked(ipc.readSession).mockResolvedValue({
       title: "Weekly sync", date: "", notes: "", transcript: "[00:00:01] Me: hi",
@@ -1397,7 +1397,7 @@ describe("App: background auto-enhance completion (stage 0.11)", () => {
       title: "Weekly sync", date: "", notes: "", transcript: "[00:00:01] Me: hi",
       audio_path: null, summary: "- fresh auto summary", summary_model: "claude",
     });
-    emit("enhance-done", { path: "/tmp/sync.md", ok: true, message: null });
+    emit("enhance-progress", { path: "/tmp/sync.md", phase: "done", provider: "claude", message: null });
 
     await waitFor(() =>
       expect(document.body.textContent).toContain("- fresh auto summary"),
@@ -1405,14 +1405,28 @@ describe("App: background auto-enhance completion (stage 0.11)", () => {
     expect(document.body.textContent).toContain("by claude");
   });
 
-  it("surfaces a background enhance failure through the global error notice", async () => {
+  it("shows a summarizing row in the sidebar while an enhance runs, for any session", async () => {
+    vi.mocked(ipc.listSessions).mockResolvedValue(one);
+    render(<App />);
+    const row = await screen.findByRole("button", { name: /weekly sync/i });
+
+    emit("enhance-progress", { path: "/tmp/sync.md", phase: "running", provider: "local", message: null });
+    await waitFor(() => expect(row.textContent).toContain("summarizing"));
+    expect(within(row).getByTestId("working-dot")).toBeInTheDocument();
+
+    emit("enhance-progress", { path: "/tmp/sync.md", phase: "done", provider: "local", message: null });
+    await waitFor(() => expect(row.textContent).not.toContain("summarizing"));
+  });
+
+  it("surfaces an enhance failure through the global error notice", async () => {
     vi.mocked(ipc.listSessions).mockResolvedValue(one);
     render(<App />);
     await screen.findByRole("button", { name: /weekly sync/i });
 
-    emit("enhance-done", {
+    emit("enhance-progress", {
       path: "/tmp/sync.md",
-      ok: false,
+      phase: "error",
+      provider: "claude",
       message: "Claude Code took longer than 5 minutes and was stopped",
     });
     const alert = await screen.findByRole("alert");

@@ -97,6 +97,52 @@ impl EnhanceState {
     }
 }
 
+/// Clears the enhance slot when dropped, so a panic anywhere inside the
+/// pipeline (which unwinds through `spawn_blocking`) can't leave the slot
+/// occupied forever -- that would refuse every future enhance AND block
+/// deleting the local model until restart (review finding).
+struct SlotGuard<'a>(&'a EnhanceState);
+
+impl Drop for SlotGuard<'_> {
+    fn drop(&mut self) {
+        *self.0 .0.lock().unwrap() = None;
+    }
+}
+
+/// `enhance-progress` event payload: one job's lifecycle, for BOTH manual
+/// and automatic runs (they share `enhance_path_blocking`). Mirrors
+/// `EnhanceProgress` in `ipc.ts`. `running` fires once the slot is claimed;
+/// `done`/`error` fire after the slot is released, so a listener reacting to
+/// a terminal phase can immediately start another enhance.
+#[derive(Debug, Clone, Serialize)]
+struct EnhanceProgressPayload {
+    path: String,
+    /// `"running" | "done" | "error"`.
+    phase: &'static str,
+    /// The provider id that ran (`"local"`, `"claude"`, `"codex"`).
+    provider: String,
+    message: Option<String>,
+}
+
+fn emit_progress<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    path: &str,
+    phase: &'static str,
+    provider: &str,
+    message: Option<String>,
+) {
+    use tauri::Emitter;
+    let _ = app.emit(
+        "enhance-progress",
+        EnhanceProgressPayload {
+            path: path.to_string(),
+            phase,
+            provider: provider.to_string(),
+            message,
+        },
+    );
+}
+
 /// Resolves `binary` to an executable path. A bundled GUI app launches with
 /// a minimal PATH (no /opt/homebrew/bin), so well-known install dirs are
 /// checked explicitly before falling back to whatever PATH has.
@@ -464,6 +510,7 @@ fn validate_enhance(
     active: Option<&Path>,
     finalizing: Option<&Path>,
     already_running: Option<&str>,
+    retranscribe_involves: bool,
     transcript: &str,
 ) -> Result<(), String> {
     if active == Some(md_path) {
@@ -478,6 +525,16 @@ fn validate_enhance(
         } else {
             "another note is being enhanced; wait for it to finish".to_string()
         });
+    }
+    // A running or queued re-transcribe will replace this note's transcript
+    // (architecture-review finding): summarizing the pre-retranscribe text is
+    // stale on arrival at best, and both final writes are whole-file
+    // read-modify-write, so an interleaving could revert the fresh transcript
+    // outright. The re-transcribe completion re-triggers auto-enhance itself.
+    if retranscribe_involves {
+        return Err(
+            "this note is being re-transcribed; enhance it once that finishes".to_string(),
+        );
     }
     if transcript.trim().is_empty() {
         return Err("nothing to enhance: this note has no transcript yet".to_string());
@@ -504,7 +561,27 @@ pub async fn enhance_session(path: String, app: tauri::AppHandle) -> Result<Stri
 /// The whole blocking enhance pipeline (parse -> validate -> subprocess ->
 /// atomic write), shared between the manual command above and the
 /// auto-enhance trigger below. Must run inside `spawn_blocking`.
+///
+/// Every run reports its lifecycle through `enhance-progress` events from
+/// this single wrapper -- `running` once the slot is claimed (inside
+/// `enhance_path_inner`), then exactly one terminal `done`/`error` here, so
+/// a failure that never reaches the slot (validation, a parse error, an
+/// unknown provider) is still visible to the UI. The manual command's
+/// promise carries the same result; auto runs have only these events.
 fn enhance_path_blocking<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    path: &str,
+) -> Result<String, String> {
+    let provider = Config::load().enhance_provider;
+    let result = enhance_path_inner(app, path);
+    match &result {
+        Ok(_) => emit_progress(app, path, "done", &provider, None),
+        Err(message) => emit_progress(app, path, "error", &provider, Some(message.clone())),
+    }
+    result
+}
+
+fn enhance_path_inner<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     path: &str,
 ) -> Result<String, String> {
@@ -531,11 +608,16 @@ fn enhance_path_blocking<R: tauri::Runtime>(
             state.active_output_path().as_deref(),
             state.finalizing_match(md_path).as_deref(),
             running.as_deref(),
+            app.state::<crate::retranscribe::RetranscribeState>()
+                .involves(path),
             &existing.transcript,
         )?;
         *running = Some(path.to_string());
     }
-    // The slot is held; release it on EVERY exit path below.
+    // The slot is held; the guard releases it on EVERY exit path below,
+    // including a panic unwinding through spawn_blocking.
+    let slot = SlotGuard(enhance.inner());
+    emit_progress(app, path, "running", spec.id, None);
     let result = (|| {
         let prompt = build_prompt(&existing.title, &existing.notes, &existing.transcript);
         let summary = match spec.kind {
@@ -564,18 +646,10 @@ fn enhance_path_blocking<R: tauri::Runtime>(
             .map_err(|e| e.to_string())?;
         Ok(summary)
     })();
-    *enhance.0.lock().unwrap() = None;
+    // Release the slot BEFORE the wrapper announces the terminal phase, so
+    // a listener reacting to it can immediately start another enhance.
+    drop(slot);
     result
-}
-
-/// `enhance-done` event payload: how a BACKGROUND (auto) enhance ended.
-/// Mirrors `EnhanceDonePayload` in `ipc.ts`. The manual command reports
-/// through its own promise instead and never emits this.
-#[derive(Debug, Clone, Serialize)]
-struct EnhanceDonePayload {
-    path: String,
-    ok: bool,
-    message: Option<String>,
 }
 
 /// Fires an auto-enhance for `path` if the setting is on (stage 0.11,
@@ -590,9 +664,10 @@ struct EnhanceDonePayload {
 ///   queue no longer involves this path, so the check passes): a rewritten
 ///   transcript makes any existing summary stale, so it regenerates.
 ///
-/// Fire-and-forget: the outcome lands as an `enhance-done` event, never a
+/// Fire-and-forget: the outcome lands as `enhance-progress` events (emitted
+/// by `enhance_path_blocking` for every run, manual or auto), never a
 /// blocked stop. Failures (provider missing, another enhance running) are
-/// reported through the same event rather than dropped.
+/// reported through the same events rather than dropped.
 pub(crate) fn maybe_auto_enhance<R: tauri::Runtime>(app: tauri::AppHandle<R>, path: String) {
     let cfg = Config::load();
     if !cfg.auto_enhance {
@@ -605,14 +680,7 @@ pub(crate) fn maybe_auto_enhance<R: tauri::Runtime>(app: tauri::AppHandle<R>, pa
         return;
     }
     tauri::async_runtime::spawn_blocking(move || {
-        use tauri::Emitter;
-        let result = enhance_path_blocking(&app, &path);
-        let payload = EnhanceDonePayload {
-            path,
-            ok: result.is_ok(),
-            message: result.err(),
-        };
-        let _ = app.emit("enhance-done", payload);
+        let _ = enhance_path_blocking(&app, &path);
     });
 }
 
@@ -698,6 +766,7 @@ mod tests {
                 Some(Path::new("/tmp/a.md")),
                 None,
                 None,
+                false,
                 "[00:00:01] Me: hi",
             )
             .unwrap_err();
@@ -711,6 +780,7 @@ mod tests {
                 None,
                 Some(Path::new("/tmp/a.md")),
                 None,
+                false,
                 "[00:00:01] Me: hi",
             )
             .unwrap_err();
@@ -724,6 +794,7 @@ mod tests {
                 None,
                 None,
                 Some("/tmp/b.md"),
+                false,
                 "[00:00:01] Me: hi",
             )
             .unwrap_err();
@@ -734,6 +805,7 @@ mod tests {
                 None,
                 None,
                 Some("/tmp/a.md"),
+                false,
                 "[00:00:01] Me: hi",
             )
             .unwrap_err();
@@ -743,8 +815,22 @@ mod tests {
         #[test]
         fn rejects_an_empty_transcript() {
             let err =
-                validate_enhance(Path::new("/tmp/a.md"), None, None, None, "  \n ").unwrap_err();
+                validate_enhance(Path::new("/tmp/a.md"), None, None, None, false, "  \n ").unwrap_err();
             assert!(err.contains("no transcript"), "{err}");
+        }
+
+        #[test]
+        fn rejects_while_a_retranscribe_involves_the_note() {
+            let err = validate_enhance(
+                Path::new("/tmp/a.md"),
+                None,
+                None,
+                None,
+                true,
+                "[00:00:01] Me: hi",
+            )
+            .unwrap_err();
+            assert!(err.contains("re-transcribed"), "{err}");
         }
 
         #[test]
@@ -754,6 +840,7 @@ mod tests {
                 Some(Path::new("/tmp/other.md")),
                 None,
                 None,
+                false,
                 "[00:00:01] Me: hi",
             )
             .is_ok());

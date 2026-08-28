@@ -399,10 +399,20 @@ export function setEnhanceProvider(provider: string): Promise<void> {
   return invoke("set_enhance_provider", { provider });
 }
 
-/** Mirrors `enhance::EnhanceDonePayload`, the `enhance-done` event a BACKGROUND (auto) enhance ends with. */
-export interface EnhanceDonePayload {
+export type EnhancePhase = "running" | "done" | "error";
+
+/**
+ * Mirrors `enhance::EnhanceProgressPayload`, the `enhance-progress` event
+ * payload: one enhance job's lifecycle, emitted for BOTH manual and
+ * automatic runs. `running` fires once the job actually claims the
+ * one-at-a-time slot; exactly one terminal `done`/`error` follows, including
+ * for failures that never reach the slot (validation, a missing provider).
+ */
+export interface EnhanceProgress {
   path: string;
-  ok: boolean;
+  phase: EnhancePhase;
+  /** The provider id that ran (`"local"`, `"claude"`, `"codex"`). */
+  provider: string;
   message: string | null;
 }
 
@@ -410,6 +420,7 @@ export interface EnhanceDonePayload {
 export function setAutoEnhance(autoEnhance: boolean): Promise<void> {
   return invoke("set_auto_enhance", { autoEnhance });
 }
+
 
 /**
  * Sets one provider's model override (stage 0.11); an empty string clears

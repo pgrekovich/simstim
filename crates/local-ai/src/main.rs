@@ -24,8 +24,8 @@ use serde::{Deserialize, Serialize};
 const BASE_CONTEXT_TOKENS: u32 = 8192;
 const BATCH_TOKENS: usize = 1024;
 const MICRO_BATCH_TOKENS: u32 = 512;
-const FINAL_OUTPUT_TOKENS: usize = 800;
-const MAP_OUTPUT_TOKENS: usize = 320;
+const FINAL_OUTPUT_TOKENS: usize = 560;
+const MAP_OUTPUT_TOKENS: usize = 240;
 const RETRY_PROMPT_RESERVE: usize = 128;
 const GENERATION_TIMEOUT: Duration = Duration::from_secs(300);
 
@@ -104,12 +104,15 @@ fn run(request: Request) -> Result<String, String> {
     }
 
     let language_rule = output_language.rule();
+    let final_check = output_language.final_check();
+    let compacted_transcript = compact_transcript(&request.transcript);
     let chunks = transcript_chunks(
         &model,
         &request.title,
         &request.notes,
-        &request.transcript,
+        &compacted_transcript,
         language_rule,
+        final_check,
         context_tokens,
     )?;
     let mut evidence = Vec::with_capacity(chunks.len());
@@ -121,6 +124,7 @@ fn run(request: Request) -> Result<String, String> {
             index + 1,
             chunks.len(),
             language_rule,
+            final_check,
         );
         let partial = generate_validated(
             &backend,
@@ -139,6 +143,7 @@ fn run(request: Request) -> Result<String, String> {
         &request.notes,
         &reduced_transcript,
         language_rule,
+        final_check,
     );
     if !prompt_fits(&model, &final_prompt, FINAL_OUTPUT_TOKENS, context_tokens)? {
         return Err(
@@ -174,9 +179,10 @@ fn transcript_chunks(
     notes: &str,
     transcript: &str,
     language_rule: &str,
+    final_check: &str,
     context_tokens: u32,
 ) -> Result<Vec<String>, String> {
-    let empty_prompt = chunk_prompt(title, notes, "", 1, 1, language_rule);
+    let empty_prompt = chunk_prompt(title, notes, "", 1, 1, language_rule, final_check);
     let overhead = model
         .str_to_token(&chat_prompt(&empty_prompt), AddBos::Never)
         .map_err(|e| format!("couldn't tokenize the note: {e}"))?
@@ -217,6 +223,62 @@ fn transcript_chunks(
     Ok(chunks)
 }
 
+/// Mirrors the desktop prompt compaction for the low-memory map/reduce path.
+/// The direct path receives an already-compacted full prompt from the app.
+fn compact_transcript(transcript: &str) -> String {
+    const MIN_LETTERS: usize = 12;
+    const MAX_PARAGRAPH_CHARS: usize = 600;
+
+    let mut paragraphs = Vec::new();
+    let mut speaker = String::new();
+    let mut paragraph = String::new();
+    let mut previous_fragment = String::new();
+
+    let flush = |paragraphs: &mut Vec<String>, speaker: &str, paragraph: &mut String| {
+        if !paragraph.is_empty() {
+            paragraphs.push(format!("{speaker}: {}", paragraph.trim()));
+            paragraph.clear();
+        }
+    };
+
+    for line in transcript.lines() {
+        let Some((_, after_time)) = line.split_once("] ") else {
+            continue;
+        };
+        let Some((line_speaker, raw_text)) = after_time.split_once(": ") else {
+            continue;
+        };
+        if !matches!(line_speaker, "Me" | "Them") {
+            continue;
+        }
+        let text = raw_text.split_whitespace().collect::<Vec<_>>().join(" ");
+        let letters = text.chars().filter(|ch| ch.is_alphabetic()).count();
+        if letters < MIN_LETTERS || text == previous_fragment {
+            continue;
+        }
+        previous_fragment.clone_from(&text);
+
+        let can_join = speaker == line_speaker
+            && paragraph.chars().count() + text.chars().count() < MAX_PARAGRAPH_CHARS;
+        if !can_join {
+            flush(&mut paragraphs, &speaker, &mut paragraph);
+            speaker.clear();
+            speaker.push_str(line_speaker);
+        }
+        if !paragraph.is_empty() {
+            paragraph.push(' ');
+        }
+        paragraph.push_str(&text);
+    }
+    flush(&mut paragraphs, &speaker, &mut paragraph);
+
+    if paragraphs.is_empty() {
+        transcript.trim().to_string()
+    } else {
+        paragraphs.join("\n")
+    }
+}
+
 fn chunk_prompt(
     title: &str,
     notes: &str,
@@ -224,6 +286,7 @@ fn chunk_prompt(
     part: usize,
     total: usize,
     language_rule: &str,
+    final_check: &str,
 ) -> String {
     let notes = if notes.trim().is_empty() {
         "(the user took no notes during this call)"
@@ -232,10 +295,12 @@ fn chunk_prompt(
     };
     format!(
         "Extract concise evidence for a later meeting summary. This is transcript part {part} of {total}.\n\
-         The user's rough notes are the primary signal. Preserve relevant decisions, names,\n\
-         numbers, key points and action items from this part. Never invent facts.\n\
-         {language_rule}. Output at most 8 short Markdown bullets, with no more\n\
-         than 12 words per bullet. Include only evidence needed by the final summary.\n\
+         The user's rough notes are the primary signal. Extract only explicit status,\n\
+         decisions, preferred and fallback plans, material risks and real action items.\n\
+         Ignore banter, repetition and unrelated anecdotes. Do not turn possibilities\n\
+         into decisions or actions, merge separate incidents, or invent an owner.\n\
+         {language_rule}. Output at most 6 short Markdown bullets, with no more\n\
+         than 14 words per bullet. Include only evidence needed by the final summary.\n\
          \n\
          Call title: {title}\n\
          \n\
@@ -243,39 +308,50 @@ fn chunk_prompt(
          {notes}\n\
          \n\
          === TRANSCRIPT PART ===\n\
-         {transcript}\n"
+         {transcript}\n\
+         === END TRANSCRIPT PART ===\n\
+         {final_check}. Output evidence bullets only.\n"
     )
 }
 
-fn build_summary_prompt(title: &str, notes: &str, transcript: &str, language_rule: &str) -> String {
+fn build_summary_prompt(
+    title: &str,
+    notes: &str,
+    transcript: &str,
+    language_rule: &str,
+    final_check: &str,
+) -> String {
     let notes_are_empty = notes.trim().is_empty();
     let notes = if notes_are_empty {
         "(the user took no notes during this call)"
     } else {
         notes.trim()
     };
-    let length_rule = if notes_are_empty {
-        "Keep the entire answer under 220 words: 2-3 summary sentences, at most 6 key-point bullets and at most 5 action items"
+    let task_rule = if notes_are_empty {
+        "Start with one sentence stating the overall work status and main blocker. Then use Markdown headings in the output language for Status (at most 3 bullets), Risks (at most 2 bullets, omit if empty), and Next steps (at most 2 bullets, omit if empty). Keep the entire answer under 140 words"
     } else {
-        "Preserve every distinct point from the user's rough notes, but keep transcript-derived detail concise and avoid repetition"
+        "Rewrite the user's rough notes in their original structure. Preserve every distinct user point, add only directly supporting transcript detail, and do not introduce unrelated transcript topics"
     };
     format!(
-        "You are enhancing notes taken during a call, in the style of Granola.\n\
+        "Act as a precise technical chief of staff. Convert noisy ASR into faithful, decision-oriented meeting notes.\n\
          \n\
          The user's own rough notes are the PRIMARY signal: they show what mattered\n\
          to the user. The transcript is backing material to fill in details,\n\
          decisions, numbers and names the rough notes only hint at.\n\
          \n\
-         If the user took NO notes, produce instead: a 2-4 sentence summary of the\n\
-         call, then a \"Key points\" section with the decisions, numbers and names\n\
-         that matter, then \"Action items\" (only if the call produced any).\n\
-         \n\
          Rules:\n\
          - {language_rule}.\n\
-         - {length_rule}.\n\
-         - Output Markdown: short sections, bullet points, bold the decisions.\n\
-         - Include an \"Action items\" section only if the call actually produced any.\n\
-         - Never invent facts that are in neither the notes nor the transcript.\n\
+         - {task_rule}.\n\
+         - Find the dominant workstream from discussion time and explicit outcomes.\n\
+         - Omit greetings, jokes, profanity, repetition and side anecdotes that do\n\
+           not change a decision, risk or action, even when the anecdote is technical.\n\
+         - Report the final position after corrections. Keep current state, preferred\n\
+           plan and fallback separate; never describe a planned change as completed.\n\
+         - A suggestion or conditional possibility is not an action item. Name an\n\
+           owner only when the transcript explicitly assigns one.\n\
+         - Never merge separate incidents or invent facts, causality or commitments.\n\
+         - Silently repair obvious ASR errors; omit claims whose meaning is ambiguous.\n\
+         - Output concise Markdown.\n\
          - Output ONLY the enhanced note itself: no preamble, no closing remarks,\n\
            no top-level title heading.\n\
          \n\
@@ -285,7 +361,9 @@ fn build_summary_prompt(title: &str, notes: &str, transcript: &str, language_rul
          {notes}\n\
          \n\
          === TRANSCRIPT ===\n\
-         {transcript}\n"
+         {transcript}\n\
+         === END TRANSCRIPT ===\n\
+         {final_check}. Stay under the requested word limit.\n"
     )
 }
 
@@ -305,6 +383,7 @@ fn generate_validated(
         42,
         context_tokens,
     )?;
+    debug_candidate("first", &first);
     match validate_output(first, output_language) {
         Ok(text) => Ok(text),
         Err(_) => {
@@ -317,8 +396,15 @@ fn generate_validated(
                 1337,
                 context_tokens,
             )?;
+            debug_candidate("retry", &retry);
             validate_output(retry, output_language)
         }
+    }
+}
+
+fn debug_candidate(label: &str, text: &str) {
+    if std::env::var_os("SIMSTIM_LOCAL_AI_DEBUG_OUTPUT").is_some() {
+        eprintln!("SIMSTIM_LOCAL_AI_{label}_BEGIN\n{text}\nSIMSTIM_LOCAL_AI_{label}_END");
     }
 }
 
@@ -385,10 +471,10 @@ fn generate_once(
     }
 
     let mut sampler = LlamaSampler::chain_simple([
-        LlamaSampler::penalties(-1, 1.0, 0.0, 1.5),
+        LlamaSampler::penalties(-1, 1.05, 0.0, 0.0),
         LlamaSampler::top_k(20),
-        LlamaSampler::top_p(0.8, 1),
-        LlamaSampler::temp(0.7),
+        LlamaSampler::top_p(0.85, 1),
+        LlamaSampler::temp(0.25),
         LlamaSampler::dist(seed),
     ])
     .with_tokens(&tokens);
@@ -434,6 +520,13 @@ fn ensure_before_deadline(deadline: Instant) -> Result<(), String> {
 /// Use the base-M1-safe 8K context on an 8 GB machine, but avoid expensive
 /// map/reduce passes when unified memory has room for a larger prompt.
 fn context_tokens_for_this_mac() -> u32 {
+    if let Some(override_tokens) = std::env::var("SIMSTIM_LOCAL_AI_CONTEXT_TOKENS")
+        .ok()
+        .and_then(|value| value.parse::<u32>().ok())
+        .filter(|value| matches!(*value, 4096 | 8192 | 16_384 | 32_768))
+    {
+        return override_tokens;
+    }
     let bytes = Command::new("/usr/sbin/sysctl")
         .args(["-n", "hw.memsize"])
         .output()
@@ -493,6 +586,13 @@ impl OutputLanguage {
             Self::Transcript => "Return only the requested summary in the dominant language of the spoken transcript.",
         }
     }
+
+    fn final_check(self) -> &'static str {
+        match self {
+            Self::Cyrillic => "Пиши только на языке расшифровки кириллицей; не переводи на английский. Используй только явные утверждения. Сохраняй направление из источника в цель и область действия каждого компонента. Позднее уточнение «не X, а Y» отменяет X. Не смешивай текущее состояние, предпочтительный план и fallback. Условие остается условием. Действие допустимо только при явном обязательстве владельца. Не заполняй раздел ради формата: сомнительное и побочные истории исключи",
+            Self::Transcript => "Before answering, check the complete transcript. Report only the final position; label preferred and fallback plans as plans; exclude side anecdotes; include only explicit actions; preserve the call language",
+        }
+    }
 }
 
 fn is_cyrillic(ch: char) -> bool {
@@ -533,6 +633,7 @@ mod tests {
             "- ship Friday",
             "### Part 1\n- agreed",
             "Write in English",
+            "Check the evidence",
         );
         assert!(prompt.find("- ship Friday").unwrap() < prompt.find("### Part 1").unwrap());
     }
@@ -575,5 +676,19 @@ mod tests {
         assert_eq!(context_tokens_for_memory(Some(16 * gib)), 16_384);
         assert_eq!(context_tokens_for_memory(Some(32 * gib)), 32_768);
         assert_eq!(context_tokens_for_memory(None), 8192);
+    }
+
+    #[test]
+    fn compaction_removes_short_noise_and_keeps_distinct_speakers() {
+        let transcript = "[00:00:01] Them: The existing API remains available during the migration\n\
+                          [00:00:02] Me: yep\n\
+                          [00:00:03] Them: Traffic can switch to the new route without changing DNS\n\
+                          [00:00:04] Me: We will validate the production configuration in sandbox";
+        let compacted = compact_transcript(transcript);
+        assert_eq!(compacted.matches("Them:").count(), 1);
+        assert_eq!(compacted.matches("Me:").count(), 1);
+        assert!(!compacted.contains("yep"));
+        assert!(compacted.contains("without changing DNS"));
+        assert!(compacted.contains("production configuration"));
     }
 }

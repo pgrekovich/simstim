@@ -231,14 +231,17 @@ Out of 0.7: meeting detection, tray, hotkeys, enhance, calendar.
 - Compression costs about 4 percent WER versus lossless (measured on English/German/French/Spanish; Russian unmeasured). AAC 32 kbps is the default because raising the bitrate does not recover that accuracy (AAC 64k measured at 4.3 percent vs 3.8 percent for 32k), so the real choice is lossless or not.
 - Continuing a recording into a note whose audio is in the other format re-encodes the combined audio into the current format.
 - FLAC block padding accumulates at seams when continuing a session: each segment's trailing block pads to up to 256ms of silence, so N continuations add up to N-1 seams of padding (accepted as a size cost, exact sync is preserved).
-- The first built-in Qwen M1 e2e completed and exposed slow long-call summaries
-  plus English output for a Russian call. The branch now uses an adaptive 8K,
-  16K or 32K context based on unified memory, shortens map/reduce output,
-  derives the language from transcript text and rejects a wrong-script result.
-  A local benchmark on a real 41 KB Russian transcript completed in one pass
-  in about 30 seconds on the owner's M1 Max and returned Russian output. The
-  owner's second app e2e is pending. The model is not downloaded automatically;
-  Settings shows the 2.74 GB cost before the explicit download.
+- The first built-in Qwen M1 e2e exposed slow, English and poorly grounded
+  summaries on a 41 KB Russian transcript. The branch now compacts inference
+  input without changing the saved transcript, uses an adaptive 8K, 16K or 32K
+  context, detects the spoken language and rejects a wrong-script result. The
+  real-call benchmark improved from about 27 to 32 seconds to about 17 seconds
+  on the owner's M1 Max. The 4B model still changed component scope and
+  conditional actions on this difficult call. A Qwen3.5 9B comparison took
+  about 30 seconds and was materially more accurate, so it is available as the
+  recommended quality profile for Macs with at least 16 GB. The owner's app
+  quality recheck is pending. Neither model downloads automatically; Settings
+  shows the 2.74 GB or 5.68 GB cost before the explicit download.
 
 ## Stage 1.0: call detection (approved 2026-08-16, owner: "the most important thing")
 
@@ -357,12 +360,16 @@ spec.
 
 ## Stage 3.1: built-in local summaries (implemented 2026-08-28)
 
-Qwen3.5 4B Q4_K_M is the default provider for new installs. The model is an
-explicit 2.74 GB download and runs through a bundled, short-lived llama.cpp
-Metal helper, with no Ollama, account, background server or network port.
+Qwen3.5 4B Q4_K_M is the fast default for new installs and an explicit 2.74 GB
+download. Qwen3.5 9B Q4_K_M is an optional 5.68 GB quality profile recommended
+for Macs with at least 16 GB. Both run through the same bundled, short-lived
+llama.cpp Metal helper, with no Ollama, account, background server or network
+port.
 Whisper stays in the main process because the two runtimes export conflicting
-GGML symbols when linked together. Short calls use one pass; long calls use
-local chunk extraction plus local synthesis without truncating the transcript.
+GGML symbols when linked together. The inference request removes
+low-information acknowledgements and repeated ASR fragments without changing
+the transcript on disk. Short calls use one pass; long calls use local chunk
+extraction plus local synthesis without truncating meaningful transcript text.
 Generated text replaces only `## Summary` and is labeled
 `local/qwen3.5-4b-q4-k-m`. Existing explicit Claude Code and Codex selections
 remain unchanged and available as cloud alternatives.

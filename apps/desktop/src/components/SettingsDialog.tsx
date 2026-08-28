@@ -1142,13 +1142,15 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                             ? provider.version ?? "installed"
                             : provider.id === "local"
                               ? "download Qwen3.5 4B in Models"
+                              : provider.id === "local-quality"
+                                ? "download Qwen3.5 9B in Models"
                               : `not installed (no \`${provider.id}\` CLI found)`
                         }
                         error={
                           config?.enhance_provider === provider.id ? enhanceProviderError : null
                         }
                       >
-                        {provider.available && provider.id !== "local" && (
+                        {provider.available && !provider.id.startsWith("local") && (
                           <select
                             aria-label={`${provider.name} model`}
                             value={config?.enhance_models?.[provider.id] ?? ""}

@@ -71,8 +71,9 @@ fn default_delete_audio_after_retranscribe() -> bool {
 }
 
 /// Call detection only suggests recording and therefore defaults on.
-/// The enhance provider ids `enhance::PROVIDERS` knows how to run.
-pub const VALID_ENHANCE_PROVIDERS: &[&str] = &["local", "claude", "codex"];
+/// The enhance provider ids `enhance::PROVIDERS` knows how to run. `local`
+/// is the fast 4B option; `local-quality` is the 9B option for 16 GB Macs.
+pub const VALID_ENHANCE_PROVIDERS: &[&str] = &["local", "local-quality", "claude", "codex"];
 
 /// Local first for new installs and pre-Enhance configs. An existing config
 /// that explicitly selected Claude or Codex keeps that value through serde.

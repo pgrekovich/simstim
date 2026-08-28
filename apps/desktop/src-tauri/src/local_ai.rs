@@ -12,8 +12,8 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-pub const MODEL_ID: &str = "qwen3.5-4b-q4-k-m";
-pub const SUMMARY_LABEL: &str = "local/qwen3.5-4b-q4-k-m";
+pub const FAST_MODEL_ID: &str = "qwen3.5-4b-q4-k-m";
+pub const QUALITY_MODEL_ID: &str = "qwen3.5-9b-q4-k-m";
 const WORKER_TIMEOUT: Duration = Duration::from_secs(300);
 
 #[derive(Serialize)]
@@ -134,7 +134,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn summary_label_records_the_exact_model() {
-        assert_eq!(SUMMARY_LABEL, "local/qwen3.5-4b-q4-k-m");
+    fn local_model_ids_are_stable() {
+        assert_eq!(FAST_MODEL_ID, "qwen3.5-4b-q4-k-m");
+        assert_eq!(QUALITY_MODEL_ID, "qwen3.5-9b-q4-k-m");
     }
 }

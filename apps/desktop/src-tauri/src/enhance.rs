@@ -58,9 +58,16 @@ struct ProviderSpec {
 const PROVIDERS: &[ProviderSpec] = &[
     ProviderSpec {
         id: "local",
-        name: "Local · Qwen3.5 4B",
+        name: "Local fast · Qwen3.5 4B",
         kind: ProviderKind::Local {
-            model_id: crate::local_ai::MODEL_ID,
+            model_id: crate::local_ai::FAST_MODEL_ID,
+        },
+    },
+    ProviderSpec {
+        id: "local-quality",
+        name: "Local quality · Qwen3.5 9B",
+        kind: ProviderKind::Local {
+            model_id: crate::local_ai::QUALITY_MODEL_ID,
         },
     },
     ProviderSpec {
@@ -177,31 +184,48 @@ pub(crate) fn build_prompt(title: &str, notes: &str, transcript: &str) -> String
     } else {
         notes.trim().to_string()
     };
-    let length_rule = if notes_are_empty {
-        "Keep the entire answer under 220 words: 2-3 summary sentences, at most 6 key-point bullets and at most 5 action items"
+    let task_rule = if notes_are_empty {
+        "Start with one sentence stating the overall work status and main blocker. Then use Markdown headings in the output language for Status (at most 3 bullets), Risks (at most 2 bullets, omit if empty), and Next steps (at most 2 bullets, omit if empty). Keep the entire answer under 140 words"
     } else {
-        "Preserve every distinct point from the user's rough notes, but keep transcript-derived detail concise and avoid repetition"
+        "Rewrite the user's rough notes in their original structure. Preserve every distinct user point, add only directly supporting transcript detail, and do not introduce unrelated transcript topics"
     };
-    let language_rule = output_language_rule(notes, transcript);
+    let cyrillic_output = uses_cyrillic_output(notes, transcript);
+    let language_rule = output_language_rule(cyrillic_output);
+    let prompt_transcript = compact_transcript(transcript);
+    let final_check = if cyrillic_output {
+        "Пиши только на языке расшифровки кириллицей; не переводи на английский. Используй только явные утверждения. Сохраняй направление из источника в цель и область действия каждого компонента. Позднее уточнение «не X, а Y» отменяет X. Не смешивай текущее состояние, предпочтительный план и fallback. Условие остается условием. Действие допустимо только при явном обязательстве владельца. Не заполняй раздел ради формата: сомнительное и побочные истории исключи"
+    } else {
+        "Before answering, check the complete transcript. Report only the final position; label preferred and fallback plans as plans; exclude side anecdotes; include only explicit actions; preserve the call language"
+    };
+    if cyrillic_output {
+        let cyrillic_task = if notes_are_empty {
+            "Начни без метки с одного предложения об общем статусе и главном блокере. Затем дай максимум 3 пункта в разделе «Статус», максимум 2 в «Риски» и максимум 2 в «Следующие шаги». Пустой раздел пропусти. Уложись в 140 слов"
+        } else {
+            "Перепиши заметки пользователя, сохранив их структуру и каждый отдельный пункт. Добавляй только прямо подтверждающие детали из расшифровки и не вводи посторонние темы"
+        };
+        return format!(
+            "Ниже исходные данные звонка. Не отвечай, пока не прочитаешь их до конца.\n\
+             \n\
+             Название: {title}\n\
+             \n\
+             === ЗАМЕТКИ ПОЛЬЗОВАТЕЛЯ ===\n\
+             {notes_block}\n\
+             \n\
+             === РАСШИФРОВКА ===\n\
+             {prompt_transcript}\n\
+             === КОНЕЦ ИСХОДНЫХ ДАННЫХ ===\n\
+             \n\
+             Составь точные технические заметки по шумной ASR-расшифровке.\n\
+             Заметки пользователя являются главным сигналом; расшифровка только\n\
+             дополняет их фактами, решениями, числами и именами. {cyrillic_task}.\n\
+             Учитывай поздние уточнения. Полностью исключи приветствия, шутки,\n\
+             повторы, ругань, старые инциденты и побочные истории.\n\
+             {final_check}. Верни только короткий Markdown без заголовка документа.\n"
+        );
+    }
+
     format!(
-        "You are enhancing notes taken during a call, in the style of Granola.\n\
-         \n\
-         The user's own rough notes are the PRIMARY signal: they show what mattered\n\
-         to the user. The transcript is backing material to fill in details,\n\
-         decisions, numbers and names the rough notes only hint at.\n\
-         \n\
-         If the user took NO notes, produce instead: a 2-4 sentence summary of the\n\
-         call, then a \"Key points\" section with the decisions, numbers and names\n\
-         that matter, then \"Action items\" (only if the call produced any).\n\
-         \n\
-         Rules:\n\
-         - {language_rule}\n\
-         - {length_rule}.\n\
-         - Output Markdown: short sections, bullet points, bold the decisions.\n\
-         - Include an \"Action items\" section only if the call actually produced any.\n\
-         - Never invent facts that are in neither the notes nor the transcript.\n\
-         - Output ONLY the enhanced note itself: no preamble, no closing remarks,\n\
-           no top-level title heading.\n\
+        "The following is source data from a call. Read through its end before answering.\n\
          \n\
          Call title: {title}\n\
          \n\
@@ -209,26 +233,111 @@ pub(crate) fn build_prompt(title: &str, notes: &str, transcript: &str) -> String
          {notes_block}\n\
          \n\
          === TRANSCRIPT ===\n\
-         {transcript}\n"
+         {prompt_transcript}\n\
+         === END SOURCE DATA ===\n\
+         \n\
+         Act as a precise technical chief of staff. Convert the noisy ASR into faithful, decision-oriented meeting notes.\n\
+         \n\
+         The user's own rough notes are the PRIMARY signal: they show what mattered\n\
+         to the user. The transcript is backing material to fill in details,\n\
+         decisions, numbers and names the rough notes only hint at.\n\
+         \n\
+         Rules:\n\
+         - {language_rule}\n\
+         - {task_rule}.\n\
+         - Find the dominant workstream from discussion time and explicit outcomes.\n\
+         - Omit greetings, jokes, profanity, repetition and side anecdotes that do\n\
+           not change a decision, risk or action, even when the anecdote is technical.\n\
+         - Report the final position after corrections. Keep current state, preferred\n\
+           plan and fallback separate; never describe a planned change as completed.\n\
+         - A suggestion or conditional possibility is not an action item. Name an\n\
+           owner only when the transcript explicitly assigns one.\n\
+         - Never merge separate incidents or invent facts, causality or commitments.\n\
+         - Silently repair obvious ASR errors; omit claims whose meaning is ambiguous.\n\
+         - Output concise Markdown.\n\
+         - Output ONLY the enhanced note itself: no preamble, no closing remarks,\n\
+           no top-level title heading.\n\
+         \n\
+         {final_check}. Stay under the requested word limit.\n"
     )
+}
+
+/// Removes low-information acknowledgements and joins adjacent fragments from
+/// one speaker for the summary prompt only. The transcript on disk is never
+/// changed. Keeping each paragraph bounded prevents a long monologue from
+/// turning into one attention-heavy line.
+fn compact_transcript(transcript: &str) -> String {
+    const MIN_LETTERS: usize = 12;
+    const MAX_PARAGRAPH_CHARS: usize = 600;
+
+    let mut paragraphs = Vec::new();
+    let mut speaker = String::new();
+    let mut paragraph = String::new();
+    let mut previous_fragment = String::new();
+
+    let flush = |paragraphs: &mut Vec<String>, speaker: &str, paragraph: &mut String| {
+        if !paragraph.is_empty() {
+            paragraphs.push(format!("{speaker}: {}", paragraph.trim()));
+            paragraph.clear();
+        }
+    };
+
+    for line in transcript.lines() {
+        let Some((_, after_time)) = line.split_once("] ") else {
+            continue;
+        };
+        let Some((line_speaker, raw_text)) = after_time.split_once(": ") else {
+            continue;
+        };
+        if !matches!(line_speaker, "Me" | "Them") {
+            continue;
+        }
+        let text = raw_text.split_whitespace().collect::<Vec<_>>().join(" ");
+        let letters = text.chars().filter(|ch| ch.is_alphabetic()).count();
+        if letters < MIN_LETTERS || text == previous_fragment {
+            continue;
+        }
+        previous_fragment.clone_from(&text);
+
+        let can_join = speaker == line_speaker
+            && paragraph.chars().count() + text.chars().count() < MAX_PARAGRAPH_CHARS;
+        if !can_join {
+            flush(&mut paragraphs, &speaker, &mut paragraph);
+            speaker.clear();
+            speaker.push_str(line_speaker);
+        }
+        if !paragraph.is_empty() {
+            paragraph.push(' ');
+        }
+        paragraph.push_str(&text);
+    }
+    flush(&mut paragraphs, &speaker, &mut paragraph);
+
+    if paragraphs.is_empty() {
+        transcript.trim().to_string()
+    } else {
+        paragraphs.join("\n")
+    }
 }
 
 /// Speaker labels and prompt instructions are English even when the call is
 /// not. Give the model a deterministic script hint so those wrapper tokens
 /// cannot make it translate a Russian call into English.
-fn output_language_rule(notes: &str, transcript: &str) -> String {
+fn uses_cyrillic_output(notes: &str, transcript: &str) -> bool {
     let text = format!("{notes}\n{transcript}");
     let cyrillic = text
         .chars()
         .filter(|ch| matches!(*ch as u32, 0x0400..=0x052f))
         .count();
     let latin = text.chars().filter(|ch| ch.is_ascii_alphabetic()).count();
-    if cyrillic >= 20 && cyrillic > latin {
+    cyrillic >= 20 && cyrillic > latin
+}
+
+fn output_language_rule(cyrillic_output: bool) -> &'static str {
+    if cyrillic_output {
         "The spoken content is predominantly Cyrillic. Write exclusively in that same language and script. Never translate it to English. Ignore the English Me/Them labels, title, timestamps, headings and these instructions when choosing the output language"
-            .to_string()
     } else {
         "Write exclusively in the dominant natural language of the spoken transcript. Never choose English merely because the Me/Them labels, title, timestamps, headings or these instructions are English"
-            .to_string()
     }
 }
 
@@ -236,8 +345,8 @@ fn output_language_rule(notes: &str, transcript: &str) -> String {
 /// id on the CLI's default model, `provider/model` with an override -- the
 /// user asked to always be able to tell WHAT generated a summary.
 fn summary_label(spec: &ProviderSpec, model: Option<&str>) -> String {
-    if matches!(spec.kind, ProviderKind::Local { .. }) {
-        return crate::local_ai::SUMMARY_LABEL.to_string();
+    if let ProviderKind::Local { model_id } = spec.kind {
+        return format!("local/{model_id}");
     }
     match model {
         Some(m) => format!("{}/{}", spec.id, m),
@@ -252,8 +361,12 @@ fn run_provider(spec: &ProviderSpec, model: Option<&str>, prompt: &str) -> Resul
     let ProviderKind::Cli { binary } = spec.kind else {
         return Err("the local provider must run through the embedded model".to_string());
     };
-    let binary = resolve_binary(binary)
-        .ok_or_else(|| format!("{} isn't installed (no `{}` on this Mac)", spec.name, binary))?;
+    let binary = resolve_binary(binary).ok_or_else(|| {
+        format!(
+            "{} isn't installed (no `{}` on this Mac)",
+            spec.name, binary
+        )
+    })?;
     // A fresh, empty working dir: both CLIs are agentic and would otherwise
     // read whatever project context (CLAUDE.md, git history) the cwd holds.
     let workdir = tempfile::tempdir().map_err(|e| e.to_string())?;
@@ -389,10 +502,7 @@ fn validate_enhance(
 /// generation (owner bug report). The `AppHandle` crosses into the blocking
 /// closure instead of `State` guards, which can't outlive the request.
 #[tauri::command]
-pub async fn enhance_session(
-    path: String,
-    app: tauri::AppHandle,
-) -> Result<String, String> {
+pub async fn enhance_session(path: String, app: tauri::AppHandle) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || enhance_path_blocking(&app, &path))
         .await
         .map_err(|e| format!("enhance task failed: {e}"))?
@@ -495,7 +605,10 @@ pub(crate) fn maybe_auto_enhance<R: tauri::Runtime>(app: tauri::AppHandle<R>, pa
     if !cfg.auto_enhance {
         return;
     }
-    if app.state::<crate::retranscribe::RetranscribeState>().involves(&path) {
+    if app
+        .state::<crate::retranscribe::RetranscribeState>()
+        .involves(&path)
+    {
         return;
     }
     tauri::async_runtime::spawn_blocking(move || {
@@ -522,7 +635,10 @@ mod tests {
             let p = build_prompt("Weekly sync", "- budget approved", "[00:00:01] Me: hi");
             let notes_at = p.find("- budget approved").unwrap();
             let transcript_at = p.find("[00:00:01] Me: hi").unwrap();
-            assert!(notes_at < transcript_at, "notes must come before the transcript");
+            assert!(
+                notes_at < transcript_at,
+                "notes must come before the transcript"
+            );
             assert!(p.contains("PRIMARY signal"));
             assert!(p.contains("Call title: Weekly sync"));
         }
@@ -531,8 +647,9 @@ mod tests {
         fn empty_notes_ask_for_a_structured_summary_instead() {
             let p = build_prompt("Untitled", "   ", "[00:00:01] Them: hello");
             assert!(p.contains("took no notes"));
-            assert!(p.contains("under 220 words"));
-            assert!(p.contains("at most 6 key-point bullets"));
+            assert!(p.contains("under 140 words"));
+            assert!(p.contains("at most 3 bullets"));
+            assert!(p.ends_with("Stay under the requested word limit.\n"));
         }
 
         #[test]
@@ -542,8 +659,39 @@ mod tests {
                 "",
                 "[00:00:01] Me: Давайте выпустим новую версию в пятницу и проверим тесты",
             );
-            assert!(p.contains("predominantly Cyrillic"));
-            assert!(p.contains("Never translate it to English"));
+            assert!(p.contains("Пиши только на языке расшифровки"));
+            assert!(p.contains("не переводи на английский"));
+            assert!(
+                p.find("КОНЕЦ ИСХОДНЫХ ДАННЫХ").unwrap()
+                    < p.find("Составь точные технические заметки").unwrap()
+            );
+        }
+
+        #[test]
+        fn prompt_compaction_drops_acknowledgements_and_joins_a_speaker() {
+            let transcript = "[00:00:01] Them: Новый API уже развернут параллельно со старым\n\
+                              [00:00:03] Me: ага\n\
+                              [00:00:05] Them: Маршрут можно переключить без изменения DNS";
+            let compacted = compact_transcript(transcript);
+            assert_eq!(compacted.matches("Them:").count(), 1);
+            assert!(!compacted.contains("ага"));
+            assert!(compacted.contains("Новый API"));
+            assert!(compacted.contains("без изменения DNS"));
+        }
+
+        #[test]
+        fn prompt_compaction_preserves_meaningful_speaker_changes() {
+            let transcript = "[00:00:01] Them: Предпочтительный план сохраняет текущий ресурс\n\
+                              [00:00:05] Me: Если это не сработает, измерим время недоступности";
+            let compacted = compact_transcript(transcript);
+            assert!(compacted.contains("Them: Предпочтительный план"));
+            assert!(compacted.contains("Me: Если это не сработает"));
+        }
+
+        #[test]
+        fn prompt_compaction_falls_back_for_unknown_formats() {
+            let transcript = "Speaker A said the release is ready.";
+            assert_eq!(compact_transcript(transcript), transcript);
         }
     }
 
@@ -601,8 +749,8 @@ mod tests {
 
         #[test]
         fn rejects_an_empty_transcript() {
-            let err = validate_enhance(Path::new("/tmp/a.md"), None, None, None, "  \n ")
-                .unwrap_err();
+            let err =
+                validate_enhance(Path::new("/tmp/a.md"), None, None, None, "  \n ").unwrap_err();
             assert!(err.contains("no transcript"), "{err}");
         }
 
@@ -622,7 +770,12 @@ mod tests {
     #[test]
     fn local_summary_label_records_the_exact_model() {
         let spec = PROVIDERS.iter().find(|spec| spec.id == "local").unwrap();
-        assert_eq!(summary_label(spec, None), crate::local_ai::SUMMARY_LABEL);
+        assert_eq!(summary_label(spec, None), "local/qwen3.5-4b-q4-k-m");
+        let quality = PROVIDERS
+            .iter()
+            .find(|spec| spec.id == "local-quality")
+            .unwrap();
+        assert_eq!(summary_label(quality, None), "local/qwen3.5-9b-q4-k-m");
     }
 
     /// Manual e2e: runs the REAL configured provider CLI over a tiny fake
@@ -640,6 +793,34 @@ mod tests {
         );
         let summary = run_provider(spec, None, &prompt).expect("provider run failed");
         eprintln!("--- summary ---\n{summary}\n---------------");
+        assert!(!summary.is_empty());
+    }
+
+    /// Manual local quality regression over an owner-selected real note. Run
+    /// with both paths set; the source note is read-only and never rewritten:
+    /// `SIMSTIM_LOCAL_AI_E2E_NOTE=/path/call.md \
+    ///  SIMSTIM_LOCAL_AI_E2E_MODEL=/path/model.gguf \
+    ///  cargo test -p desktop --lib enhance_manual_local -- --ignored --nocapture`
+    #[test]
+    #[ignore = "loads the real local model and an owner-selected note"]
+    fn enhance_manual_local_real_call() {
+        let note_path = std::env::var("SIMSTIM_LOCAL_AI_E2E_NOTE")
+            .expect("SIMSTIM_LOCAL_AI_E2E_NOTE is required");
+        let model_path = std::env::var("SIMSTIM_LOCAL_AI_E2E_MODEL")
+            .expect("SIMSTIM_LOCAL_AI_E2E_MODEL is required");
+        let session = simstim_transcript::parse_session(Path::new(&note_path))
+            .expect("couldn't parse the test note");
+        let prompt = build_prompt(&session.title, &session.notes, &session.transcript);
+        let started = Instant::now();
+        let summary = crate::local_ai::summarize(
+            Path::new(&model_path),
+            &session.title,
+            &session.notes,
+            &session.transcript,
+            &prompt,
+        )
+        .expect("local summary failed");
+        eprintln!("local summary in {:?}:\n{summary}", started.elapsed());
         assert!(!summary.is_empty());
     }
 }

@@ -2,10 +2,11 @@
 
 ## Decision
 
-Use Qwen3.5 4B in Q4_K_M GGUF form as simstim's first built-in local language
-model. Run it through a bundled, short-lived llama.cpp helper with Metal
-enabled on Apple Silicon. Do not require Ollama, a local server, an account,
-or a separate installer.
+Offer two Qwen3.5 Q4_K_M profiles through the same bundled, short-lived
+llama.cpp helper with Metal enabled on Apple Silicon. Qwen3.5 4B is the fast
+default and works on an 8 GB M1. Qwen3.5 9B is an explicit quality download
+for 16 GB or larger Macs. Do not require Ollama, a local server, an account or
+a separate installer.
 
 The model is a text-only dependency. The Qwen vision projector is not
 downloaded or loaded.
@@ -38,13 +39,16 @@ Primary sources checked 2026-08-28:
 
 - [Qwen3.5 4B model card](https://huggingface.co/Qwen/Qwen3.5-4B)
 - [Qwen3.5 4B GGUF files](https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/tree/main)
+- [Qwen3.5 9B model card](https://huggingface.co/Qwen/Qwen3.5-9B)
+- [Qwen3.5 9B GGUF files](https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/tree/main)
 - [talat meeting-summary evaluation](https://talat.app/blog/best-local-model-for-meeting-summaries)
 - [fly-on-the-wall application benchmark](https://github.com/swarnavspujari/fly-on-the-wall/blob/main/docs/BENCHMARKS.md)
 - [Apple Silicon memory benchmark](https://github.com/Incept5/gemma4-benchmark/blob/main/results/BENCHMARK_REPORT.md)
 
 ## Runtime contract
 
-- Model: `Qwen3.5-4B-Q4_K_M.gguf`, approximately 2.74 GB on disk.
+- Fast model: `Qwen3.5-4B-Q4_K_M.gguf`, approximately 2.74 GB on disk.
+- Quality model: `Qwen3.5-9B-Q4_K_M.gguf`, approximately 5.68 GB on disk.
 - Backend: llama.cpp in a bundled helper executable, Metal on macOS. Whisper
   remains in the main process because both runtimes export incompatible GGML
   symbols when linked into one executable.
@@ -55,12 +59,16 @@ Primary sources checked 2026-08-28:
 - Context: scale with unified memory: 8K on an 8 GB Mac, 16K on a 16 GB Mac
   and 32K on a 24 GB or larger Mac. Long calls use local chunk extraction
   followed by local synthesis. No transcript content is silently dropped.
+- Input: remove low-information acknowledgements and exact repeated ASR
+  fragments, then join adjacent turns from one speaker into bounded paragraphs.
+  This happens only in the inference request; the transcript file is unchanged.
 - Language: derive the output language from the spoken transcript rather than
   the English prompt, speaker labels or Markdown headings. A Cyrillic call must
   produce Cyrillic output; a wrong-language result is rejected and retried.
 - Latency: use the largest safe single pass for the Mac and cap long-call
-  evidence to short bullets before synthesis. This avoids both premature
-  chunking and needlessly long intermediate generations.
+  evidence to short bullets before synthesis. Decode with a low-temperature,
+  low-repetition sampler. This avoids both premature chunking, unnecessary
+  creativity and needlessly long intermediate generations.
 - Failure handling: empty output, malformed output, cancellation and memory
   pressure are normal user-facing failures. They must not leave a partial
   Summary or a stuck global enhance slot.
@@ -68,6 +76,32 @@ Primary sources checked 2026-08-28:
   exit and release the model. The helper is not a server and never opens a
   network port. The summary model must not compete with live ASR during
   recording.
+
+## Real-call tuning result
+
+The owner-provided 23-minute Russian engineering sync is the regression case.
+Its raw Markdown transcript is approximately 41 KB and contains many short
+acknowledgements, repeated ASR fragments and an unrelated customer-support
+anecdote near the end.
+
+- Qwen3.5 4B over the raw transcript took about 27 to 32 seconds on the
+  owner's M1 Max. It translated inconsistently, merged separate infrastructure
+  mechanisms and promoted conditional ideas to decisions.
+- Qwen3.5 9B Q4_K_M over the same raw input took about 45 to 50 seconds. It
+  recovered more migration detail but still confused the CloudFront preferred
+  plan with its fallback. Its 5.68 GB file and latency were not justified.
+- Compaction reduced the inference input to approximately 29 KB and 59 bounded
+  speaker paragraphs. After limiting output to 140 words, Qwen3.5 4B completed
+  in about 17 seconds. It remained prone to changing conditional actions and
+  the scope of technical components on this difficult call.
+- The same compact input on Qwen3.5 9B completed in about 30 seconds. It more
+  reliably separated the CloudFront preferred plan from its fallback, preserved
+  configuration-testing direction and recovered the explicit next steps.
+- A second self-review pass with 4B took about 32 seconds and repeated the same
+  factual mistakes. It is rejected: it costs as much as 9B without the quality.
+
+The result supports retaining 4B for speed and constrained memory while making
+9B the recommended local quality profile when the Mac has enough memory.
 
 ## What this does not decide
 

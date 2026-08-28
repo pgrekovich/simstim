@@ -100,6 +100,7 @@ fn run(request: Request) -> Result<String, String> {
             FINAL_OUTPUT_TOKENS,
             output_language,
             context_tokens,
+            request.notes.trim().is_empty(),
         );
     }
 
@@ -133,6 +134,7 @@ fn run(request: Request) -> Result<String, String> {
             MAP_OUTPUT_TOKENS,
             output_language,
             context_tokens,
+            false,
         )?;
         evidence.push(format!("### Part {}\n{}", index + 1, partial));
     }
@@ -158,6 +160,7 @@ fn run(request: Request) -> Result<String, String> {
         FINAL_OUTPUT_TOKENS,
         output_language,
         context_tokens,
+        request.notes.trim().is_empty(),
     )
 }
 
@@ -227,7 +230,7 @@ fn transcript_chunks(
 /// The direct path receives an already-compacted full prompt from the app.
 fn compact_transcript(transcript: &str) -> String {
     const MIN_LETTERS: usize = 12;
-    const MAX_PARAGRAPH_CHARS: usize = 600;
+    const MAX_PARAGRAPH_CHARS: usize = 240;
 
     let mut paragraphs = Vec::new();
     let mut speaker = String::new();
@@ -374,6 +377,7 @@ fn generate_validated(
     max_output_tokens: usize,
     output_language: OutputLanguage,
     context_tokens: u32,
+    require_structure: bool,
 ) -> Result<String, String> {
     let first = generate_once(
         backend,
@@ -384,10 +388,18 @@ fn generate_validated(
         context_tokens,
     )?;
     debug_candidate("first", &first);
-    match validate_output(first, output_language) {
+    match validate_output(first, output_language, require_structure) {
         Ok(text) => Ok(text),
         Err(_) => {
-            let retry_prompt = format!("{prompt}\n\n{}", output_language.retry_rule());
+            let structure_rule = if require_structure {
+                " Use Markdown section headings and put every numbered or bulleted item on its own line. Never return the whole summary as one paragraph."
+            } else {
+                ""
+            };
+            let retry_prompt = format!(
+                "{prompt}\n\n{}{structure_rule}",
+                output_language.retry_rule()
+            );
             let retry = generate_once(
                 backend,
                 model,
@@ -397,7 +409,7 @@ fn generate_validated(
                 context_tokens,
             )?;
             debug_candidate("retry", &retry);
-            validate_output(retry, output_language)
+            validate_output(retry, output_language, require_structure)
         }
     }
 }
@@ -408,7 +420,11 @@ fn debug_candidate(label: &str, text: &str) {
     }
 }
 
-fn validate_output(text: String, output_language: OutputLanguage) -> Result<String, String> {
+fn validate_output(
+    text: String,
+    output_language: OutputLanguage,
+    require_structure: bool,
+) -> Result<String, String> {
     let text = text.trim().to_string();
     if text.is_empty() {
         return Err("the local model returned an empty response".to_string());
@@ -421,6 +437,20 @@ fn validate_output(text: String, output_language: OutputLanguage) -> Result<Stri
         let latin = text.chars().filter(|ch| ch.is_ascii_alphabetic()).count();
         if cyrillic < 8 || cyrillic * 2 < latin {
             return Err("the local model returned the summary in the wrong language".to_string());
+        }
+    }
+    if require_structure {
+        let lines = text.lines().map(str::trim).filter(|line| !line.is_empty());
+        let (line_count, list_count) = lines.fold((0usize, 0usize), |(lines, lists), line| {
+            let is_list = line.starts_with("- ")
+                || line.starts_with("* ")
+                || line
+                    .split_once('.')
+                    .is_some_and(|(prefix, _)| prefix.chars().all(|ch| ch.is_ascii_digit()));
+            (lines + 1, lists + usize::from(is_list))
+        });
+        if line_count < 4 || list_count < 2 {
+            return Err("the local model returned an unstructured summary".to_string());
         }
     }
     Ok(text)
@@ -621,6 +651,7 @@ mod tests {
         let err = validate_output(
             "<think>secret</think> answer".to_string(),
             OutputLanguage::Transcript,
+            false,
         )
         .unwrap_err();
         assert!(err.contains("hidden reasoning"));
@@ -653,6 +684,7 @@ mod tests {
         let err = validate_output(
             "## Summary\n\nThe team agreed to ship on Friday.".to_string(),
             OutputLanguage::Cyrillic,
+            false,
         )
         .unwrap_err();
         assert!(err.contains("wrong language"));
@@ -664,6 +696,7 @@ mod tests {
             "The meeting covered the release plan, payments and team communication. The user said: Давайте выпустим в пятницу. The team agreed to follow up with a checklist."
                 .to_string(),
             OutputLanguage::Cyrillic,
+            false,
         )
         .unwrap_err();
         assert!(err.contains("wrong language"));
@@ -676,6 +709,27 @@ mod tests {
         assert_eq!(context_tokens_for_memory(Some(16 * gib)), 16_384);
         assert_eq!(context_tokens_for_memory(Some(32 * gib)), 32_768);
         assert_eq!(context_tokens_for_memory(None), 8192);
+    }
+
+    #[test]
+    fn rejects_a_one_paragraph_summary_when_structure_is_required() {
+        let err = validate_output(
+            "Статус: миграция готова. Риски: возможен простой. Действия: проверить конфиги."
+                .to_string(),
+            OutputLanguage::Cyrillic,
+            true,
+        )
+        .unwrap_err();
+        assert!(err.contains("unstructured"));
+    }
+
+    #[test]
+    fn accepts_multiline_numbered_summary_when_structure_is_required() {
+        let summary = "Статус:\n1. Миграция подготовлена\n2. Конфиги требуют проверки\n\nДействия:\n1. Проверить сэндбокс";
+        assert_eq!(
+            validate_output(summary.to_string(), OutputLanguage::Cyrillic, true).unwrap(),
+            summary
+        );
     }
 
     #[test]

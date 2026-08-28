@@ -268,7 +268,7 @@ pub(crate) fn build_prompt(title: &str, notes: &str, transcript: &str) -> String
 /// turning into one attention-heavy line.
 fn compact_transcript(transcript: &str) -> String {
     const MIN_LETTERS: usize = 12;
-    const MAX_PARAGRAPH_CHARS: usize = 600;
+    const MAX_PARAGRAPH_CHARS: usize = 240;
 
     let mut paragraphs = Vec::new();
     let mut speaker = String::new();

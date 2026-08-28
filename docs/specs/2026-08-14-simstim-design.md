@@ -240,8 +240,11 @@ Out of 0.7: meeting detection, tray, hotkeys, enhance, calendar.
   conditional actions on this difficult call. A Qwen3.5 9B comparison took
   about 30 seconds and was materially more accurate, so it is available as the
   recommended quality profile for Macs with at least 16 GB. The owner's app
-  quality recheck is pending. Neither model downloads automatically; Settings
-  shows the 2.74 GB or 5.68 GB cost before the explicit download.
+  quality recheck found that 9B still confuses some conditional actions on a
+  noisy technical call. Prompt paragraphs are now bounded more tightly and an
+  unstructured one-paragraph result is rejected, but the model is not treated
+  as frontier-quality. Neither model downloads automatically; Settings shows
+  the 2.74 GB or 5.68 GB cost before the explicit download.
 
 ## Stage 1.0: call detection (approved 2026-08-16, owner: "the most important thing")
 

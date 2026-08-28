@@ -60,8 +60,10 @@ Primary sources checked 2026-08-28:
   and 32K on a 24 GB or larger Mac. Long calls use local chunk extraction
   followed by local synthesis. No transcript content is silently dropped.
 - Input: remove low-information acknowledgements and exact repeated ASR
-  fragments, then join adjacent turns from one speaker into bounded paragraphs.
-  This happens only in the inference request; the transcript file is unchanged.
+  fragments, then join adjacent turns from one speaker into paragraphs bounded
+  at 240 characters. The smaller boundary prevents separate technical
+  components from collapsing into one claim. This happens only in the
+  inference request; the transcript file is unchanged.
 - Language: derive the output language from the spoken transcript rather than
   the English prompt, speaker labels or Markdown headings. A Cyrillic call must
   produce Cyrillic output; a wrong-language result is rejected and retried.
@@ -72,6 +74,9 @@ Primary sources checked 2026-08-28:
 - Failure handling: empty output, malformed output, cancellation and memory
   pressure are normal user-facing failures. They must not leave a partial
   Summary or a stuck global enhance slot.
+- Structure: an automatic summary with empty Notes must contain multiple
+  Markdown list lines. A one-paragraph result is rejected and retried instead
+  of being saved as an unreadable wall of text.
 - Lifecycle: launch only for an explicit Enhance or enabled auto-enhance, then
   exit and release the model. The helper is not a server and never opens a
   network port. The summary model must not compete with live ASR during

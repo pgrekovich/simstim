@@ -145,6 +145,7 @@ pub fn save_session_at(
     title: &str,
     notes: &str,
     active_path: Option<&Path>,
+    finalizing: Option<&Path>,
 ) -> Result<()> {
     if active_path == Some(path) {
         // User-facing (Important fix-review finding): the previous wording
@@ -154,6 +155,14 @@ pub fn save_session_at(
         return Err(anyhow!(
             "this note is currently recording; edits are saved automatically"
         ));
+    }
+    // Architecture-review finding: every other writer of a session file
+    // checks BOTH owners. During the stop-to-encode window the worker is
+    // still inside session.stop() writing the final transcript lines; a
+    // title/notes rewrite racing that is a genuine second writer (rule 5),
+    // and last-atomic-write-wins would silently drop one side's content.
+    if finalizing == Some(path) {
+        return Err(anyhow!("this call is still being saved, try again in a moment"));
     }
     rewrite_session(path, title, notes)
 }
@@ -577,7 +586,10 @@ pub fn save_session(
     state: State<AppState>,
 ) -> Result<(), String> {
     let active = state.active_output_path();
-    save_session_at(Path::new(&path), &title, &notes, active.as_deref()).map_err(|e| e.to_string())
+    let md_path = Path::new(&path);
+    let finalizing = state.finalizing_match(md_path);
+    save_session_at(md_path, &title, &notes, active.as_deref(), finalizing.as_deref())
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -756,7 +768,7 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             let path = note_with_summary(dir.path());
 
-            save_session_at(&path, "Renamed", "edited notes", None).unwrap();
+            save_session_at(&path, "Renamed", "edited notes", None, None).unwrap();
 
             let data = parse_session(&path).unwrap();
             assert_eq!(data.summary, "- shipped v2");
@@ -1009,11 +1021,31 @@ mod tests {
         let path = dir.path().join("call.md");
         Transcript::new(t(10, 0, 0)).save(&path).unwrap();
 
-        let err = save_session_at(&path, "New title", "notes", Some(&path)).unwrap_err();
+        let err = save_session_at(&path, "New title", "notes", Some(&path), None).unwrap_err();
         assert!(
             err.to_string().contains("recording"),
             "unexpected error: {err}"
         );
+    }
+
+    /// Rule 5 (architecture-review fix): during the stop-to-encode window
+    /// the worker is still writing this file; a title/notes rewrite then is
+    /// a second writer and must be refused, exactly like delete,
+    /// re-transcribe and enhance already refuse it.
+    #[test]
+    fn save_session_at_rejects_the_finalizing_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("call.md");
+        Transcript::new(t(10, 0, 0)).save(&path).unwrap();
+
+        let err = save_session_at(&path, "New title", "notes", None, Some(&path)).unwrap_err();
+        assert!(
+            err.to_string().contains("still being saved"),
+            "unexpected error: {err}"
+        );
+
+        let untouched = std::fs::read_to_string(&path).unwrap();
+        assert!(!untouched.contains("New title"));
     }
 
     #[test]
@@ -1023,7 +1055,7 @@ mod tests {
         Transcript::new(t(10, 0, 0)).save(&path).unwrap();
         let other_active = dir.path().join("other-call.md");
 
-        save_session_at(&path, "New title", "notes", Some(&other_active)).unwrap();
+        save_session_at(&path, "New title", "notes", Some(&other_active), None).unwrap();
 
         let after = std::fs::read_to_string(&path).unwrap();
         assert!(after.contains("title: New title"));
@@ -1042,7 +1074,7 @@ mod tests {
         tr.save(&path).unwrap();
         let before = std::fs::read_to_string(&path).unwrap();
 
-        save_session_at(&path, "New title", "New notes", None).unwrap();
+        save_session_at(&path, "New title", "New notes", None, None).unwrap();
 
         let after = std::fs::read_to_string(&path).unwrap();
         assert!(after.contains("title: New title"));
@@ -1072,7 +1104,7 @@ mod tests {
         let v1 = "---\ndate: 2026-06-01T09:00:00-05:00\nasr: parakeet-tdt-0.6b-v3\n---\n\n## Transcript\n\n[00:00:01] Me: hi\n";
         std::fs::write(&path, v1).unwrap();
 
-        save_session_at(&path, "New title", "New notes", None).unwrap();
+        save_session_at(&path, "New title", "New notes", None, None).unwrap();
 
         let after = std::fs::read_to_string(&path).unwrap();
         let date_line = after.lines().find(|l| l.starts_with("date:")).unwrap();
@@ -1096,7 +1128,7 @@ mod tests {
         let content = "---\ndate: 2026-06-01T09:00:00+02:00\ntitle: Old title\nasr: parakeet-tdt-0.6b-v3\n---\n\n## Notes\n\nOld notes\n\n## Transcript\n\n[00:00:01] Me: hi\n-- stray hand-added annotation, not a real transcript line --\n[00:00:04] Them: hey\n";
         std::fs::write(&path, content).unwrap();
 
-        save_session_at(&path, "New title", "New notes", None).unwrap();
+        save_session_at(&path, "New title", "New notes", None, None).unwrap();
 
         let after = std::fs::read_to_string(&path).unwrap();
         let marker = "## Transcript\n\n";
@@ -1163,7 +1195,7 @@ mod tests {
         let content = "---\ndate: 2026-06-01T09:00:00+02:00\ntitle: Old title\nasr: whisper-large-v3-turbo-q8\n---\n\n## Notes\n\nOld notes\n\n## Transcript\n\n[00:00:01] Me: hi\n";
         std::fs::write(&path, content).unwrap();
 
-        save_session_at(&path, "New title", "New notes", None).unwrap();
+        save_session_at(&path, "New title", "New notes", None, None).unwrap();
 
         let after = std::fs::read_to_string(&path).unwrap();
         assert!(after.contains("asr: whisper-large-v3-turbo-q8"));
@@ -1216,7 +1248,7 @@ mod tests {
         let v1 = "---\ndate: 2026-06-01T09:00:00+02:00\nasr: parakeet-tdt-0.6b-v3\n---\n\n## Transcript\n\n[00:00:01] Me: hi\n[00:00:04] Them: hey\n";
         std::fs::write(&path, v1).unwrap();
 
-        save_session_at(&path, "Named now", "First notes", None).unwrap();
+        save_session_at(&path, "Named now", "First notes", None, None).unwrap();
 
         let after = std::fs::read_to_string(&path).unwrap();
         assert!(after.contains("title: Named now"));

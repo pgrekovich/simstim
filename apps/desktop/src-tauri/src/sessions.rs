@@ -290,21 +290,75 @@ pub fn rewrite_transcript_at(path: &Path, new_transcript: &str, asr_id: &str) ->
     transcript.save(path)
 }
 
+/// Whether `title` is one the APP generated rather than one the user
+/// typed: the "Untitled" default (`create_session`, a fresh recording), or
+/// the detected-call shape `"{app} call {time}"` (`detectedCallTitle` in
+/// App.tsx -- the time part is locale-formatted, so both "14:03" and
+/// "2:03 PM" occur). Only such titles may ever be replaced by a
+/// model-proposed one: a title the user typed themselves is their words
+/// (rule 6) and is never touched.
+pub(crate) fn title_is_auto(title: &str) -> bool {
+    let title = title.trim();
+    if title == "Untitled" {
+        return true;
+    }
+    match title.rsplit_once(" call ") {
+        Some((app, tail)) => !app.is_empty() && tail_is_clock_time(tail),
+        None => false,
+    }
+}
+
+/// "14:03", "02:03", "2:03 PM", "2:03 am" -- the hour/minute shapes
+/// `toLocaleTimeString` produces in common locales.
+fn tail_is_clock_time(tail: &str) -> bool {
+    let tail = tail.trim();
+    let clock = tail
+        .strip_suffix(" PM")
+        .or_else(|| tail.strip_suffix(" AM"))
+        .or_else(|| tail.strip_suffix(" pm"))
+        .or_else(|| tail.strip_suffix(" am"))
+        .unwrap_or(tail);
+    let Some((hours, minutes)) = clock.split_once(':') else {
+        return false;
+    };
+    (1..=2).contains(&hours.len())
+        && minutes.len() == 2
+        && hours.chars().all(|c| c.is_ascii_digit())
+        && minutes.chars().all(|c| c.is_ascii_digit())
+}
+
 /// Rewrites `path` with a new `## Summary` section (stage 0.11 enhance),
-/// preserving title, notes, date, duration, asr and the transcript exactly
-/// -- the third sibling of `rewrite_session` (title/notes) and
+/// preserving notes, date, duration, asr and the transcript exactly -- the
+/// third sibling of `rewrite_session` (title/notes) and
 /// `rewrite_transcript_at` (transcript), replacing only its own section.
 /// `model` labels the section via the `summary_model:` frontmatter field.
-pub fn set_summary_at(path: &Path, summary: &str, model: &str) -> Result<()> {
+///
+/// `proposed_title` is the summary model's suggested title (the opt-in
+/// `enhance_rename_title` setting). It is applied ONLY when the title on
+/// disk is still an automatic one -- checked here, against the freshly
+/// parsed file, not against whatever the caller read minutes earlier: if
+/// the user typed a real title while the model was thinking, their words
+/// win and the proposal is dropped.
+pub fn set_summary_at(
+    path: &Path,
+    summary: &str,
+    model: &str,
+    proposed_title: Option<&str>,
+) -> Result<()> {
     let existing = parse_session(path)?;
     let meta = parse_meta(path)?;
     let started_at = DateTime::parse_from_rfc3339(&existing.date)
         .map(|dt| dt.with_timezone(&Local))
         .unwrap_or_else(|_| Local::now());
 
+    let title = match proposed_title {
+        Some(new_title) if title_is_auto(&existing.title) => new_title.to_string(),
+        _ => existing.title.clone(),
+    };
+
     let mut transcript = Transcript::new(started_at);
     transcript.set_raw_date(existing.date.clone());
-    transcript.set_title(existing.title.clone());
+    transcript.set_title(title);
     transcript.set_notes(existing.notes.clone());
     transcript.set_asr(meta.asr.clone());
     if let Some(duration_secs) = meta.duration_secs {
@@ -643,7 +697,7 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             let path = note_with_summary(dir.path());
 
-            set_summary_at(&path, "- new summary", "codex").unwrap();
+            set_summary_at(&path, "- new summary", "codex", None).unwrap();
 
             let data = parse_session(&path).unwrap();
             assert_eq!(data.summary, "- new summary");
@@ -651,6 +705,50 @@ mod tests {
             assert_eq!(data.notes, "rough notes", "notes are sacred");
             assert_eq!(data.title, "Sync");
             assert_eq!(data.transcript, "[00:00:03] Me: hello");
+        }
+
+        /// Rule 6 at the writer: a proposed title lands only when the title
+        /// on disk is still an automatic one, re-checked against the
+        /// freshly parsed file rather than trusted from the caller.
+        #[test]
+        fn set_summary_at_applies_a_proposed_title_only_over_automatic_titles() {
+            let dir = tempfile::tempdir().unwrap();
+
+            // A user-typed title survives even when a proposal arrives.
+            let typed = note_with_summary(dir.path());
+            set_summary_at(&typed, "- s", "codex", Some("Model title")).unwrap();
+            assert_eq!(parse_session(&typed).unwrap().title, "Sync");
+
+            // The "Untitled" default is replaced.
+            let untitled = dir.path().join("untitled.md");
+            let mut note = Transcript::new(t(9, 0, 0));
+            note.add(Speaker::Me, 3.0, "hello".into());
+            note.save(&untitled).unwrap();
+            set_summary_at(&untitled, "- s", "codex", Some("Budget review")).unwrap();
+            assert_eq!(parse_session(&untitled).unwrap().title, "Budget review");
+
+            // The detected-call shape is replaced too.
+            let detected = dir.path().join("detected.md");
+            let mut note = Transcript::new(t(9, 0, 0));
+            note.set_title("Zoom call 14:03".into());
+            note.add(Speaker::Me, 3.0, "hello".into());
+            note.save(&detected).unwrap();
+            set_summary_at(&detected, "- s", "codex", Some("Budget review")).unwrap();
+            assert_eq!(parse_session(&detected).unwrap().title, "Budget review");
+        }
+
+        #[test]
+        fn title_is_auto_matches_only_generated_shapes() {
+            assert!(title_is_auto("Untitled"));
+            assert!(title_is_auto("Zoom call 14:03"));
+            assert!(title_is_auto("Microsoft Teams call 02:03"));
+            assert!(title_is_auto("Zoom call 2:03 PM"));
+            assert!(title_is_auto("Zoom call 2:03 am"));
+
+            assert!(!title_is_auto("Weekly sync"));
+            assert!(!title_is_auto("Notes about the call 1"));
+            assert!(!title_is_auto("call 14:03"));
+            assert!(!title_is_auto("Planning call today"));
         }
 
         #[test]

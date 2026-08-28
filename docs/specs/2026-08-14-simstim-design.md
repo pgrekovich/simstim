@@ -384,6 +384,37 @@ M1 quality and peak-memory e2e before merge. See
 `docs/plans/2026-08-28-stage-3.1-local-ai.md` and
 `docs/research/local-summary-models.md`.
 
+## Stage 3.2: settings logic, enhance visibility, model titles (implemented 2026-08-29)
+
+Three owner requests implemented in one overnight pass on
+`night/settings-enhance-title`:
+
+1. Settings reorganized into two pages grouped by intent. General holds app
+   behavior plus everything about a call: detection (moved out of Audio) and
+   audio retention. Models holds every model and provider with download,
+   selection and configuration together; the summary provider picker is the
+   model manager itself, so the local Qwen row carries its download,
+   progress, delete and selection radio inline.
+2. Enhance reports its lifecycle through one `enhance-progress` event stream
+   for manual and automatic runs. The button is a compact pill next to the
+   tab switcher, replaced in place by the indeterminate "Summarizing..."
+   chip while a job runs; re-run lives in the Summary tab's provenance line;
+   the sidebar shows a work spinner plus a quiet "summarizing" or
+   "transcribing" word on any session with a background job.
+3. Opt-in model-proposed titles (`enhance_rename_title`, default off): the
+   provider's reply leads with a `TITLE:` line that replaces AUTOMATIC
+   titles only ("Untitled", the detected "Zoom call 14:03" shape), checked
+   again at the writer against the freshly parsed file, so a user-typed
+   title always wins (rule 6). Opt-in calendar context
+   (`enhance_use_calendar`, default off, Claude Code only): calendar-named
+   MCP connectors from the user's own `claude mcp list` are allowlisted via
+   `--allowedTools` and the prompt invites the model to ground the meeting
+   name and participants; codex is excluded because its non-interactive
+   sandbox cancels MCP tool calls, and the local model has no tools.
+
+Status (2026-08-29): implemented on `night/settings-enhance-title`; all four
+gates pass. Awaiting the owner's native e2e before merge.
+
 ## Milestones after MVP-0
 
 1. Audio file kept next to the .md; re-transcribe command (whisper turbo).

@@ -72,6 +72,21 @@ export interface AppConfig {
    * any successful re-transcribe. Defaults to `false`.
    */
   auto_enhance: boolean;
+  /**
+   * Whether an enhance may replace an AUTOMATIC title ("Untitled", or the
+   * detected "Zoom call 14:03" shape) with one proposed by the summary
+   * model. A title the user typed themselves is never touched, regardless
+   * of this setting. Defaults to `false`.
+   */
+  enhance_rename_title: boolean;
+  /**
+   * Whether the Claude Code provider may consult the user's own configured
+   * calendar MCP connectors to identify the meeting that overlapped the
+   * call. Only affects `enhance_provider === "claude"`; the local model has
+   * no tools and codex's non-interactive sandbox cannot run MCP tools.
+   * Defaults to `false`.
+   */
+  enhance_use_calendar: boolean;
   /** Whether known mic-using call apps may surface a recording suggestion. */
   detect_calls: boolean;
   /** Whether an associated recording stops after app I/O release and remote-channel silence. */
@@ -419,6 +434,23 @@ export interface EnhanceProgress {
 /** Sets and persists whether a finished recording auto-enhances. Mirrors `config::set_auto_enhance`. */
 export function setAutoEnhance(autoEnhance: boolean): Promise<void> {
   return invoke("set_auto_enhance", { autoEnhance });
+}
+
+/**
+ * Sets and persists whether an enhance may retitle automatically-named
+ * notes from the summary. Mirrors `config::set_enhance_rename_title`.
+ */
+export function setEnhanceRenameTitle(enhanceRenameTitle: boolean): Promise<void> {
+  return invoke("set_enhance_rename_title", { enhanceRenameTitle });
+}
+
+/**
+ * Sets and persists whether the Claude Code provider may consult the
+ * user's calendar connectors for meeting context. Mirrors
+ * `config::set_enhance_use_calendar`.
+ */
+export function setEnhanceUseCalendar(enhanceUseCalendar: boolean): Promise<void> {
+  return invoke("set_enhance_use_calendar", { enhanceUseCalendar });
 }
 
 

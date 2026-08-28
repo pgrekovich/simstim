@@ -23,6 +23,8 @@ import {
   setAutoEnhance,
   setEnhanceModel,
   setEnhanceProvider,
+  setEnhanceRenameTitle,
+  setEnhanceUseCalendar,
   setKeepAudio,
   setOutputDir,
   setRetranscribeModel,
@@ -288,6 +290,8 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
   const [enhanceProviders, setEnhanceProviders] = useState<EnhanceProviderInfo[]>([]);
   const [enhanceProviderError, setEnhanceProviderError] = useState<string | null>(null);
   const [autoEnhanceError, setAutoEnhanceError] = useState<string | null>(null);
+  const [renameTitleError, setRenameTitleError] = useState<string | null>(null);
+  const [useCalendarError, setUseCalendarError] = useState<string | null>(null);
   const [choosingDir, setChoosingDir] = useState(false);
   const [themeError, setThemeError] = useState<string | null>(null);
   const [showInDockError, setShowInDockError] = useState<string | null>(null);
@@ -369,6 +373,34 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
     } catch (err) {
       setConfig((prev) => (prev ? { ...prev, auto_enhance: previous } : prev));
       setAutoEnhanceError(String(err));
+    }
+  }
+
+  /** Toggles model-proposed titles. Optimistic with rollback like the rest. */
+  async function handleSetEnhanceRenameTitle(enabled: boolean) {
+    const previous = config?.enhance_rename_title;
+    if (previous === undefined || enabled === previous) return;
+    setRenameTitleError(null);
+    setConfig((prev) => (prev ? { ...prev, enhance_rename_title: enabled } : prev));
+    try {
+      await setEnhanceRenameTitle(enabled);
+    } catch (err) {
+      setConfig((prev) => (prev ? { ...prev, enhance_rename_title: previous } : prev));
+      setRenameTitleError(String(err));
+    }
+  }
+
+  /** Toggles calendar context for Claude Code. Optimistic with rollback like the rest. */
+  async function handleSetEnhanceUseCalendar(enabled: boolean) {
+    const previous = config?.enhance_use_calendar;
+    if (previous === undefined || enabled === previous) return;
+    setUseCalendarError(null);
+    setConfig((prev) => (prev ? { ...prev, enhance_use_calendar: enabled } : prev));
+    try {
+      await setEnhanceUseCalendar(enabled);
+    } catch (err) {
+      setConfig((prev) => (prev ? { ...prev, enhance_use_calendar: previous } : prev));
+      setUseCalendarError(String(err));
     }
   }
 
@@ -1240,6 +1272,38 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                       checked={config?.auto_enhance ?? false}
                       disabled={!config}
                       onCheckedChange={(checked) => handleSetAutoEnhance(checked === true)}
+                    />
+                  </Row>
+                </li>
+                <li>
+                  <Row
+                    label="Let it title notes"
+                    htmlFor="enhance-rename-title"
+                    description={'Replaces automatic titles ("Untitled", "Zoom call 14:03") with one proposed by the summary. Titles you typed yourself are never touched.'}
+                    error={renameTitleError}
+                  >
+                    <Checkbox
+                      variant="switch"
+                      id="enhance-rename-title"
+                      checked={config?.enhance_rename_title ?? false}
+                      disabled={!config}
+                      onCheckedChange={(checked) => handleSetEnhanceRenameTitle(checked === true)}
+                    />
+                  </Row>
+                </li>
+                <li>
+                  <Row
+                    label="Use your calendar for context"
+                    htmlFor="enhance-use-calendar"
+                    description="Claude Code may check your own calendar connectors for the meeting that overlapped the call and use its name and participants in the summary and title. Works with the Claude Code provider only; nothing else gains tool access."
+                    error={useCalendarError}
+                  >
+                    <Checkbox
+                      variant="switch"
+                      id="enhance-use-calendar"
+                      checked={config?.enhance_use_calendar ?? false}
+                      disabled={!config || config.enhance_provider !== "claude"}
+                      onCheckedChange={(checked) => handleSetEnhanceUseCalendar(checked === true)}
                     />
                   </Row>
                 </li>

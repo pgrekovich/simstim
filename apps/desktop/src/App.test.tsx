@@ -28,6 +28,8 @@ vi.mock("@/lib/ipc", () => ({
     enhance_provider: "claude",
     enhance_models: {},
     auto_enhance: false,
+    enhance_rename_title: false,
+    enhance_use_calendar: false,
     detect_calls: true,
     auto_stop_after_call: false,
   }),
@@ -133,6 +135,8 @@ beforeEach(() => {
     enhance_provider: "claude",
     enhance_models: {},
     auto_enhance: false,
+    enhance_rename_title: false,
+    enhance_use_calendar: false,
     detect_calls: true,
     auto_stop_after_call: false,
   });
@@ -248,6 +252,8 @@ describe("App: call detection via the banner window (stage 1.1)", () => {
       enhance_provider: "claude",
     enhance_models: {},
     auto_enhance: false,
+    enhance_rename_title: false,
+    enhance_use_calendar: false,
       detect_calls: true,
       auto_stop_after_call: true,
     });
@@ -278,6 +284,8 @@ describe("App: call detection via the banner window (stage 1.1)", () => {
       enhance_provider: "claude",
     enhance_models: {},
     auto_enhance: false,
+    enhance_rename_title: false,
+    enhance_use_calendar: false,
       detect_calls: true,
       auto_stop_after_call: true,
     });

@@ -22,6 +22,8 @@ vi.mock("@/lib/ipc", () => ({
   setEnhanceProvider: vi.fn().mockResolvedValue(undefined),
   setEnhanceModel: vi.fn().mockResolvedValue(undefined),
   setAutoEnhance: vi.fn().mockResolvedValue(undefined),
+  setEnhanceRenameTitle: vi.fn().mockResolvedValue(undefined),
+  setEnhanceUseCalendar: vi.fn().mockResolvedValue(undefined),
   listEnhanceProviders: vi.fn().mockResolvedValue([
     { id: "local", name: "Local · Qwen3.5 9B", available: false, version: null },
     { id: "claude", name: "Claude Code", available: true, version: "2.0.0 (Claude Code)" },
@@ -51,6 +53,8 @@ const baseConfig: AppConfig = {
   enhance_provider: "claude",
   enhance_models: {},
   auto_enhance: false,
+  enhance_rename_title: false,
+  enhance_use_calendar: false,
   detect_calls: true,
   auto_stop_after_call: false,
 };
@@ -783,6 +787,39 @@ describe("SettingsDialog: enhance model override (stage 0.11)", () => {
 
     fireEvent.change(select, { target: { value: "" } });
     await waitFor(() => expect(ipc.setEnhanceModel).toHaveBeenLastCalledWith("claude", ""));
+  });
+});
+
+describe("SettingsDialog: model titles and calendar context", () => {
+  it("persists the title-renaming opt-in", async () => {
+    render(<SettingsDialog open onOpenChange={() => {}} />);
+
+    const toggle = await screen.findByRole("checkbox", { name: /let it title notes/i });
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    fireEvent.click(toggle);
+
+    await waitFor(() => expect(ipc.setEnhanceRenameTitle).toHaveBeenCalledWith(true));
+    expect(toggle).toHaveAttribute("aria-checked", "true");
+    // The copy must state the rule-6 boundary plainly.
+    await screen.findByText(/titles you typed yourself are never touched/i);
+  });
+
+  it("offers calendar context only for the Claude Code provider", async () => {
+    render(<SettingsDialog open onOpenChange={() => {}} />);
+
+    // baseConfig selects claude: the toggle is live and persists.
+    const toggle = await screen.findByRole("checkbox", { name: /use your calendar for context/i });
+    expect(toggle).not.toBeDisabled();
+    fireEvent.click(toggle);
+    await waitFor(() => expect(ipc.setEnhanceUseCalendar).toHaveBeenCalledWith(true));
+  });
+
+  it("disables the calendar toggle when another provider is selected", async () => {
+    vi.mocked(ipc.getConfig).mockResolvedValue({ ...baseConfig, enhance_provider: "local" });
+    render(<SettingsDialog open onOpenChange={() => {}} />);
+
+    const toggle = await screen.findByRole("checkbox", { name: /use your calendar for context/i });
+    expect(toggle).toBeDisabled();
   });
 });
 

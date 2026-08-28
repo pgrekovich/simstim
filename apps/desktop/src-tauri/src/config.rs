@@ -161,6 +161,22 @@ pub struct Config {
     /// other automation here.
     #[serde(default)]
     pub auto_enhance: bool,
+    /// Whether an enhance may replace an AUTOMATIC title ("Untitled", or
+    /// the detected "Zoom call 14:03" shape -- see
+    /// `sessions::title_is_auto`) with one the summary model proposes. A
+    /// title the user typed themselves is never touched regardless of this
+    /// setting (rule 6: the user's words are sacred). Off by default.
+    #[serde(default)]
+    pub enhance_rename_title: bool,
+    /// Whether the Claude Code provider may consult the user's own
+    /// configured calendar MCP connectors to identify the meeting that
+    /// overlapped the call (see `enhance::calendar_allowed_tools`). Only
+    /// meaningful for `enhance_provider == "claude"`: the local model has
+    /// no tools, and codex's non-interactive sandbox cancels MCP tool
+    /// calls. Off by default -- turning it on widens what the cloud CLI is
+    /// permitted to do, so it must be an explicit choice.
+    #[serde(default)]
+    pub enhance_use_calendar: bool,
     /// Whether mic activity from known calling apps may surface a recording
     /// suggestion. Detection never starts capture itself.
     #[serde(default = "default_detect_calls")]
@@ -186,6 +202,8 @@ impl Default for Config {
             enhance_provider: default_enhance_provider(),
             enhance_models: Default::default(),
             auto_enhance: false,
+            enhance_rename_title: false,
+            enhance_use_calendar: false,
             detect_calls: default_detect_calls(),
             auto_stop_after_call: default_auto_stop_after_call(),
         }
@@ -267,6 +285,24 @@ pub fn set_enhance_provider(provider: String) -> Result<(), String> {
 pub fn set_auto_enhance(auto_enhance: bool) -> Result<(), String> {
     let mut cfg = Config::load();
     cfg.auto_enhance = auto_enhance;
+    cfg.save().map_err(|e| e.to_string())
+}
+
+/// Sets and persists whether an enhance may retitle automatically-named
+/// notes from the summary. See the `Config` field's doc comment.
+#[tauri::command]
+pub fn set_enhance_rename_title(enhance_rename_title: bool) -> Result<(), String> {
+    let mut cfg = Config::load();
+    cfg.enhance_rename_title = enhance_rename_title;
+    cfg.save().map_err(|e| e.to_string())
+}
+
+/// Sets and persists whether the Claude Code provider may consult the
+/// user's calendar connectors. See the `Config` field's doc comment.
+#[tauri::command]
+pub fn set_enhance_use_calendar(enhance_use_calendar: bool) -> Result<(), String> {
+    let mut cfg = Config::load();
+    cfg.enhance_use_calendar = enhance_use_calendar;
     cfg.save().map_err(|e| e.to_string())
 }
 
@@ -437,6 +473,8 @@ mod tests {
             enhance_provider: "codex".to_string(),
             enhance_models: [("claude".to_string(), "fable".to_string())].into(),
             auto_enhance: true,
+            enhance_rename_title: true,
+            enhance_use_calendar: true,
             detect_calls: false,
             auto_stop_after_call: true,
         };
@@ -503,6 +541,26 @@ mod tests {
     fn call_detection_defaults_are_safe() {
         assert!(Config::default().detect_calls);
         assert!(!Config::default().auto_stop_after_call);
+    }
+
+    /// Both title renaming and calendar access widen what generated output
+    /// or a cloud CLI may do, so an old config.json (or a fresh install)
+    /// must leave them off until the owner explicitly opts in.
+    #[test]
+    fn enhance_title_and_calendar_default_off_for_old_configs_too() {
+        assert!(!Config::default().enhance_rename_title);
+        assert!(!Config::default().enhance_use_calendar);
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.json");
+        std::fs::write(
+            &path,
+            r#"{"output_dir":"/tmp/some-output","active_model":"custom-model-id","enhance_provider":"claude"}"#,
+        )
+        .unwrap();
+        let cfg = Config::load_from(&path);
+        assert!(!cfg.enhance_rename_title);
+        assert!(!cfg.enhance_use_calendar);
     }
 
     #[test]

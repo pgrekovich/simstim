@@ -10,6 +10,7 @@ import {
   PanelLeftOpen,
   Search,
   Settings,
+  Sparkles,
   SquarePen,
   X,
 } from "lucide-react";
@@ -34,6 +35,7 @@ import { SettingsDialog } from "@/components/SettingsDialog";
 import {
   createSession,
   deleteSession,
+  enhanceSession,
   getConfig,
   listSessions,
   readSession,
@@ -938,6 +940,24 @@ function App() {
     }
   }
 
+  // The overflow menu's Enhance / Re-enhance (owner request: while testing
+  // summary models the re-run must be one obvious click away, not a quiet
+  // provenance-line link). Same recipe as SessionView's handleEnhance:
+  // flush pending edits FIRST so the model reads what's on screen, then let
+  // the enhance-progress event stream drive every visible consequence (the
+  // chip, the sidebar spinner, the toast on failure, the refetch on done).
+  async function handleEnhanceSelected() {
+    if (selectedPath === null || selectedPath === activePath || enhancingPath !== null) return;
+    try {
+      await activeSessionViewRef.current?.flushPendingEdits();
+      await enhanceSession(selectedPath);
+    } catch (err) {
+      // Already surfaced through the enhance-progress "error" event; the
+      // rejection here would only duplicate that toast.
+      console.error("failed to enhance session", err);
+    }
+  }
+
   async function handleNewSession() {
     if (busy) return;
     setBusy(true);
@@ -1093,6 +1113,22 @@ function App() {
             <DropdownMenuContent align="end">
               {selectedPath !== null && (
                 <>
+                  <DropdownMenuItem
+                    disabled={
+                      viewingActiveSession ||
+                      enhancingPath !== null ||
+                      sessionData === null ||
+                      sessionData.transcript.trim().length === 0
+                    }
+                    onSelect={() => void handleEnhanceSelected()}
+                  >
+                    <Sparkles />
+                    {enhancingPath !== null
+                      ? "Summarizing..."
+                      : sessionData?.summary
+                        ? "Re-enhance"
+                        : "Enhance"}
+                  </DropdownMenuItem>
                   <DropdownMenuItem onSelect={() => void openPath(selectedPath)}>
                     <FileText />
                     Open file

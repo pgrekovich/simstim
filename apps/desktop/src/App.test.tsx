@@ -1426,6 +1426,49 @@ describe("App: enhance progress (stage 0.11)", () => {
     await waitFor(() => expect(row.textContent).not.toContain("summarizing"));
   });
 
+  it("offers Re-enhance in the overflow menu and runs it for the open note", async () => {
+    vi.mocked(ipc.listSessions).mockResolvedValue(one);
+    vi.mocked(ipc.readSession).mockResolvedValue({
+      title: "Weekly sync", date: "", notes: "", transcript: "[00:00:01] Me: hi",
+      audio_path: null, summary: "- old summary", summary_model: "claude",
+    });
+    vi.mocked(ipc.enhanceSession).mockClear().mockResolvedValue("- new");
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /weekly sync/i }));
+    await waitFor(() => expect(document.body.textContent).toContain("- old summary"));
+
+    const trigger = screen.getByRole("button", { name: /more actions/i });
+    fireEvent.pointerDown(trigger);
+    fireEvent.click(trigger);
+    const item = await screen.findByRole("menuitem", { name: /re-enhance/i });
+    fireEvent.click(item);
+
+    await waitFor(() =>
+      expect(ipc.enhanceSession).toHaveBeenCalledExactlyOnceWith("/tmp/sync.md"),
+    );
+  });
+
+  it("disables the overflow enhance item while a job is already running", async () => {
+    vi.mocked(ipc.listSessions).mockResolvedValue(one);
+    vi.mocked(ipc.readSession).mockResolvedValue({
+      title: "Weekly sync", date: "", notes: "", transcript: "[00:00:01] Me: hi",
+      audio_path: null, summary: "", summary_model: null,
+    });
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /weekly sync/i }));
+    await waitFor(() => expect(document.body.textContent).toContain("hi"));
+
+    emit("enhance-progress", { path: "/tmp/sync.md", phase: "running", provider: "local", message: null });
+
+    const trigger = screen.getByRole("button", { name: /more actions/i });
+    fireEvent.pointerDown(trigger);
+    fireEvent.click(trigger);
+    const item = await screen.findByRole("menuitem", { name: /summarizing/i });
+    expect(item).toHaveAttribute("aria-disabled", "true");
+  });
+
   it("surfaces an enhance failure through the global error notice", async () => {
     vi.mocked(ipc.listSessions).mockResolvedValue(one);
     render(<App />);

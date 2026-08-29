@@ -978,9 +978,13 @@ fn enhance_path_inner<R: tauri::Runtime>(
     let title_machine_owned =
         crate::sessions::title_is_auto(&existing.title) || existing.title_by.is_some();
     let rename_title = cfg.enhance_rename_title && title_machine_owned;
-    // Calendar lookup is claude-only: the local model has no tools, and
-    // codex's non-interactive sandbox cancels MCP tool calls outright.
-    let calendar_enabled = cfg.enhance_use_calendar && spec.id == "claude";
+    // The calendar lookup always runs through the claude CLI (codex's
+    // non-interactive sandbox cancels MCP tool calls, so it cannot do its
+    // own lookup) -- but since the summarizer only receives the found event
+    // as text, ANY cloud provider can use it. The local provider stays
+    // excluded on purpose: "local" promises the note involves no cloud call
+    // at all, and even a timestamp-only lookup would break that promise.
+    let calendar_enabled = cfg.enhance_use_calendar && spec.id != "local";
     let duration_secs = simstim_transcript::parse_meta(md_path)
         .ok()
         .and_then(|meta| meta.duration_secs);

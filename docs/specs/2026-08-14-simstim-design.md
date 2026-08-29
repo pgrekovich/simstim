@@ -408,18 +408,20 @@ Three owner requests implemented in one overnight pass on
    on old files) -- so re-enhancing regenerates the title too, while a
    user-typed title always wins (rule 6; a manual rename clears the
    marker). Opt-in calendar context (`enhance_use_calendar`, default off,
-   Claude Code only): a DEDICATED lookup call runs before the summary,
+   cloud providers only): a DEDICATED lookup call runs before the summary,
    matching the event strictly by the call's date/time window (frontmatter
    date + duration) and answering in strict JSON; the found event's own
    name becomes the note title VERBATIM (owner rule: never rephrased,
    translated or improved -- applied by the app, not trusted to the model),
-   and the event enters the summary prompt as source data. Connector
+   and the event enters the summary prompt as source data, so it works for
+   codex too (the lookup itself always runs through the claude CLI, since
+   codex's non-interactive sandbox cancels MCP tool calls). Connector
    discovery parses `claude mcp list` (names can carry spaces and dots,
    e.g. "claude.ai Google Calendar") and allowlists tool ids in their
-   normalized `mcp__claude_ai_Google_Calendar__*` form; codex is excluded
-   because its non-interactive sandbox cancels MCP tool calls, and the
-   local model has no tools. The overflow menu carries Enhance /
-   Re-enhance so re-running while comparing models is one obvious click.
+   normalized `mcp__claude_ai_Google_Calendar__*` form. The local provider
+   stays excluded on purpose: local promises no cloud call at all. The
+   overflow menu carries Enhance / Re-enhance so re-running while comparing
+   models is one obvious click.
 
 Status (2026-08-29): implemented on `night/settings-enhance-title`; all four
 gates pass. Awaiting the owner's native e2e before merge.

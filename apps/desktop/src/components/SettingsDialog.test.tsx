@@ -804,7 +804,7 @@ describe("SettingsDialog: model titles and calendar context", () => {
     await screen.findByText(/titles you typed yourself are never touched/i);
   });
 
-  it("offers calendar context only for the Claude Code provider", async () => {
+  it("offers calendar context for both cloud providers", async () => {
     render(<SettingsDialog open onOpenChange={() => {}} />);
 
     // baseConfig selects claude: the toggle is live and persists.
@@ -814,7 +814,15 @@ describe("SettingsDialog: model titles and calendar context", () => {
     await waitFor(() => expect(ipc.setEnhanceUseCalendar).toHaveBeenCalledWith(true));
   });
 
-  it("disables the calendar toggle when another provider is selected", async () => {
+  it("keeps the calendar toggle live for codex (the lookup runs via the claude CLI)", async () => {
+    vi.mocked(ipc.getConfig).mockResolvedValue({ ...baseConfig, enhance_provider: "codex" });
+    render(<SettingsDialog open onOpenChange={() => {}} />);
+
+    const toggle = await screen.findByRole("checkbox", { name: /use your calendar for context/i });
+    expect(toggle).not.toBeDisabled();
+  });
+
+  it("disables the calendar toggle for the local provider: local means no cloud call", async () => {
     vi.mocked(ipc.getConfig).mockResolvedValue({ ...baseConfig, enhance_provider: "local" });
     render(<SettingsDialog open onOpenChange={() => {}} />);
 

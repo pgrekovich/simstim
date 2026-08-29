@@ -80,11 +80,12 @@ export interface AppConfig {
    */
   enhance_rename_title: boolean;
   /**
-   * Whether the Claude Code provider may consult the user's own configured
-   * calendar MCP connectors to identify the meeting that overlapped the
-   * call. Only affects `enhance_provider === "claude"`; the local model has
-   * no tools and codex's non-interactive sandbox cannot run MCP tools.
-   * Defaults to `false`.
+   * Whether an enhance may look up the calendar event that overlapped the
+   * call through the user's own connectors. The lookup itself always runs
+   * through the Claude Code CLI (codex's non-interactive sandbox cannot run
+   * MCP tools); the found event feeds any CLOUD summary provider as text.
+   * Never offered for the local provider: local promises no cloud call at
+   * all. Defaults to `false`.
    */
   enhance_use_calendar: boolean;
   /** Whether known mic-using call apps may surface a recording suggestion. */

@@ -1,5 +1,168 @@
 @import "tailwindcss";
 
+/* Notes and generated summaries share one restrained reading surface. Raw
+   Markdown is shown only while Notes has focus; this styles the rendered
+   state without relying on a typography plugin or injecting HTML. */
+.markdown-content {
+    color: var(--card-foreground);
+    font-family: var(--font-reading);
+    font-size: 15px;
+    line-height: 1.65;
+    overflow-wrap: anywhere;
+}
+
+.markdown-content > :first-child {
+    margin-top: 0;
+}
+
+.markdown-content > :last-child {
+    margin-bottom: 0;
+}
+
+.markdown-content p,
+.markdown-content ul,
+.markdown-content ol,
+.markdown-content blockquote,
+.markdown-content pre,
+.markdown-content table {
+    margin: 0 0 0.85em;
+}
+
+.markdown-content h1,
+.markdown-content h2,
+.markdown-content h3,
+.markdown-content h4 {
+    color: var(--foreground);
+    font-weight: 650;
+    letter-spacing: -0.012em;
+    line-height: 1.25;
+    margin: 1.35em 0 0.5em;
+}
+
+.markdown-content h1 {
+    font-size: 1.45em;
+}
+
+.markdown-content h2 {
+    font-size: 1.25em;
+}
+
+.markdown-content h3,
+.markdown-content h4 {
+    font-size: 1.08em;
+}
+
+.markdown-content ul,
+.markdown-content ol {
+    padding-left: 1.45em;
+}
+
+.markdown-content ul {
+    list-style: disc;
+}
+
+.markdown-content ol {
+    list-style: decimal;
+}
+
+.markdown-content li {
+    padding-left: 0.15em;
+}
+
+.markdown-content li + li {
+    margin-top: 0.25em;
+}
+
+.markdown-content li > p {
+    margin-bottom: 0.3em;
+}
+
+.markdown-content .contains-task-list {
+    list-style: none;
+    padding-left: 0.2em;
+}
+
+.markdown-content .task-list-item {
+    align-items: baseline;
+    display: flex;
+    gap: 0.55em;
+}
+
+.markdown-content input[type="checkbox"] {
+    accent-color: var(--voice-remote);
+    transform: translateY(1px);
+}
+
+.markdown-content blockquote {
+    border-left: 2px solid var(--voice-remote);
+    color: var(--quiet-foreground);
+    padding-left: 1em;
+}
+
+.markdown-content strong {
+    color: var(--foreground);
+    font-weight: 680;
+}
+
+.markdown-content a {
+    color: var(--voice-remote-foreground);
+    text-decoration: underline;
+    text-decoration-color: color-mix(in srgb, var(--voice-remote) 50%, transparent);
+    text-underline-offset: 0.16em;
+}
+
+.markdown-content code {
+    background: color-mix(in srgb, var(--foreground) 7%, transparent);
+    border: 1px solid var(--border);
+    border-radius: 0.3em;
+    font-family: var(--font-machine);
+    font-size: 0.82em;
+    padding: 0.12em 0.32em;
+}
+
+.markdown-content pre {
+    background: color-mix(in srgb, var(--foreground) 5%, transparent);
+    border: 1px solid var(--border);
+    border-radius: 0.55rem;
+    overflow-x: auto;
+    padding: 0.8em 0.95em;
+}
+
+.markdown-content pre code {
+    background: none;
+    border: 0;
+    padding: 0;
+}
+
+.markdown-content hr {
+    border: 0;
+    border-top: 1px solid var(--border);
+    margin: 1.35em 0;
+}
+
+.markdown-content table {
+    border-collapse: collapse;
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+    width: max-content;
+}
+
+.markdown-content th,
+.markdown-content td {
+    border-bottom: 1px solid var(--border);
+    padding: 0.4em 0.8em 0.4em 0;
+    text-align: left;
+}
+
+.markdown-content th {
+    color: var(--foreground);
+    font-family: var(--font-machine);
+    font-size: 0.75em;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+}
+
 @font-face {
     font-family: "Source Serif 4";
     src: url("./assets/fonts/SourceSerif4-Variable.ttf") format("truetype");

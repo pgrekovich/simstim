@@ -436,6 +436,12 @@ Follow-up (2026-08-29): the session title stays visible while viewing Notes,
 Summary, or Transcript. A finished session with empty Notes opens on Summary
 when a generated summary exists; otherwise it opens on Notes.
 
+Follow-up (2026-08-29): Notes and Summary render GitHub-flavored Markdown with
+the same reading typography. Notes switch in place to their plain Markdown
+source on click or keyboard focus, retain the existing debounced save path,
+and return to rendered mode on blur. Generated Summary remains structurally
+separate and read-only in the app.
+
 ## Stage 3.3: file-first configuration (implemented 2026-08-29)
 
 Every persisted setting is available in one human-readable TOML file at

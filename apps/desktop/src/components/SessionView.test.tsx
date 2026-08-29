@@ -423,6 +423,62 @@ describe("SessionView: audio playback and re-transcribe (Task 4, stage-0.7)", ()
 });
 
 describe("SessionView: notes/transcript tabs (stage 0.10)", () => {
+  it("renders Markdown in both Notes and Summary", async () => {
+    render(
+      <SessionView
+        path="/tmp/call.md"
+        isActive={false}
+        initialData={{
+          ...baseData,
+          notes: "## Decisions\n\n- Ship **Friday**",
+          summary: "> Generated **brief**",
+          summary_model: "local/qwen",
+        }}
+        liveLines={[]}
+        interimMe=""
+        interimThem=""
+        retranscribingJob={null}
+      />,
+    );
+
+    expect(await screen.findByRole("heading", { level: 2, name: "Decisions" })).toBeInTheDocument();
+    expect(screen.getByText("Friday").tagName).toBe("STRONG");
+    expect(screen.queryByText("## Decisions")).toBeNull();
+
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Summary" }));
+    expect((await screen.findByText("brief")).tagName).toBe("STRONG");
+    expect(screen.getByText(/Generated/).closest("blockquote")).not.toBeNull();
+  });
+
+  it("edits rendered Notes through the existing debounced save path", async () => {
+    render(
+      <SessionView
+        path="/tmp/call.md"
+        isActive={false}
+        initialData={{ ...baseData, notes: "**Old** note" }}
+        liveLines={[]}
+        interimMe=""
+        interimThem=""
+        retranscribingJob={null}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit notes" }));
+    const textarea = screen.getByPlaceholderText("your notes...");
+    await waitFor(() => expect(textarea).toHaveFocus());
+    fireEvent.change(textarea, { target: { value: "## New note" } });
+    fireEvent.blur(textarea);
+
+    await waitFor(() =>
+      expect(ipc.saveSession).toHaveBeenCalledWith(
+        "/tmp/call.md",
+        "Weekly sync",
+        "## New note",
+      ),
+    );
+    expect(await screen.findByRole("heading", { level: 2, name: "New note" })).toBeInTheDocument();
+  });
+
   it("places the switcher in the application toolbar when its portal slot exists", async () => {
     const toolbarSlot = document.createElement("div");
     toolbarSlot.id = "topbar-tabs-slot";

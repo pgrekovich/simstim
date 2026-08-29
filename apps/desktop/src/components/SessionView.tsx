@@ -12,6 +12,11 @@ import { cn } from "@/lib/utils";
 import { createPortal } from "react-dom";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { AudioPlayer, type AudioPlayerHandle } from "@/components/AudioPlayer";
+import {
+  MarkdownContent,
+  MarkdownEditor,
+  type MarkdownEditorHandle,
+} from "@/components/Markdown";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { findTranscriptMatches, TranscriptView } from "@/components/TranscriptView";
@@ -345,7 +350,7 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
   // that must never close over a stale render's value.
   const titleRef = useRef(title);
   const notesRef = useRef(notes);
-  const notesInputRef = useRef<HTMLTextAreaElement>(null);
+  const notesInputRef = useRef<MarkdownEditorHandle>(null);
   const savedTitleRef = useRef(title);
   const savedNotesRef = useRef(notes);
   const isActiveRef = useRef(isActive);
@@ -815,17 +820,13 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
           forceMount
           className="flex min-h-0 flex-1 flex-col gap-3 data-[state=inactive]:hidden"
         >
-          <textarea
+          <MarkdownEditor
             ref={notesInputRef}
             value={notes}
             onChange={handleNotesChange}
             onBlur={commitNotes}
             placeholder="your notes..."
-            className={cn(
-              "min-h-0 w-full flex-1 resize-none border-0 bg-transparent px-6 py-4 font-serif text-[15px] leading-[1.65] text-card-foreground outline-none placeholder:font-serif placeholder:text-muted-foreground focus-visible:ring-0"
-            )}
           />
-
         </TabsContent>
 
         {summary && (
@@ -856,9 +857,7 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
                   )}
                 </p>
               )}
-              <div className="whitespace-pre-wrap font-serif text-[14.5px] leading-[1.65] text-card-foreground">
-                {summary}
-              </div>
+              <MarkdownContent className="text-[14.5px]">{summary}</MarkdownContent>
             </div>
           </TabsContent>
         )}

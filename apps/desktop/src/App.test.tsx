@@ -1310,11 +1310,14 @@ describe("App: empty state and active-window shortcuts (stage 0.10)", () => {
 
     render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: /kept note/i }));
-    await screen.findByText("still here");
+    await screen.findByRole("button", { name: "Edit notes" });
+    const renderedNote = document.querySelector(".markdown-content");
+    expect(renderedNote).toHaveTextContent("still here");
     fireEvent.keyDown(window, { key: "\\", metaKey: true });
 
     expect(screen.queryByRole("button", { name: /kept note/i })).toBeNull();
-    expect(screen.getByText("still here")).toBeInTheDocument();
+    expect(renderedNote).toBeInTheDocument();
+    expect(renderedNote).toHaveTextContent("still here");
     const showSidebar = screen.getByRole("button", { name: /show sidebar/i });
     expect(showSidebar.className).not.toContain("bg-foreground/[0.06]");
     expect(showSidebar.parentElement?.className).toContain("w-56");
@@ -1407,9 +1410,7 @@ describe("App: enhance progress (stage 0.11)", () => {
     });
     emit("enhance-progress", { path: "/tmp/sync.md", phase: "done", provider: "claude", message: null });
 
-    await waitFor(() =>
-      expect(document.body.textContent).toContain("- fresh auto summary"),
-    );
+    await screen.findByText("fresh auto summary");
     expect(document.body.textContent).toContain("by claude");
   });
 
@@ -1436,7 +1437,7 @@ describe("App: enhance progress (stage 0.11)", () => {
 
     render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: /weekly sync/i }));
-    await waitFor(() => expect(document.body.textContent).toContain("- old summary"));
+    await screen.findByText("old summary");
 
     const trigger = screen.getByRole("button", { name: /more actions/i });
     fireEvent.pointerDown(trigger);

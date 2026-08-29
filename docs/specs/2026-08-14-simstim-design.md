@@ -379,10 +379,12 @@ Generated text replaces only `## Summary` and is labeled
 remain unchanged and available as cloud alternatives.
 
 Status (2026-08-28): implemented on `codex/stage-3.1-local-ai`; all four gates
-and a signed release bundle with the helper pass. Awaiting the owner's native
-M1 quality and peak-memory e2e before merge. See
+and a signed release bundle with the helper pass. See
 `docs/plans/2026-08-28-stage-3.1-local-ai.md` and
 `docs/research/local-summary-models.md`.
+
+Status (2026-08-29): on main and shipped in v0.7.0 (the owner exercised local
+and cloud summaries during the stage 3.2 e2e loop and authorized the release).
 
 ## Stage 3.2: settings logic, enhance visibility, model titles (implemented 2026-08-29)
 
@@ -425,8 +427,10 @@ Three owner requests implemented in one overnight pass on
    overflow menu carries Enhance / Re-enhance so re-running while comparing
    models is one obvious click.
 
-Status (2026-08-29): implemented on `night/settings-enhance-title`; all four
-gates pass. Awaiting the owner's native e2e before merge.
+Status (2026-08-29): the owner e2e'd the branch iteratively through the
+morning (overflow re-enhance, deterministic calendar titles, the pure
+download-center Models page all came out of that loop), approved it, and
+authorized merge and release as v0.7.0.
 
 ## Milestones after MVP-0
 

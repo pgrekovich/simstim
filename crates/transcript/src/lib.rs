@@ -63,6 +63,14 @@ pub struct Transcript {
     /// `summary` (e.g. "claude"). Only rendered while `summary` is
     /// non-empty.
     summary_model: Option<String>,
+    /// The `title_by:` frontmatter value: what machine wrote the CURRENT
+    /// title (an enhance provider label, or "calendar" for a verbatim
+    /// calendar-event name). `None` means the title is the user's own (or
+    /// the automatic default) and a model may never replace it; `Some`
+    /// marks it machine-given, so a later enhance may retitle again.
+    /// Cleared by `sessions::rewrite_session` the moment the user saves a
+    /// different title themselves.
+    title_by: Option<String>,
 }
 
 impl Transcript {
@@ -80,6 +88,7 @@ impl Transcript {
             transcript_prefix: None,
             summary: String::new(),
             summary_model: None,
+            title_by: None,
         }
     }
 
@@ -93,6 +102,12 @@ impl Transcript {
 
     pub fn set_title(&mut self, title: String) {
         self.title = title;
+    }
+
+    /// Marks (or clears) the current title as machine-given. See the
+    /// `title_by` field's doc comment.
+    pub fn set_title_by(&mut self, title_by: Option<String>) {
+        self.title_by = title_by;
     }
 
     pub fn set_notes(&mut self, notes: String) {
@@ -235,6 +250,9 @@ impl Transcript {
             "---\ndate: {}\ntitle: {}\nasr: {}\n",
             date, self.title, self.asr
         );
+        if let Some(title_by) = &self.title_by {
+            out.push_str(&format!("title_by: {title_by}\n"));
+        }
         if let Some(secs) = self.duration_secs {
             out.push_str(&format!("duration: {}m\n", secs / 60));
         }
@@ -407,6 +425,10 @@ pub struct SessionData {
     /// The `summary_model:` frontmatter value; only ever `Some` while
     /// `summary` is non-empty.
     pub summary_model: Option<String>,
+    /// The `title_by:` frontmatter value: what machine wrote the current
+    /// title, `None` when the title is the user's own or the automatic
+    /// default. See [`Transcript::set_title_by`].
+    pub title_by: Option<String>,
     /// See [`Transcript::set_audio_from_secs`]'s docs: `None` for the
     /// overwhelming majority of files (audio, if any, covers the whole
     /// timeline), `Some(secs)` only for a session continued after its audio
@@ -453,6 +475,7 @@ pub fn parse_session(path: &Path) -> Result<SessionData> {
         .get("title")
         .cloned()
         .unwrap_or_else(|| "Untitled".to_string());
+    let title_by = fields.get("title_by").cloned();
     let asr = fields
         .get("asr")
         .cloned()
@@ -495,6 +518,7 @@ pub fn parse_session(path: &Path) -> Result<SessionData> {
 
     Ok(SessionData {
         title,
+        title_by,
         date,
         notes,
         transcript,
@@ -617,6 +641,40 @@ mod tests {
 
     fn t0() -> DateTime<Local> {
         Local.with_ymd_and_hms(2026, 8, 14, 14, 30, 0).unwrap()
+    }
+
+    mod title_provenance {
+        use super::*;
+
+        /// `title_by:` round-trips, and a file without it (every pre-existing
+        /// note) parses to `None` and renders byte-identically to before the
+        /// field existed.
+        #[test]
+        fn round_trips_title_by_and_stays_absent_for_old_files() {
+            let dir = tempfile::tempdir().unwrap();
+
+            let marked = dir.path().join("marked.md");
+            let mut t = Transcript::new(t0());
+            t.set_title("Q3 Budget Review".into());
+            t.set_title_by(Some("claude".into()));
+            t.add(Speaker::Me, 3.0, "hi".into());
+            t.save(&marked).unwrap();
+            let parsed = parse_session(&marked).unwrap();
+            assert_eq!(parsed.title, "Q3 Budget Review");
+            assert_eq!(parsed.title_by.as_deref(), Some("claude"));
+            assert!(std::fs::read_to_string(&marked)
+                .unwrap()
+                .contains("title_by: claude\n"));
+
+            let plain = dir.path().join("plain.md");
+            let mut t = Transcript::new(t0());
+            t.set_title("Weekly sync".into());
+            t.add(Speaker::Me, 3.0, "hi".into());
+            t.save(&plain).unwrap();
+            let parsed = parse_session(&plain).unwrap();
+            assert_eq!(parsed.title_by, None);
+            assert!(!std::fs::read_to_string(&plain).unwrap().contains("title_by"));
+        }
     }
 
     mod summary_section {

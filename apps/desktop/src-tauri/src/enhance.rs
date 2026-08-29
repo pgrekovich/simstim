@@ -210,12 +210,161 @@ pub async fn list_enhance_providers() -> Vec<EnhanceProviderInfo> {
     .unwrap_or_default()
 }
 
-/// The call's time window, for the opt-in calendar paragraph: the model may
-/// use the user's own calendar connectors to identify the real meeting.
-pub(crate) struct CalendarContext {
-    /// The note's `date:` frontmatter, RFC3339.
-    pub start: String,
-    pub duration_secs: Option<u64>,
+/// One calendar event resolved by the dedicated lookup call (the opt-in
+/// `enhance_use_calendar` setting): matched to the call strictly by date
+/// and time overlap, never by name. Its `title` is the note's title
+/// verbatim when renaming is enabled.
+#[derive(Debug, Clone)]
+pub(crate) struct CalendarEvent {
+    pub title: String,
+    pub attendees: Vec<String>,
+}
+
+/// The strict-JSON reply shape the lookup prompt demands.
+#[derive(serde::Deserialize)]
+struct CalendarLookupReply {
+    found: bool,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    attendees: Vec<String>,
+}
+
+/// The lookup is one small tool-using request; it must never eat the whole
+/// enhance budget when a connector hangs.
+const CALENDAR_LOOKUP_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// The call's window from its frontmatter: `date:` (RFC3339) plus the
+/// recorded duration (an hour when the file has none). `None` only for an
+/// unparseable date, which real session files never have.
+pub(crate) fn calendar_window(start: &str, duration_secs: Option<u64>) -> Option<(String, String)> {
+    let start_dt = chrono::DateTime::parse_from_rfc3339(start).ok()?;
+    let secs = duration_secs.unwrap_or(3600).max(60);
+    let end = start_dt + chrono::Duration::seconds(secs as i64);
+    Some((
+        start.to_string(),
+        end.to_rfc3339_opts(chrono::SecondsFormat::Secs, false),
+    ))
+}
+
+/// The dedicated lookup prompt: a single narrow job with a machine-checkable
+/// answer, instead of burying tool use inside the big summary prompt (owner
+/// bug report: the event must be matched by date and time, deterministically,
+/// and re-enhance must re-apply it).
+pub(crate) fn calendar_lookup_prompt(start: &str, end: &str) -> String {
+    format!(
+        "Use your calendar MCP tools to find the user's calendar event that OVERLAPS          this exact time window:\n\
+         window start: {start}\n\
+         window end: {end}\n\
+         Match strictly by date and time overlap: list or search events in that range. \
+         Never match by name similarity and never pick an event outside the window. If \
+         several events overlap, pick the one with the largest overlap. Reply with \
+         STRICT JSON only, no prose, no code fences, in exactly one of these shapes:\n\
+         {{\"found\": true, \"title\": \"<the event's title, verbatim>\", \"attendees\": [\"name\"]}}\n\
+         {{\"found\": false}}\n\
+         Never invent an event: if the tools fail or nothing overlaps, reply with found false.\n"
+    )
+}
+
+/// Parses the lookup reply, tolerating stray prose around the JSON object.
+/// Anything malformed means "no event": the summary still runs.
+pub(crate) fn parse_calendar_reply(text: &str) -> Option<CalendarEvent> {
+    let start = text.find('{')?;
+    let end = text.rfind('}')?;
+    let reply: CalendarLookupReply = serde_json::from_str(&text[start..=end]).ok()?;
+    if !reply.found {
+        return None;
+    }
+    let title = sanitize_event_title(reply.title.as_deref()?);
+    (!title.is_empty()).then_some(CalendarEvent {
+        title,
+        attendees: reply.attendees,
+    })
+}
+
+/// The event name stays verbatim except what the line-oriented `title:`
+/// frontmatter cannot carry: newlines and runs of whitespace collapse to
+/// single spaces, and a runaway length is capped.
+fn sanitize_event_title(raw: &str) -> String {
+    const MAX_CHARS: usize = 160;
+    let mut title = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    if title.chars().count() > MAX_CHARS {
+        title = title.chars().take(MAX_CHARS).collect::<String>().trim_end().to_string();
+    }
+    title
+}
+
+/// Runs the dedicated calendar lookup through the claude CLI with ONLY the
+/// calendar connectors allowlisted. Every failure path is a quiet `None`.
+fn lookup_calendar_event(
+    claude: &Path,
+    allowed_tools: &str,
+    start: &str,
+    end: &str,
+) -> Option<CalendarEvent> {
+    let prompt = calendar_lookup_prompt(start, end);
+    let output = run_cli_capture(
+        claude,
+        &["-p", "--output-format", "text", "--allowedTools", allowed_tools],
+        &prompt,
+        CALENDAR_LOOKUP_TIMEOUT,
+    )
+    .ok()?;
+    parse_calendar_reply(&output)
+}
+
+/// Runs `binary` with `args` and `prompt` on stdin in a fresh empty temp
+/// dir, killed at `timeout`; returns trimmed stdout of a successful exit.
+/// The same subprocess hygiene as `run_provider`, for one-shot helper calls.
+fn run_cli_capture(
+    binary: &Path,
+    args: &[&str],
+    prompt: &str,
+    timeout: Duration,
+) -> Result<String, String> {
+    let workdir = tempfile::tempdir().map_err(|e| e.to_string())?;
+    let mut child = Command::new(binary)
+        .args(args)
+        .current_dir(workdir.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    child
+        .stdin
+        .take()
+        .expect("stdin was piped")
+        .write_all(prompt.as_bytes())
+        .map_err(|e| e.to_string())?;
+
+    let stdout = child.stdout.take().expect("stdout was piped");
+    let stderr = child.stderr.take().expect("stderr was piped");
+    let reader = std::thread::spawn(move || {
+        use std::io::Read;
+        let mut out = String::new();
+        let mut err = String::new();
+        let _ = std::io::BufReader::new(stdout).read_to_string(&mut out);
+        let _ = std::io::BufReader::new(stderr).read_to_string(&mut err);
+        (out, err)
+    });
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait().map_err(|e| e.to_string())? {
+            Some(status) => break status,
+            None if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("timed out".to_string());
+            }
+            None => std::thread::sleep(Duration::from_millis(200)),
+        }
+    };
+    let (out, err) = reader.join().unwrap_or_default();
+    if !status.success() {
+        return Err(err.trim().to_string());
+    }
+    Ok(out.trim().to_string())
 }
 
 /// The Granola contract, spelled out (owner decision, stage 0.11): the
@@ -226,18 +375,19 @@ pub(crate) struct CalendarContext {
 /// without running any CLI.
 ///
 /// `propose_title` adds the TITLE output contract (opt-in
-/// `enhance_rename_title`, and only when the current title is automatic):
-/// the reply must lead with one `TITLE: ...` line, which
-/// [`split_title_line`] peels off before the summary is written. `calendar`
-/// adds the opt-in paragraph inviting a tool-capable provider to look up
-/// the overlapping calendar event; it must always degrade gracefully, since
-/// even a claude with connectors may have no calendar among them.
+/// `enhance_rename_title`, only while the title is machine-owned and only
+/// when no calendar event was matched): the reply must lead with one
+/// `TITLE: ...` line, which [`split_title_line`] peels off before the
+/// summary is written. `event` is the calendar event the dedicated lookup
+/// already matched by date and time: it enters the prompt as source data
+/// (this IS the meeting), while its verbatim name is applied to the title
+/// by the app itself, never trusted to the model to echo back.
 pub(crate) fn build_prompt(
     title: &str,
     notes: &str,
     transcript: &str,
     propose_title: bool,
-    calendar: Option<&CalendarContext>,
+    event: Option<&CalendarEvent>,
 ) -> String {
     let notes_are_empty = notes.trim().is_empty();
     let notes_block = if notes_are_empty {
@@ -253,7 +403,7 @@ pub(crate) fn build_prompt(
     let cyrillic_output = uses_cyrillic_output(notes, transcript);
     let language_rule = output_language_rule(cyrillic_output);
     let prompt_transcript = compact_transcript(transcript);
-    let extra_rules = build_extra_rules(propose_title, calendar, cyrillic_output);
+    let extra_rules = build_extra_rules(propose_title, event, cyrillic_output);
     let final_check = if cyrillic_output {
         "Пиши только на языке расшифровки кириллицей; не переводи на английский. Используй только явные утверждения. Сохраняй направление из источника в цель и область действия каждого компонента. Позднее уточнение «не X, а Y» отменяет X. Не смешивай текущее состояние, предпочтительный план и fallback. Условие остается условием. Действие допустимо только при явном обязательстве владельца. Не заполняй раздел ради формата: сомнительное и побочные истории исключи"
     } else {
@@ -326,44 +476,41 @@ pub(crate) fn build_prompt(
     )
 }
 
-/// The optional trailing prompt rules: the calendar paragraph and the TITLE
-/// output contract, in the branch's language. Empty when neither applies.
+/// The optional trailing prompt rules: the matched calendar event as source
+/// data, and the TITLE output contract, in the branch's language. Empty
+/// when neither applies.
 fn build_extra_rules(
     propose_title: bool,
-    calendar: Option<&CalendarContext>,
+    event: Option<&CalendarEvent>,
     cyrillic_output: bool,
 ) -> String {
     let mut rules = String::new();
-    if let Some(calendar) = calendar {
-        let start = calendar.start.as_str();
+    if let Some(event) = event {
+        let title = event.title.as_str();
+        let attendees = event.attendees.join(", ");
         if cyrillic_output {
-            let duration = match calendar.duration_secs {
-                Some(secs) => format!(" (длительность около {} мин)", secs.div_ceil(60).max(1)),
-                None => String::new(),
+            let participants = if attendees.is_empty() {
+                String::new()
+            } else {
+                format!("; участники: {attendees}")
             };
             rules.push_str(&format!(
-                "\nЕсли тебе доступны инструменты календаря (MCP-коннекторы), найди \
-                 событие календаря, пересекающееся с {start}{duration}, и используй \
-                 его настоящее название и участников: отрази их в первой строке \
-                 заметки. Если запрошена строка TITLE и событие найдено, TITLE \
-                 должен быть названием этого события ДОСЛОВНО: не перефразируй, не \
-                 переводи, не сокращай и не улучшай его. Если инструментов \
-                 календаря нет или событие не найдено, спокойно продолжай без них.\n"
+                "\nСобытие календаря, совпавшее с этим звонком по дате и времени \
+                 (исходные данные): «{title}»{participants}. Это и есть встреча: \
+                 используй её название в первой строке заметки и не выдумывай \
+                 другое название встречи.\n"
             ));
         } else {
-            let duration = match calendar.duration_secs {
-                Some(secs) => format!(" for about {} minutes", secs.div_ceil(60).max(1)),
-                None => String::new(),
+            let participants = if attendees.is_empty() {
+                String::new()
+            } else {
+                format!("; participants: {attendees}")
             };
             rules.push_str(&format!(
-                "\nIf calendar tools (MCP connectors) are available to you, look up \
-                 the calendar event overlapping {start}{duration} and use its real \
-                 meeting name and participants: reflect them in the note's opening \
-                 line. When a TITLE line is requested and a matching event exists, \
-                 the TITLE must be that event's own name copied VERBATIM: do not \
-                 rephrase, translate, shorten or improve it. If no calendar tool is \
-                 available or no event matches, continue without it; never stall on \
-                 the calendar.\n"
+                "\nCalendar event matched to this call by date and time (source \
+                 data): \"{title}\"{participants}. This IS the meeting: use its \
+                 name in the note's opening line and do not invent a different \
+                 meeting name.\n"
             ));
         }
     }
@@ -373,32 +520,16 @@ fn build_extra_rules(
                 "\nЭта заметка пока называется автоматически. Начни ответ одной \
                  строкой вида `TITLE: <название>`: конкретное название этого звонка, \
                  не больше 8 слов, на языке расшифровки, без кавычек. После неё \
-                 оставь пустую строку и выведи саму заметку.",
+                 оставь пустую строку и выведи саму заметку.\n",
             );
-            if calendar.is_some() {
-                // Owner rule: a found calendar event's own name IS the title,
-                // untouched -- it beats the composition guidance above.
-                rules.push_str(
-                    " Если событие календаря найдено, игнорируй ограничение в 8 \
-                     слов и используй название события дословно.",
-                );
-            }
-            rules.push('\n');
         } else {
             rules.push_str(
                 "\nThis note currently has only an automatic placeholder title. \
                  Begin the reply with a single line `TITLE: <title>` naming this \
                  call: specific, at most 8 words, in the output language, no \
                  quotes. Leave one empty line after it, then output the note; the \
-                 TITLE line is the only text allowed outside the note itself.",
+                 TITLE line is the only text allowed outside the note itself.\n",
             );
-            if calendar.is_some() {
-                rules.push_str(
-                    " If a matching calendar event was found, ignore the 8-word \
-                     guidance and use that event's name verbatim as the TITLE.",
-                );
-            }
-            rules.push('\n');
         }
     }
     rules
@@ -556,15 +687,22 @@ fn discover_calendar_servers(claude: &Path) -> Vec<String> {
         return Vec::new();
     }
     let stdout = String::from_utf8_lossy(&out.stdout);
-    let names = stdout
+    filter_calendar_names(parse_mcp_list_text(&stdout))
+}
+
+/// Server names out of the human-readable `claude mcp list` output, one
+/// `name: command-or-url - status` line per server. Names CAN contain
+/// spaces and dots ("claude.ai Google Calendar" is a real one); the header
+/// and blank lines carry no `:` value and are skipped.
+fn parse_mcp_list_text(stdout: &str) -> Vec<String> {
+    stdout
         .lines()
         .filter_map(|line| {
-            let (name, _) = line.split_once(':')?;
+            let (name, rest) = line.split_once(':')?;
             let name = name.trim();
-            (!name.is_empty() && !name.contains(' ')).then(|| name.to_string())
+            (!name.is_empty() && !rest.trim().is_empty()).then(|| name.to_string())
         })
-        .collect();
-    filter_calendar_names(names)
+        .collect()
 }
 
 /// Server names out of whatever shape `claude mcp list --json` returns: an
@@ -600,25 +738,34 @@ fn filter_calendar_names(mut names: Vec<String>) -> Vec<String> {
 pub(crate) fn calendar_allowed_tools(servers: &[String]) -> String {
     servers
         .iter()
+        .map(|name| normalize_server_name(name))
         .flat_map(|name| [format!("mcp__{name}"), format!("mcp__{name}__*")])
         .collect::<Vec<_>>()
         .join(",")
 }
 
+/// The CLI exposes a server's tools as `mcp__<normalized name>__<tool>`,
+/// where characters a tool id cannot carry (spaces, dots) become
+/// underscores: the "claude.ai Google Calendar" connector's tools are
+/// `mcp__claude_ai_Google_Calendar__*` (verified against the real CLI).
+fn normalize_server_name(name: &str) -> String {
+    name.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
 /// Runs `spec`'s CLI over `prompt` (with `model` overriding the CLI's
 /// default when set) and returns the generated text. Blocking -- callers
-/// run it inside `spawn_blocking`; killed at [`ENHANCE_TIMEOUT`].
-///
-/// `allowed_tools` is a ready `--allowedTools` value (claude only): in `-p`
-/// mode a tool outside the allowlist is silently denied to the model, so
-/// without this the calendar paragraph could never be acted on. `None`
-/// keeps today's no-tools behavior.
-fn run_provider(
-    spec: &ProviderSpec,
-    model: Option<&str>,
-    prompt: &str,
-    allowed_tools: Option<&str>,
-) -> Result<String, String> {
+/// run it inside `spawn_blocking`; killed at [`ENHANCE_TIMEOUT`]. Tools are
+/// never allowlisted here: calendar work happens in the dedicated
+/// `lookup_calendar_event` call, and the summarizer runs on text alone.
+fn run_provider(spec: &ProviderSpec, model: Option<&str>, prompt: &str) -> Result<String, String> {
     let ProviderKind::Cli { binary } = spec.kind else {
         return Err("the local provider must run through the embedded model".to_string());
     };
@@ -639,9 +786,6 @@ fn run_provider(
             cmd.args(["-p", "--output-format", "text"]);
             if let Some(m) = model {
                 cmd.args(["--model", m]);
-            }
-            if let Some(tools) = allowed_tools {
-                cmd.args(["--allowedTools", tools]);
             }
         }
         "codex" => {
@@ -826,18 +970,20 @@ fn enhance_path_inner<R: tauri::Runtime>(
         .map(str::to_string);
 
     let existing = simstim_transcript::parse_session(md_path).map_err(|e| e.to_string())?;
-    // A title proposal is only ever requested for automatic titles
-    // ("Untitled", the detected-call shape); the writer re-checks against
-    // the freshly parsed file too, so a title typed mid-run still wins.
-    let rename_title = cfg.enhance_rename_title && crate::sessions::title_is_auto(&existing.title);
-    // Calendar context is claude-only: the local model has no tools, and
+    // A title proposal only ever lands while the title is machine-owned:
+    // the automatic "Untitled"/detected shape, or one a previous enhance
+    // wrote (`title_by:` frontmatter) -- so re-enhancing regenerates the
+    // title too (owner request). The writer re-checks against the freshly
+    // parsed file, so a title the user types mid-run still wins.
+    let title_machine_owned =
+        crate::sessions::title_is_auto(&existing.title) || existing.title_by.is_some();
+    let rename_title = cfg.enhance_rename_title && title_machine_owned;
+    // Calendar lookup is claude-only: the local model has no tools, and
     // codex's non-interactive sandbox cancels MCP tool calls outright.
-    let calendar = (cfg.enhance_use_calendar && spec.id == "claude").then(|| CalendarContext {
-        start: existing.date.clone(),
-        duration_secs: simstim_transcript::parse_meta(md_path)
-            .ok()
-            .and_then(|meta| meta.duration_secs),
-    });
+    let calendar_enabled = cfg.enhance_use_calendar && spec.id == "claude";
+    let duration_secs = simstim_transcript::parse_meta(md_path)
+        .ok()
+        .and_then(|meta| meta.duration_secs);
     {
         let mut running = enhance.0.lock().unwrap();
         validate_enhance(
@@ -856,12 +1002,34 @@ fn enhance_path_inner<R: tauri::Runtime>(
     let slot = SlotGuard(enhance.inner());
     emit_progress(app, path, "running", spec.id, None);
     let result = (|| {
+        // The dedicated calendar lookup runs first, inside the slot (the
+        // UI's "Summarizing..." covers it): one narrow tool-using request
+        // that matches the event strictly by the call's date/time window
+        // and answers in machine-checkable JSON. Discovery runs per enhance
+        // (connector lineups change; nothing to invalidate a cache with),
+        // and every failure path is a quiet "no event".
+        let event = if calendar_enabled {
+            resolve_binary("claude").and_then(|claude| {
+                let servers = discover_calendar_servers(&claude);
+                if servers.is_empty() {
+                    return None;
+                }
+                let (start, end) = calendar_window(&existing.date, duration_secs)?;
+                lookup_calendar_event(&claude, &calendar_allowed_tools(&servers), &start, &end)
+            })
+        } else {
+            None
+        };
+        // With a matched event the app applies its name itself, verbatim
+        // (owner rule: never rephrased or improved); the TITLE output
+        // contract is only requested when the model must compose one.
+        let compose_title = rename_title && event.is_none();
         let prompt = build_prompt(
             &existing.title,
             &existing.notes,
             &existing.transcript,
-            rename_title,
-            calendar.as_ref(),
+            compose_title,
+            event.as_ref(),
         );
         let raw = match spec.kind {
             ProviderKind::Local { model_id } => {
@@ -872,26 +1040,20 @@ fn enhance_path_inner<R: tauri::Runtime>(
                     &existing.notes,
                     &existing.transcript,
                     &prompt,
-                    rename_title,
+                    compose_title,
                 )?
             }
-            ProviderKind::Cli { .. } => {
-                // Discovery runs per enhance, only when the calendar opt-in
-                // applies: connector lineups change and there is nothing to
-                // invalidate a cache with. Empty means no allowlist -- the
-                // prompt's calendar paragraph already covers that.
-                let allowed_tools = calendar.as_ref().and_then(|_| {
-                    let binary = resolve_binary("claude")?;
-                    let servers = discover_calendar_servers(&binary);
-                    (!servers.is_empty()).then(|| calendar_allowed_tools(&servers))
-                });
-                run_provider(spec, model.as_deref(), &prompt, allowed_tools.as_deref())?
-            }
+            ProviderKind::Cli { .. } => run_provider(spec, model.as_deref(), &prompt)?,
         };
-        let (proposed_title, summary) = if rename_title {
+        let (composed_title, summary) = if compose_title {
             split_title_line(&raw)
         } else {
             (None, raw)
+        };
+        let proposed_title = if rename_title {
+            event.as_ref().map(|event| event.title.clone()).or(composed_title)
+        } else {
+            None
         };
         // Re-check the single-writer rule right before the write: the
         // user could have started recording into this same note while
@@ -1042,48 +1204,109 @@ mod tests {
             assert!(cyrillic.contains("не больше 8 слов"));
         }
 
+        /// A matched event enters the prompt as source data in both
+        /// languages: it IS the meeting, its name is not to be reinvented.
+        /// (Its verbatim use as the note title is enforced by the app in
+        /// `enhance_path_inner`/`set_summary_at`, not by the prompt.)
         #[test]
-        fn calendar_context_names_the_window_and_degrades_gracefully() {
-            let calendar = CalendarContext {
-                start: "2026-08-29T14:03:00+02:00".to_string(),
-                duration_secs: Some(1810),
+        fn a_matched_calendar_event_is_source_data_in_both_languages() {
+            let event = CalendarEvent {
+                title: "Q3 Budget Review".to_string(),
+                attendees: vec!["Pavel".to_string(), "Dana".to_string()],
             };
-            let p = build_prompt("Untitled", "", "[00:00:01] Me: hi", true, Some(&calendar));
-            assert!(p.contains("2026-08-29T14:03:00+02:00"));
-            assert!(p.contains("about 31 minutes"), "1810s rounds up: {p}");
-            assert!(p.contains("continue without it"));
-        }
-
-        /// Owner rule: a found calendar event's own name IS the note title,
-        /// verbatim -- never rephrased, translated or "improved". The
-        /// contract must say so in both prompt languages, and it beats the
-        /// 8-word composition guidance.
-        #[test]
-        fn a_found_calendar_event_names_the_note_verbatim() {
-            let calendar = CalendarContext {
-                start: "2026-08-29T14:03:00+02:00".to_string(),
-                duration_secs: Some(1810),
-            };
-            let english = build_prompt("Untitled", "", "[00:00:01] Me: hi", true, Some(&calendar));
-            assert!(english.contains("copied VERBATIM"), "{english}");
-            assert!(english.contains("ignore the 8-word guidance"), "{english}");
+            let english = build_prompt("Untitled", "", "[00:00:01] Me: hi", false, Some(&event));
+            assert!(english.contains("\"Q3 Budget Review\""), "{english}");
+            assert!(english.contains("participants: Pavel, Dana"));
+            assert!(english.contains("This IS the meeting"));
+            // No event means no TITLE contract was requested here either.
+            assert!(!english.contains("TITLE:"));
 
             let cyrillic = build_prompt(
                 "Untitled",
                 "",
                 "[00:00:01] Me: Давайте выпустим новую версию в пятницу и проверим тесты",
-                true,
-                Some(&calendar),
+                false,
+                Some(&event),
             );
-            assert!(cyrillic.contains("ДОСЛОВНО"), "{cyrillic}");
-            assert!(cyrillic.contains("название события дословно"), "{cyrillic}");
+            assert!(cyrillic.contains("«Q3 Budget Review»"), "{cyrillic}");
+            assert!(cyrillic.contains("участники: Pavel, Dana"));
+        }
+    }
 
-            // Without the title contract the calendar paragraph alone still
-            // carries the verbatim rule, gated on "when requested".
-            let summary_only =
-                build_prompt("Untitled", "", "[00:00:01] Me: hi", false, Some(&calendar));
-            assert!(summary_only.contains("copied VERBATIM"), "{summary_only}");
-            assert!(!summary_only.contains("ignore the 8-word guidance"));
+    mod calendar_lookup {
+        use super::*;
+
+        #[test]
+        fn window_comes_from_the_notes_date_and_duration() {
+            let (start, end) =
+                calendar_window("2026-08-29T14:03:00+02:00", Some(1810)).unwrap();
+            assert_eq!(start, "2026-08-29T14:03:00+02:00");
+            assert_eq!(end, "2026-08-29T14:33:10+02:00");
+
+            // No recorded duration: assume an hour so short notes still
+            // overlap their meeting.
+            let (_, end) = calendar_window("2026-08-29T14:03:00+02:00", None).unwrap();
+            assert_eq!(end, "2026-08-29T15:03:00+02:00");
+
+            assert!(calendar_window("not a date", Some(60)).is_none());
+        }
+
+        #[test]
+        fn lookup_prompt_pins_the_window_and_the_json_contract() {
+            let p = calendar_lookup_prompt("2026-08-29T14:03:00+02:00", "2026-08-29T14:33:10+02:00");
+            assert!(p.contains("window start: 2026-08-29T14:03:00+02:00"));
+            assert!(p.contains("window end: 2026-08-29T14:33:10+02:00"));
+            assert!(p.contains("date and time overlap"));
+            assert!(p.contains("STRICT JSON"));
+            assert!(p.contains("Never invent an event"));
+        }
+
+        #[test]
+        fn reply_parsing_takes_the_event_verbatim_and_rejects_junk() {
+            let event = parse_calendar_reply(
+                r#"{"found": true, "title": "Q3 Budget Review", "attendees": ["Pavel"]}"#,
+            )
+            .unwrap();
+            assert_eq!(event.title, "Q3 Budget Review");
+            assert_eq!(event.attendees, vec!["Pavel"]);
+
+            // Stray prose or fences around the JSON are tolerated.
+            let fenced = parse_calendar_reply(
+                "Here you go:\n```json\n{\"found\": true, \"title\": \"Sync\"}\n```",
+            )
+            .unwrap();
+            assert_eq!(fenced.title, "Sync");
+
+            assert!(parse_calendar_reply(r#"{"found": false}"#).is_none());
+            assert!(parse_calendar_reply(r#"{"found": true}"#).is_none(), "no title");
+            assert!(parse_calendar_reply("no json at all").is_none());
+            assert!(parse_calendar_reply(r#"{"found": true, "title": "   "}"#).is_none());
+        }
+
+        #[test]
+        fn event_titles_stay_single_line_but_otherwise_verbatim() {
+            let event = parse_calendar_reply(
+                "{\"found\": true, \"title\": \"Weekly  sync\\nwith platform\"}",
+            )
+            .unwrap();
+            assert_eq!(event.title, "Weekly sync with platform");
+        }
+
+        /// The exact output shape of the owner's real CLI (2.1.228): a
+        /// health-check header, then `name: url - status` lines where names
+        /// carry spaces and dots.
+        #[test]
+        fn mcp_list_text_parses_claude_ai_connector_names() {
+            let stdout = "Checking MCP server health…\n\n\
+                claude.ai Figma: https://mcp.figma.com/mcp - ✔ Connected\n\
+                claude.ai Google Calendar: https://calendarmcp.googleapis.com/mcp/v1 - ✔ Connected\n\
+                claude.ai Slack: https://mcp.slack.com/mcp - ✔ Connected\n";
+            let names = parse_mcp_list_text(stdout);
+            assert!(names.contains(&"claude.ai Google Calendar".to_string()), "{names:?}");
+            assert_eq!(
+                filter_calendar_names(names),
+                vec!["claude.ai Google Calendar"]
+            );
         }
     }
 
@@ -1122,12 +1345,20 @@ mod tests {
         }
     }
 
+    /// Tool ids normalize spaces and dots to underscores (verified against
+    /// the real CLI: "claude.ai Google Calendar" ->
+    /// `mcp__claude_ai_Google_Calendar__list_events`); a plain local name
+    /// passes through untouched.
     #[test]
-    fn calendar_allowed_tools_covers_both_rule_shapes_per_server() {
-        let servers = vec!["google-calendar".to_string()];
+    fn calendar_allowed_tools_covers_both_rule_shapes_per_normalized_server() {
+        let servers = vec![
+            "google-calendar".to_string(),
+            "claude.ai Google Calendar".to_string(),
+        ];
         assert_eq!(
             calendar_allowed_tools(&servers),
-            "mcp__google-calendar,mcp__google-calendar__*"
+            "mcp__google-calendar,mcp__google-calendar__*,\
+             mcp__claude_ai_Google_Calendar,mcp__claude_ai_Google_Calendar__*"
         );
     }
 
@@ -1258,7 +1489,7 @@ mod tests {
             false,
             None,
         );
-        let summary = run_provider(spec, None, &prompt, None).expect("provider run failed");
+        let summary = run_provider(spec, None, &prompt).expect("provider run failed");
         eprintln!("--- summary ---\n{summary}\n---------------");
         assert!(!summary.is_empty());
     }

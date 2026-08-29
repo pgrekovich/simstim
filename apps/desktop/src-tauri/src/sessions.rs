@@ -212,6 +212,14 @@ fn rewrite_session(path: &Path, title: &str, notes: &str) -> Result<()> {
     let mut transcript = Transcript::new(started_at);
     transcript.set_raw_date(existing.date.clone());
     transcript.set_title(title.to_string());
+    // A machine-given title stays marked as such only while the user leaves
+    // it alone: saving a DIFFERENT title is the user renaming the note, and
+    // from then on no enhance may replace it (rule 6).
+    transcript.set_title_by(if title == existing.title {
+        existing.title_by.clone()
+    } else {
+        None
+    });
     transcript.set_notes(notes.to_string());
     transcript.set_asr(meta.asr.clone());
     if let Some(duration_secs) = meta.duration_secs {
@@ -286,6 +294,7 @@ pub fn rewrite_transcript_at(path: &Path, new_transcript: &str, asr_id: &str) ->
     let mut transcript = Transcript::new(started_at);
     transcript.set_raw_date(existing.date.clone());
     transcript.set_title(existing.title.clone());
+    transcript.set_title_by(existing.title_by.clone());
     transcript.set_notes(existing.notes.clone());
     if let Some(duration_secs) = meta.duration_secs {
         transcript.set_duration_secs(duration_secs);
@@ -342,12 +351,16 @@ fn tail_is_clock_time(tail: &str) -> bool {
 /// `rewrite_transcript_at` (transcript), replacing only its own section.
 /// `model` labels the section via the `summary_model:` frontmatter field.
 ///
-/// `proposed_title` is the summary model's suggested title (the opt-in
-/// `enhance_rename_title` setting). It is applied ONLY when the title on
-/// disk is still an automatic one -- checked here, against the freshly
-/// parsed file, not against whatever the caller read minutes earlier: if
-/// the user typed a real title while the model was thinking, their words
-/// win and the proposal is dropped.
+/// `proposed_title` is the enhance run's suggested title (the opt-in
+/// `enhance_rename_title` setting): a verbatim calendar-event name, or one
+/// the model composed. It is applied ONLY while the title on disk is still
+/// machine-owned -- the automatic "Untitled"/detected shape, or one a
+/// previous enhance wrote (`title_by:` frontmatter) -- so re-enhancing
+/// regenerates the title too (owner request), while a title the user typed
+/// themselves is never replaced. Checked here against the freshly parsed
+/// file, not against whatever the caller read minutes earlier: if the user
+/// typed a real title while the model was thinking, their words win and
+/// the proposal is dropped.
 pub fn set_summary_at(
     path: &Path,
     summary: &str,
@@ -360,14 +373,16 @@ pub fn set_summary_at(
         .map(|dt| dt.with_timezone(&Local))
         .unwrap_or_else(|_| Local::now());
 
-    let title = match proposed_title {
-        Some(new_title) if title_is_auto(&existing.title) => new_title.to_string(),
-        _ => existing.title.clone(),
+    let machine_owned = title_is_auto(&existing.title) || existing.title_by.is_some();
+    let (title, title_by) = match proposed_title {
+        Some(new_title) if machine_owned => (new_title.to_string(), Some(model.to_string())),
+        _ => (existing.title.clone(), existing.title_by.clone()),
     };
 
     let mut transcript = Transcript::new(started_at);
     transcript.set_raw_date(existing.date.clone());
     transcript.set_title(title);
+    transcript.set_title_by(title_by);
     transcript.set_notes(existing.notes.clone());
     transcript.set_asr(meta.asr.clone());
     if let Some(duration_secs) = meta.duration_secs {
@@ -717,6 +732,37 @@ mod tests {
             assert_eq!(data.notes, "rough notes", "notes are sacred");
             assert_eq!(data.title, "Sync");
             assert_eq!(data.transcript, "[00:00:03] Me: hello");
+        }
+
+        /// Re-enhance regenerates a machine-given title (owner request):
+        /// once an enhance wrote the title (title_by frontmatter), a later
+        /// proposal may replace it again -- until the user renames the note
+        /// themselves, which clears the marker for good.
+        #[test]
+        fn a_machine_given_title_is_replaced_again_and_a_user_rename_ends_that() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("untitled.md");
+            let mut note = Transcript::new(t(9, 0, 0));
+            note.add(Speaker::Me, 3.0, "hello".into());
+            note.save(&path).unwrap();
+
+            // First enhance: renames the automatic title and marks it.
+            set_summary_at(&path, "- s", "claude", Some("Composed title")).unwrap();
+            assert_eq!(parse_session(&path).unwrap().title, "Composed title");
+
+            // Re-enhance: the machine-given title is fair game again.
+            set_summary_at(&path, "- s2", "claude", Some("Q3 Budget Review")).unwrap();
+            assert_eq!(parse_session(&path).unwrap().title, "Q3 Budget Review");
+
+            // A notes-only save (same title) keeps the machine marker...
+            save_session_at(&path, "Q3 Budget Review", "my notes", None, None).unwrap();
+            set_summary_at(&path, "- s3", "claude", Some("Renamed by model again")).unwrap();
+            assert_eq!(parse_session(&path).unwrap().title, "Renamed by model again");
+
+            // ...but the user typing their own title ends machine renames.
+            save_session_at(&path, "My own name", "my notes", None, None).unwrap();
+            set_summary_at(&path, "- s4", "claude", Some("Should not land")).unwrap();
+            assert_eq!(parse_session(&path).unwrap().title, "My own name");
         }
 
         /// Rule 6 at the writer: a proposed title lands only when the title

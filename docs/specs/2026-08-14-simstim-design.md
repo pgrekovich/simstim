@@ -401,18 +401,24 @@ Three owner requests implemented in one overnight pass on
    chip while a job runs; re-run lives in the Summary tab's provenance line;
    the sidebar shows a work spinner plus a quiet "summarizing" or
    "transcribing" word on any session with a background job.
-3. Opt-in model-proposed titles (`enhance_rename_title`, default off): the
-   provider's reply leads with a `TITLE:` line that replaces AUTOMATIC
-   titles only ("Untitled", the detected "Zoom call 14:03" shape), checked
-   again at the writer against the freshly parsed file, so a user-typed
-   title always wins (rule 6). Opt-in calendar context
-   (`enhance_use_calendar`, default off, Claude Code only): calendar-named
-   MCP connectors from the user's own `claude mcp list` are allowlisted via
-   `--allowedTools` and the prompt invites the model to ground the meeting
-   name and participants; a found event's own name becomes the note title
-   VERBATIM (owner rule: never rephrased, translated or improved); codex is
-   excluded because its non-interactive sandbox cancels MCP tool calls, and
-   the local model has no tools. The overflow menu carries Enhance /
+3. Opt-in model-proposed titles (`enhance_rename_title`, default off): a
+   proposal replaces only MACHINE-OWNED titles -- the automatic
+   "Untitled"/detected shape, or one a previous enhance wrote, tracked by
+   the new optional `title_by:` frontmatter field (round-trip safe, absent
+   on old files) -- so re-enhancing regenerates the title too, while a
+   user-typed title always wins (rule 6; a manual rename clears the
+   marker). Opt-in calendar context (`enhance_use_calendar`, default off,
+   Claude Code only): a DEDICATED lookup call runs before the summary,
+   matching the event strictly by the call's date/time window (frontmatter
+   date + duration) and answering in strict JSON; the found event's own
+   name becomes the note title VERBATIM (owner rule: never rephrased,
+   translated or improved -- applied by the app, not trusted to the model),
+   and the event enters the summary prompt as source data. Connector
+   discovery parses `claude mcp list` (names can carry spaces and dots,
+   e.g. "claude.ai Google Calendar") and allowlists tool ids in their
+   normalized `mcp__claude_ai_Google_Calendar__*` form; codex is excluded
+   because its non-interactive sandbox cancels MCP tool calls, and the
+   local model has no tools. The overflow menu carries Enhance /
    Re-enhance so re-running while comparing models is one obvious click.
 
 Status (2026-08-29): implemented on `night/settings-enhance-title`; all four

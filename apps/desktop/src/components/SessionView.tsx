@@ -257,7 +257,11 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
   // ever read while the SAME click's promise is still in flight.
   const [clicking, setClicking] = useState(false);
   const [retranscribeError, setRetranscribeError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState("notes");
+  const [activeTab, setActiveTab] = useState(() =>
+    !isActive && initialData.notes.trim().length === 0 && initialData.summary
+      ? "summary"
+      : "notes"
+  );
   const [findOpen, setFindOpen] = useState(false);
   const [findQuery, setFindQuery] = useState("");
   const [activeFindIndex, setActiveFindIndex] = useState(0);
@@ -803,12 +807,14 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
         )}
         {toolbarFindSlot && findControls ? createPortal(findControls, toolbarFindSlot) : null}
 
+        {/* The title belongs to the session, not to a single material tab. */}
+        <div className="shrink-0 px-6 pt-0.5">{titleInput}</div>
+
         <TabsContent
           value="notes"
           forceMount
           className="flex min-h-0 flex-1 flex-col gap-3 data-[state=inactive]:hidden"
         >
-          <div className="shrink-0 px-6 pt-0.5">{titleInput}</div>
           <textarea
             ref={notesInputRef}
             value={notes}

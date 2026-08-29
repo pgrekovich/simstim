@@ -482,6 +482,58 @@ describe("SessionView: notes/transcript tabs (stage 0.10)", () => {
       .closest('[data-slot="tabs-content"]');
     expect(notesPanel).toHaveAttribute("data-state", "inactive");
   });
+
+  it("keeps the session title outside the tab panels so Summary and Transcript both show it", () => {
+    render(
+      <SessionView
+        path="/tmp/call.md"
+        isActive={false}
+        initialData={{
+          ...baseData,
+          notes: "keep Notes primary",
+          summary: "A concise summary",
+          summary_model: "local/qwen",
+          transcript: "[00:00:03] Me: hello tabs\n",
+        }}
+        liveLines={[]}
+        interimMe=""
+        interimThem=""
+        retranscribingJob={null}
+      />
+    );
+
+    const title = screen.getByDisplayValue("Weekly sync");
+    expect(title.closest('[data-slot="tabs-content"]')).toBeNull();
+    expect(screen.getByRole("tab", { name: "Notes" })).toHaveAttribute("data-state", "active");
+
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Summary" }));
+    expect(screen.getByDisplayValue("Weekly sync")).toBe(title);
+
+    fireEvent.mouseDown(screen.getByRole("tab", { name: "Transcript" }));
+    expect(screen.getByDisplayValue("Weekly sync")).toBe(title);
+  });
+
+  it("opens Summary by default for a finished session whose Notes are empty", () => {
+    render(
+      <SessionView
+        path="/tmp/call.md"
+        isActive={false}
+        initialData={{
+          ...baseData,
+          notes: "   ",
+          summary: "A concise summary",
+          summary_model: "local/qwen",
+        }}
+        liveLines={[]}
+        interimMe=""
+        interimThem=""
+        retranscribingJob={null}
+      />
+    );
+
+    expect(screen.getByRole("tab", { name: "Summary" })).toHaveAttribute("data-state", "active");
+    expect(screen.getByRole("tab", { name: "Notes" })).toHaveAttribute("data-state", "inactive");
+  });
 });
 
 describe("SessionView: transcript find (stage 2.1)", () => {

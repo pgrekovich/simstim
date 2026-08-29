@@ -50,8 +50,8 @@ function Row({
 /**
  * The main pane when nothing is selected (stage 0.10): the three primary
  * actions with their shortcuts, doubling as the app's shortcut cheat sheet.
- * The real key handling lives in App's global keydown listener; these rows
- * click through to the same handlers.
+ * The real key handling lives in App's active-window keydown listener; these
+ * rows click through to the same handlers.
  */
 export function EmptyState({
   onNewNote,

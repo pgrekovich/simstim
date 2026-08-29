@@ -325,9 +325,9 @@ function App() {
     };
   }, []);
 
-  // The native menu and the global shortcut both send the same
-  // toggle event. A start always creates a fresh session because there is no
-  // visible selection context while another application has focus.
+  // The native menu sends this toggle event. A start always creates a fresh
+  // session because there is no visible selection context while another
+  // application has focus.
   useEffect(() => {
     menuBarToggleRef.current = () => {
       if (busy) {
@@ -850,13 +850,13 @@ function App() {
   // untouched: this is just another (inactive) session file that happens to
   // start selected, not a substitute for `handleStart`. Recording always
   // creates its own file via `start_recording`, independent of this one.
-  // Global hotkeys (stage 0.10): ⌘N new note, ⌘⇧N start recording, ⌘,
-  // settings, ⌘K global search, ⌘F transcript find. The listener is attached
-  // exactly once; it
+  // Active-window shortcuts (stage 0.10): ⌘N new note, ⌘⇧N start recording,
+  // ⌘, settings, ⌘K global search, ⌘F transcript find. The listener is
+  // attached exactly once; it
   // reads the CURRENT handlers through a ref refreshed on every render, so
   // it never closes over stale state (`busy`, `sessionActive`, ...) the way
   // a once-captured closure would.
-  const hotkeysRef = useRef({
+  const shortcutsRef = useRef({
     newNote: () => {},
     startRecording: () => {},
     openSettings: () => {},
@@ -864,7 +864,7 @@ function App() {
     openTranscriptFind: () => {},
   });
   useEffect(() => {
-    hotkeysRef.current = {
+    shortcutsRef.current = {
       newNote: () => void handleNewSession(),
       startRecording: () => {
         // Same gating as the Record button and the EmptyState row.
@@ -896,19 +896,19 @@ function App() {
       const key = e.key.toLowerCase();
       if (key === "n" && e.shiftKey) {
         e.preventDefault();
-        hotkeysRef.current.startRecording();
+        shortcutsRef.current.startRecording();
       } else if (key === "n") {
         e.preventDefault();
-        hotkeysRef.current.newNote();
+        shortcutsRef.current.newNote();
       } else if (key === "," && !e.shiftKey) {
         e.preventDefault();
-        hotkeysRef.current.openSettings();
+        shortcutsRef.current.openSettings();
       } else if (key === "k" && !e.shiftKey) {
         e.preventDefault();
-        hotkeysRef.current.openSearch();
+        shortcutsRef.current.openSearch();
       } else if (key === "f" && !e.shiftKey) {
         e.preventDefault();
-        hotkeysRef.current.openTranscriptFind();
+        shortcutsRef.current.openTranscriptFind();
       } else if (key === "\\" && !e.shiftKey) {
         e.preventDefault();
         setSidebarCollapsed((collapsed) => !collapsed);

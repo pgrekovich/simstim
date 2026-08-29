@@ -1254,7 +1254,7 @@ describe("App: global search (stage 2.0)", () => {
   });
 });
 
-describe("App: empty state and global hotkeys (stage 0.10)", () => {
+describe("App: empty state and active-window shortcuts (stage 0.10)", () => {
   it("shows the shortcut menu when nothing is selected, and its rows work", async () => {
     render(<App />);
     await screen.findByText("New Note");

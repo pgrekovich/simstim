@@ -576,18 +576,7 @@ fn position_main_traffic_lights(window: &tauri::WebviewWindow) -> tauri::Result<
 pub fn run() {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_dialog::init())
-        .plugin(
-            tauri_plugin_global_shortcut::Builder::new()
-                .with_shortcut("CommandOrControl+Shift+N")
-                .expect("invalid global recording shortcut")
-                .with_handler(|app, _shortcut, event| {
-                    if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
-                        let _ = app.emit_to("main", "menu-bar-toggle-recording", ());
-                    }
-                })
-                .build(),
-        );
+        .plugin(tauri_plugin_dialog::init());
     #[cfg(target_os = "macos")]
     let builder = builder.plugin(tauri_nspanel::init());
     builder

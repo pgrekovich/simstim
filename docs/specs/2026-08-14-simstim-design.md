@@ -57,7 +57,7 @@ HN commenters on the Hyprnote launch literally begged for this product.
 | Distribution | Personal tool first, public OSS when mature |
 | Audio retention | Keep audio locally next to the .md (retention configurable) |
 | Calendar | Post-v1: EventKit first (free ride on macOS Calendar accounts, incl. Google), full Google Calendar OAuth as the final macOS step |
-| Manual control | Manual start/stop is a first-class path (menu bar + global hotkey), detection is an accelerator |
+| Manual control | Manual start/stop is a first-class path (active window + menu bar), detection is an accelerator. No global hotkeys: they must not shadow shortcuts in other apps. |
 | Name | simstim |
 
 ## Target architecture (post-MVP)
@@ -432,10 +432,14 @@ morning (overflow re-enhance, deterministic calendar titles, the pure
 download-center Models page all came out of that loop), approved it, and
 authorized merge and release as v0.7.0.
 
+Follow-up (2026-08-29): the session title stays visible while viewing Notes,
+Summary, or Transcript. A finished session with empty Notes opens on Summary
+when a generated summary exists; otherwise it opens on Notes.
+
 ## Milestones after MVP-0
 
 1. Audio file kept next to the .md; re-transcribe command (whisper turbo).
-2. Menu bar app + global hotkey; window becomes optional.
+2. Menu bar app; window becomes optional. Keyboard shortcuts stay scoped to the active window.
 3. Mic-activity meeting detection + notification.
 4. Notepad during call + enhance (BYO key) + file format finalized.
 5. Calendar: EventKit, then Google Calendar OAuth (final macOS step).

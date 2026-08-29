@@ -409,8 +409,11 @@ Three owner requests implemented in one overnight pass on
    (`enhance_use_calendar`, default off, Claude Code only): calendar-named
    MCP connectors from the user's own `claude mcp list` are allowlisted via
    `--allowedTools` and the prompt invites the model to ground the meeting
-   name and participants; codex is excluded because its non-interactive
-   sandbox cancels MCP tool calls, and the local model has no tools.
+   name and participants; a found event's own name becomes the note title
+   VERBATIM (owner rule: never rephrased, translated or improved); codex is
+   excluded because its non-interactive sandbox cancels MCP tool calls, and
+   the local model has no tools. The overflow menu carries Enhance /
+   Re-enhance so re-running while comparing models is one obvious click.
 
 Status (2026-08-29): implemented on `night/settings-enhance-title`; all four
 gates pass. Awaiting the owner's native e2e before merge.

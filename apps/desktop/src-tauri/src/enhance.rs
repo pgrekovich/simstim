@@ -345,8 +345,10 @@ fn build_extra_rules(
                 "\nЕсли тебе доступны инструменты календаря (MCP-коннекторы), найди \
                  событие календаря, пересекающееся с {start}{duration}, и используй \
                  его настоящее название и участников: отрази их в первой строке \
-                 заметки и в строке TITLE, если она запрошена. Если инструментов \
-                 календаря нет или они не отвечают, спокойно продолжай без них.\n"
+                 заметки. Если запрошена строка TITLE и событие найдено, TITLE \
+                 должен быть названием этого события ДОСЛОВНО: не перефразируй, не \
+                 переводи, не сокращай и не улучшай его. Если инструментов \
+                 календаря нет или событие не найдено, спокойно продолжай без них.\n"
             ));
         } else {
             let duration = match calendar.duration_secs {
@@ -357,8 +359,10 @@ fn build_extra_rules(
                 "\nIf calendar tools (MCP connectors) are available to you, look up \
                  the calendar event overlapping {start}{duration} and use its real \
                  meeting name and participants: reflect them in the note's opening \
-                 line and in the TITLE line when one is requested. If no calendar \
-                 tool is available or it fails, continue without it; never stall on \
+                 line. When a TITLE line is requested and a matching event exists, \
+                 the TITLE must be that event's own name copied VERBATIM: do not \
+                 rephrase, translate, shorten or improve it. If no calendar tool is \
+                 available or no event matches, continue without it; never stall on \
                  the calendar.\n"
             ));
         }
@@ -369,16 +373,32 @@ fn build_extra_rules(
                 "\nЭта заметка пока называется автоматически. Начни ответ одной \
                  строкой вида `TITLE: <название>`: конкретное название этого звонка, \
                  не больше 8 слов, на языке расшифровки, без кавычек. После неё \
-                 оставь пустую строку и выведи саму заметку.\n",
+                 оставь пустую строку и выведи саму заметку.",
             );
+            if calendar.is_some() {
+                // Owner rule: a found calendar event's own name IS the title,
+                // untouched -- it beats the composition guidance above.
+                rules.push_str(
+                    " Если событие календаря найдено, игнорируй ограничение в 8 \
+                     слов и используй название события дословно.",
+                );
+            }
+            rules.push('\n');
         } else {
             rules.push_str(
                 "\nThis note currently has only an automatic placeholder title. \
                  Begin the reply with a single line `TITLE: <title>` naming this \
                  call: specific, at most 8 words, in the output language, no \
                  quotes. Leave one empty line after it, then output the note; the \
-                 TITLE line is the only text allowed outside the note itself.\n",
+                 TITLE line is the only text allowed outside the note itself.",
             );
+            if calendar.is_some() {
+                rules.push_str(
+                    " If a matching calendar event was found, ignore the 8-word \
+                     guidance and use that event's name verbatim as the TITLE.",
+                );
+            }
+            rules.push('\n');
         }
     }
     rules
@@ -1032,6 +1052,38 @@ mod tests {
             assert!(p.contains("2026-08-29T14:03:00+02:00"));
             assert!(p.contains("about 31 minutes"), "1810s rounds up: {p}");
             assert!(p.contains("continue without it"));
+        }
+
+        /// Owner rule: a found calendar event's own name IS the note title,
+        /// verbatim -- never rephrased, translated or "improved". The
+        /// contract must say so in both prompt languages, and it beats the
+        /// 8-word composition guidance.
+        #[test]
+        fn a_found_calendar_event_names_the_note_verbatim() {
+            let calendar = CalendarContext {
+                start: "2026-08-29T14:03:00+02:00".to_string(),
+                duration_secs: Some(1810),
+            };
+            let english = build_prompt("Untitled", "", "[00:00:01] Me: hi", true, Some(&calendar));
+            assert!(english.contains("copied VERBATIM"), "{english}");
+            assert!(english.contains("ignore the 8-word guidance"), "{english}");
+
+            let cyrillic = build_prompt(
+                "Untitled",
+                "",
+                "[00:00:01] Me: Давайте выпустим новую версию в пятницу и проверим тесты",
+                true,
+                Some(&calendar),
+            );
+            assert!(cyrillic.contains("ДОСЛОВНО"), "{cyrillic}");
+            assert!(cyrillic.contains("название события дословно"), "{cyrillic}");
+
+            // Without the title contract the calendar paragraph alone still
+            // carries the verbatim rule, gated on "when requested".
+            let summary_only =
+                build_prompt("Untitled", "", "[00:00:01] Me: hi", false, Some(&calendar));
+            assert!(summary_only.contains("copied VERBATIM"), "{summary_only}");
+            assert!(!summary_only.contains("ignore the 8-word guidance"));
         }
     }
 

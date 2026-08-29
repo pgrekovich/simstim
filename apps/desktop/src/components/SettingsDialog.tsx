@@ -1295,7 +1295,7 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                   <Row
                     label="Use your calendar for context"
                     htmlFor="enhance-use-calendar"
-                    description="Claude Code may check your own calendar connectors for the meeting that overlapped the call and use its name and participants in the summary and title. Works with the Claude Code provider only; nothing else gains tool access."
+                    description="Claude Code may check your own calendar connectors for the meeting that overlapped the call and use its name and participants. A found event names the note with the event's own name, verbatim, when title renaming is on. Works with the Claude Code provider only; nothing else gains tool access."
                     error={useCalendarError}
                   >
                     <Checkbox

@@ -436,6 +436,17 @@ Follow-up (2026-08-29): the session title stays visible while viewing Notes,
 Summary, or Transcript. A finished session with empty Notes opens on Summary
 when a generated summary exists; otherwise it opens on Notes.
 
+## Stage 3.3: file-first configuration (implemented 2026-08-29)
+
+Every persisted setting is available in one human-readable TOML file at
+`$XDG_CONFIG_HOME/simstim/config.toml`, falling back to
+`~/.config/simstim/config.toml`. The Settings UI writes the same file rather
+than a separate store. Missing keys inherit safe defaults, `~/` is accepted
+for the output directory, and writes remain atomic. A syntax error is reported
+to UI setters instead of letting one toggle overwrite the hand-edited file.
+Manual edits take full effect after restart; the README is the complete field
+and value reference.
+
 ## Milestones after MVP-0
 
 1. Audio file kept next to the .md; re-transcribe command (whisper turbo).

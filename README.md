@@ -35,6 +35,45 @@ ASR models download inside the app on first run (Settings > Models), into
 
 [releases]: ../../releases/latest
 
+## Configuration
+
+The UI and `~/.config/simstim/config.toml` edit the same source of truth.
+`$XDG_CONFIG_HOME/simstim/config.toml` is used when `XDG_CONFIG_HOME` is set.
+The file is created with every setting on first launch. A partial file is also
+valid: omitted values use the defaults shown below. Restart simstim after a
+manual edit so startup-only settings such as Dock presence and call detection
+are reapplied.
+
+```toml
+output_dir = "~/Calls"
+active_model = "parakeet-tdt-0.6b-v3-int8"
+theme = "system" # system, light, dark
+show_in_dock = true
+
+keep_audio = true
+audio_format = "aac" # aac, flac
+retranscribe_model = "whisper-large-v3-turbo-q8"
+auto_retranscribe = false
+delete_audio_after_retranscribe = false
+
+enhance_provider = "local" # local, claude, codex
+auto_enhance = false
+enhance_rename_title = false
+enhance_use_calendar = false
+
+detect_calls = true
+auto_stop_after_call = false
+
+[enhance_models]
+# claude = "sonnet"
+# codex = "gpt-5.5"
+```
+
+`retranscribe_model` may also be `whisper-large-v3`. Model selection in the
+file does not download a model; downloads stay explicit in Settings > Models.
+`delete_audio_after_retranscribe = true` is irreversible after a successful
+pass.
+
 ## Why not Granola, Anarlog or Meetily
 
 [Granola](https://granola.ai) nailed the UX and this app borrows from it

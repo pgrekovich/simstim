@@ -423,20 +423,24 @@ fn allow_output_dir_in_asset_scope<R: tauri::Runtime>(
 /// (which always resolve to `config::config_path()`) -- so a test can
 /// exercise "changing the output dir persists it AND grants it on the live
 /// asset scope" without touching the developer's own
-/// `~/Library/Application Support/simstim/config.json`. The command wrapper
+/// `~/.config/simstim/config.toml`. The command wrapper
 /// below is the only real (non-test) caller, and always passes the real
 /// `config::config_path()`.
 ///
 /// Persists first, then grants the scope (matching the order the review
 /// asked for), though the two are independent enough that the order
-/// wouldn't itself change correctness: one writes JSON to disk, the other
+/// wouldn't itself change correctness: one writes TOML to disk, the other
 /// mutates an in-memory `Scope`.
 fn set_output_dir_at<R: tauri::Runtime>(
     app: &impl Manager<R>,
     config_path: &Path,
     path: String,
 ) -> Result<(), String> {
-    let mut cfg = Config::load_from(config_path);
+    let mut cfg = if config_path.exists() {
+        Config::try_load_toml(config_path).map_err(|e| e.to_string())?
+    } else {
+        Config::default()
+    };
     cfg.output_dir = PathBuf::from(path);
     cfg.save_to(config_path).map_err(|e| e.to_string())?;
     // Grants the new folder read access for playback immediately (Global
@@ -476,7 +480,7 @@ fn validate_active_model(id: &str) -> Result<(), String> {
 #[tauri::command]
 fn set_active_model(id: String) -> Result<(), String> {
     validate_active_model(&id)?;
-    let mut cfg = Config::load();
+    let mut cfg = Config::load_for_update().map_err(|e| e.to_string())?;
     cfg.active_model = id;
     cfg.save().map_err(|e| e.to_string())
 }
@@ -506,7 +510,7 @@ fn validate_retranscribe_model(id: &str) -> Result<(), String> {
 #[tauri::command]
 fn set_retranscribe_model(id: String) -> Result<(), String> {
     validate_retranscribe_model(&id)?;
-    let mut cfg = Config::load();
+    let mut cfg = Config::load_for_update().map_err(|e| e.to_string())?;
     cfg.retranscribe_model = id;
     cfg.save().map_err(|e| e.to_string())
 }
@@ -877,12 +881,12 @@ mod tests {
         /// `set_output_dir_at` (the command's actual logic) against a
         /// tempdir config path rather than the real `set_output_dir`
         /// command, which would otherwise clobber the developer's own
-        /// config.json (see `set_output_dir_at`'s doc comment).
+        /// config.toml (see `set_output_dir_at`'s doc comment).
         #[test]
         fn set_output_dir_allows_the_new_dir_on_the_live_asset_scope() {
             let app = tauri::test::mock_app();
             let config_dir = tempfile::tempdir().unwrap();
-            let config_path = config_dir.path().join("config.json");
+            let config_path = config_dir.path().join("config.toml");
             let new_dir = tempfile::tempdir().unwrap();
             let new_file = new_dir.path().join("2026-08-16 call.flac");
             std::fs::write(&new_file, b"x").unwrap();

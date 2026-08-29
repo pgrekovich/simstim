@@ -417,7 +417,7 @@ pub fn start(app: AppHandle, initial_enabled: bool) -> DetectHandle {
 
 #[tauri::command]
 pub fn set_detect_calls(enabled: bool, detector: State<DetectHandle>) -> Result<(), String> {
-    let mut cfg = Config::load();
+    let mut cfg = Config::load_for_update().map_err(|e| e.to_string())?;
     cfg.detect_calls = enabled;
     cfg.save().map_err(|error| error.to_string())?;
     detector.set_enabled(enabled);

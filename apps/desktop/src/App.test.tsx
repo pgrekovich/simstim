@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "@/App";
 import * as ipc from "@/lib/ipc";
@@ -28,6 +28,8 @@ vi.mock("@/lib/ipc", () => ({
     enhance_provider: "claude",
     enhance_models: {},
     auto_enhance: false,
+    enhance_rename_title: false,
+    enhance_use_calendar: false,
     detect_calls: true,
     auto_stop_after_call: false,
   }),
@@ -133,6 +135,8 @@ beforeEach(() => {
     enhance_provider: "claude",
     enhance_models: {},
     auto_enhance: false,
+    enhance_rename_title: false,
+    enhance_use_calendar: false,
     detect_calls: true,
     auto_stop_after_call: false,
   });
@@ -248,6 +252,8 @@ describe("App: call detection via the banner window (stage 1.1)", () => {
       enhance_provider: "claude",
     enhance_models: {},
     auto_enhance: false,
+    enhance_rename_title: false,
+    enhance_use_calendar: false,
       detect_calls: true,
       auto_stop_after_call: true,
     });
@@ -278,6 +284,8 @@ describe("App: call detection via the banner window (stage 1.1)", () => {
       enhance_provider: "claude",
     enhance_models: {},
     auto_enhance: false,
+    enhance_rename_title: false,
+    enhance_use_calendar: false,
       detect_calls: true,
       auto_stop_after_call: true,
     });
@@ -1377,12 +1385,12 @@ describe("App: note actions menu (stage 0.10)", () => {
   });
 });
 
-describe("App: background auto-enhance completion (stage 0.11)", () => {
+describe("App: enhance progress (stage 0.11)", () => {
   const one: SessionMeta[] = [
     { path: "/tmp/sync.md", title: "Weekly sync", date: new Date().toISOString(), duration_secs: null },
   ];
 
-  it("refreshes the open note when its background enhance lands", async () => {
+  it("refreshes the open note when its enhance lands", async () => {
     vi.mocked(ipc.listSessions).mockResolvedValue(one);
     vi.mocked(ipc.readSession).mockResolvedValue({
       title: "Weekly sync", date: "", notes: "", transcript: "[00:00:01] Me: hi",
@@ -1397,7 +1405,7 @@ describe("App: background auto-enhance completion (stage 0.11)", () => {
       title: "Weekly sync", date: "", notes: "", transcript: "[00:00:01] Me: hi",
       audio_path: null, summary: "- fresh auto summary", summary_model: "claude",
     });
-    emit("enhance-done", { path: "/tmp/sync.md", ok: true, message: null });
+    emit("enhance-progress", { path: "/tmp/sync.md", phase: "done", provider: "claude", message: null });
 
     await waitFor(() =>
       expect(document.body.textContent).toContain("- fresh auto summary"),
@@ -1405,14 +1413,71 @@ describe("App: background auto-enhance completion (stage 0.11)", () => {
     expect(document.body.textContent).toContain("by claude");
   });
 
-  it("surfaces a background enhance failure through the global error notice", async () => {
+  it("shows a summarizing row in the sidebar while an enhance runs, for any session", async () => {
+    vi.mocked(ipc.listSessions).mockResolvedValue(one);
+    render(<App />);
+    const row = await screen.findByRole("button", { name: /weekly sync/i });
+
+    emit("enhance-progress", { path: "/tmp/sync.md", phase: "running", provider: "local", message: null });
+    await waitFor(() => expect(row.textContent).toContain("summarizing"));
+    expect(within(row).getByTestId("working-dot")).toBeInTheDocument();
+
+    emit("enhance-progress", { path: "/tmp/sync.md", phase: "done", provider: "local", message: null });
+    await waitFor(() => expect(row.textContent).not.toContain("summarizing"));
+  });
+
+  it("offers Re-enhance in the overflow menu and runs it for the open note", async () => {
+    vi.mocked(ipc.listSessions).mockResolvedValue(one);
+    vi.mocked(ipc.readSession).mockResolvedValue({
+      title: "Weekly sync", date: "", notes: "", transcript: "[00:00:01] Me: hi",
+      audio_path: null, summary: "- old summary", summary_model: "claude",
+    });
+    vi.mocked(ipc.enhanceSession).mockClear().mockResolvedValue("- new");
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /weekly sync/i }));
+    await waitFor(() => expect(document.body.textContent).toContain("- old summary"));
+
+    const trigger = screen.getByRole("button", { name: /more actions/i });
+    fireEvent.pointerDown(trigger);
+    fireEvent.click(trigger);
+    const item = await screen.findByRole("menuitem", { name: /re-enhance/i });
+    fireEvent.click(item);
+
+    await waitFor(() =>
+      expect(ipc.enhanceSession).toHaveBeenCalledExactlyOnceWith("/tmp/sync.md"),
+    );
+  });
+
+  it("disables the overflow enhance item while a job is already running", async () => {
+    vi.mocked(ipc.listSessions).mockResolvedValue(one);
+    vi.mocked(ipc.readSession).mockResolvedValue({
+      title: "Weekly sync", date: "", notes: "", transcript: "[00:00:01] Me: hi",
+      audio_path: null, summary: "", summary_model: null,
+    });
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /weekly sync/i }));
+    await waitFor(() => expect(document.body.textContent).toContain("hi"));
+
+    emit("enhance-progress", { path: "/tmp/sync.md", phase: "running", provider: "local", message: null });
+
+    const trigger = screen.getByRole("button", { name: /more actions/i });
+    fireEvent.pointerDown(trigger);
+    fireEvent.click(trigger);
+    const item = await screen.findByRole("menuitem", { name: /summarizing/i });
+    expect(item).toHaveAttribute("aria-disabled", "true");
+  });
+
+  it("surfaces an enhance failure through the global error notice", async () => {
     vi.mocked(ipc.listSessions).mockResolvedValue(one);
     render(<App />);
     await screen.findByRole("button", { name: /weekly sync/i });
 
-    emit("enhance-done", {
+    emit("enhance-progress", {
       path: "/tmp/sync.md",
-      ok: false,
+      phase: "error",
+      provider: "claude",
       message: "Claude Code took longer than 5 minutes and was stopped",
     });
     const alert = await screen.findByRole("alert");

@@ -97,7 +97,7 @@ Two models are offered in Settings > Models:
   ~2.5 minutes.
 * **Whisper large-v3** (3.1 GB): strongest on non-English, slower.
 
-Two opt-in settings in Settings > Output: re-transcribe automatically after
+Two opt-in settings in Settings > Models (Re-transcribe group): re-transcribe automatically after
 every stop, and delete the audio once a re-transcribe succeeds (irreversible:
 without audio a call can never be re-transcribed again). Jobs queue FIFO;
 a second request never gets rejected, it waits its turn.

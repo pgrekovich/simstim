@@ -59,6 +59,15 @@ interface SessionViewProps {
    * `RetranscribeJob`'s own doc comment for the full rationale.
    */
   retranscribingJob: RetranscribeJob;
+  /**
+   * Whether an enhance is currently running for THIS path -- owned by App
+   * (its `enhance-progress` listener), for exactly the reason
+   * `retranscribingJob` is: the backend job survives this component's
+   * remount, so a local boolean would silently re-enable the control
+   * mid-job. Drives the toolbar "Summarizing..." chip and disables Enhance
+   * and re-run. Optional so tests exercising unrelated behavior can omit it.
+   */
+  enhanceRunning?: boolean;
   /** Notifies the caller after a title save resolves, so it can refresh the sidebar. */
   onTitleChange?: () => void;
   /**
@@ -203,6 +212,7 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
     interimMe,
     interimThem,
     retranscribingJob,
+    enhanceRunning = false,
     onTitleChange,
     onSaveError,
     onActiveEdit,
@@ -227,13 +237,16 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
   // App-driven `reloadTick` remount after a background job) re-seeds it fresh
   // from a real `read_session` disk read.
   const [transcript, setTranscript] = useState(initialData.transcript);
-  // Seeded once like title/notes/transcript above, refreshed from a disk
-  // re-read after a successful enhance (same pattern handleRetranscribe
-  // uses for the transcript).
-  const [summary, setSummary] = useState(initialData.summary);
-  const [summaryModel, setSummaryModel] = useState(initialData.summary_model);
-  const [enhancing, setEnhancing] = useState(false);
-  const [enhanceError, setEnhanceError] = useState<string | null>(null);
+  // Read straight from the mount's initialData: when an enhance finishes,
+  // App refetches the session and remounts this component under a bumped
+  // `reloadTick` key (its `enhance-progress` listener), so there is no
+  // in-place refresh to track here anymore.
+  const summary = initialData.summary;
+  const summaryModel = initialData.summary_model;
+  // Local-only optimistic flag for Enhance, same shape as `clicking` below:
+  // covers the instants before the backend's `enhance-progress` "running"
+  // event lands and flips the `enhanceRunning` prop.
+  const [enhanceClicking, setEnhanceClicking] = useState(false);
   // Local-only optimistic flag: disables the button the instant it's
   // clicked, before the backend's first `retranscribe-progress` event has
   // had a chance to land and update `retranscribingJob` (a window of at
@@ -509,26 +522,23 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
   }
 
   // Enhance (stage 0.11): the user's rough notes lead, the transcript backs
-  // them, and the configured AI CLI writes the result into `## Summary`.
+  // them, and the configured provider writes the result into `## Summary`.
   // Flushes pending edits FIRST so what the model reads from disk is what's
-  // on screen, then re-reads the file afterward so the summary shown is
-  // exactly what landed on disk.
+  // on screen. Progress, the refreshed summary and any failure all flow
+  // through the backend's `enhance-progress` events (App's listener), which
+  // this command also emits for its own run -- so the rejection here is
+  // deliberately not shown a second time.
   async function handleEnhance() {
-    if (isActive || enhancing) return;
-    setEnhancing(true);
-    setEnhanceError(null);
+    if (isActive || enhanceBusy) return;
+    setEnhanceClicking(true);
     try {
       await commitNotes();
       await commitTitle();
       await enhanceSession(path);
-      const data = await readSession(path);
-      setSummary(data.summary);
-      setSummaryModel(data.summary_model);
     } catch (err) {
       console.error("failed to enhance session", err);
-      setEnhanceError(String(err));
     } finally {
-      setEnhancing(false);
+      setEnhanceClicking(false);
     }
   }
 
@@ -623,6 +633,10 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
   }
   const audioPath = initialData.audio_path;
   const retranscribeBusy = clicking || jobRunningHere;
+  const enhanceBusy = enhanceClicking || enhanceRunning;
+  // Enhance needs a finished transcript to read: never during recording,
+  // never on a transcript-less note (the backend rejects both anyway).
+  const canEnhance = !isActive && transcriptLines.length > 0;
   const retranscribeStatusText = jobRunningHere
     ? retranscribingJob!.text
     : clicking
@@ -710,6 +724,34 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
     </div>
   ) : null;
 
+  // The Enhance affordance lives next to the tab switcher in the toolbar
+  // (the note's one command strip), not at the bottom of the notes pane: a
+  // compact bordered pill in the design language (mono label, ochre AI
+  // mark). While a job runs -- started here, from re-run, or automatically
+  // -- the same slot shows the indeterminate work chip, so processing is
+  // visible from every tab. Once a summary exists the pill retires; re-runs
+  // live in the Summary tab's provenance line.
+  const enhanceControl = enhanceBusy ? (
+    <span
+      data-testid="enhance-working"
+      className="ml-3 inline-flex h-[30px] shrink-0 items-center gap-2 rounded-full border border-input bg-foreground/[0.04] px-[15px] font-mono text-[11px] font-medium tracking-[0.04em] text-muted-foreground"
+    >
+      <span aria-hidden="true" className="working-spinner size-3.5" />
+      Summarizing...
+    </span>
+  ) : canEnhance && !summary ? (
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      className="ml-3 h-[30px] shrink-0 gap-[7px] rounded-full px-[14px] font-mono text-[11px] font-medium tracking-[0.04em]"
+      onClick={handleEnhance}
+    >
+      <Sparkles className="size-3.5 text-[var(--voice-remote)]" />
+      Enhance
+    </Button>
+  ) : null;
+
   const tabList = (
     <TabsList ref={tabListRef} className="h-[34px] shrink-0 gap-[3px] rounded-full bg-foreground/[0.06] p-[3px] dark:bg-foreground/[0.07]">
       <TabsTrigger
@@ -750,9 +792,12 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
         }}
         className="min-h-0 flex-1 gap-0"
       >
-        {toolbarSlot ? createPortal(tabList, toolbarSlot) : (
+        {toolbarSlot ? createPortal(<>{tabList}{enhanceControl}</>, toolbarSlot) : (
           <div className="flex h-11 shrink-0 items-center justify-between gap-3">
-            {tabList}
+            <div className="flex min-w-0 items-center">
+              {tabList}
+              {enhanceControl}
+            </div>
             {findControls}
           </div>
         )}
@@ -775,27 +820,6 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
             )}
           />
 
-          {enhanceError && (
-            <p className="shrink-0 text-sm text-destructive">{enhanceError}</p>
-          )}
-
-          <div className="flex shrink-0 items-center gap-2 px-6 pb-1">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              disabled={isActive || enhancing || transcriptLines.length === 0}
-              onClick={handleEnhance}
-            >
-              <Sparkles className="size-3.5" />
-              {enhancing ? "Enhancing..." : summary ? "Re-enhance" : "Enhance"}
-            </Button>
-            {enhancing && (
-              <span className="font-mono text-[10.5px] text-muted-foreground">
-                sending notes and transcript to your AI CLI...
-              </span>
-            )}
-          </div>
         </TabsContent>
 
         {summary && (
@@ -808,6 +832,22 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
               {summaryModel && (
                 <p className="mb-4 font-mono text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
                   by {summaryModel}
+                  {canEnhance && (
+                    <>
+                      {" · "}
+                      {/* The regenerate affordance is plain text in the
+                          provenance line (design 3b): quiet, next to what it
+                          replaces. The toolbar chip shows the running state. */}
+                      <button
+                        type="button"
+                        disabled={enhanceBusy}
+                        onClick={handleEnhance}
+                        className="font-mono uppercase tracking-[0.08em] underline-offset-2 hover:text-foreground hover:underline disabled:pointer-events-none disabled:opacity-50"
+                      >
+                        {enhanceBusy ? "summarizing..." : "re-run"}
+                      </button>
+                    </>
+                  )}
                 </p>
               )}
               <div className="whitespace-pre-wrap font-serif text-[14.5px] leading-[1.65] text-card-foreground">

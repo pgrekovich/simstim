@@ -22,6 +22,11 @@ struct Request<'a> {
     notes: &'a str,
     transcript: &'a str,
     full_prompt: &'a str,
+    /// Whether the reply should lead with a `TITLE: ...` line (the opt-in
+    /// note retitling). The direct path's `full_prompt` already carries the
+    /// instruction; the worker needs this flag for its own map/reduce
+    /// prompts on long calls.
+    propose_title: bool,
 }
 
 #[derive(Deserialize)]
@@ -30,12 +35,25 @@ struct Response {
     error: Option<String>,
 }
 
+/// Kills and reaps the worker when dropped: an early error return (stdin
+/// write failing because the worker died during model load, a `try_wait`
+/// error) must not leak a zombie until app exit (review finding).
+struct ChildGuard(std::process::Child);
+
+impl Drop for ChildGuard {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
 pub fn summarize(
     model_path: &Path,
     title: &str,
     notes: &str,
     transcript: &str,
     full_prompt: &str,
+    propose_title: bool,
 ) -> Result<String, String> {
     let worker = worker_path()?;
     let request = serde_json::to_vec(&Request {
@@ -44,24 +62,28 @@ pub fn summarize(
         notes,
         transcript,
         full_prompt,
+        propose_title,
     })
     .map_err(|e| format!("couldn't prepare the local summary: {e}"))?;
 
-    let mut child = Command::new(&worker)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("couldn't start the bundled local AI: {e}"))?;
+    let mut child = ChildGuard(
+        Command::new(&worker)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("couldn't start the bundled local AI: {e}"))?,
+    );
     child
+        .0
         .stdin
         .take()
         .expect("stdin was piped")
         .write_all(&request)
         .map_err(|e| format!("couldn't send the note to local AI: {e}"))?;
 
-    let stdout = child.stdout.take().expect("stdout was piped");
-    let stderr = child.stderr.take().expect("stderr was piped");
+    let stdout = child.0.stdout.take().expect("stdout was piped");
+    let stderr = child.0.stderr.take().expect("stderr was piped");
     let reader = std::thread::spawn(move || {
         use std::io::Read;
         let mut out = Vec::new();
@@ -73,11 +95,10 @@ pub fn summarize(
 
     let deadline = Instant::now() + WORKER_TIMEOUT;
     let status = loop {
-        match child.try_wait().map_err(|e| e.to_string())? {
+        match child.0.try_wait().map_err(|e| e.to_string())? {
             Some(status) => break status,
             None if Instant::now() >= deadline => {
-                let _ = child.kill();
-                let _ = child.wait();
+                // The guard's drop kills and reaps.
                 return Err("local summary took longer than 5 minutes and was stopped".to_string());
             }
             None => std::thread::sleep(Duration::from_millis(100)),

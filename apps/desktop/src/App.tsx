@@ -10,6 +10,7 @@ import {
   PanelLeftOpen,
   Search,
   Settings,
+  Sparkles,
   SquarePen,
   X,
 } from "lucide-react";
@@ -34,6 +35,7 @@ import { SettingsDialog } from "@/components/SettingsDialog";
 import {
   createSession,
   deleteSession,
+  enhanceSession,
   getConfig,
   listSessions,
   readSession,
@@ -43,7 +45,7 @@ import {
   type AppConfig,
   type CallDetectedPayload,
   type CallEndedPayload,
-  type EnhanceDonePayload,
+  type EnhanceProgress,
   type ModelInfo,
   type RetranscribeProgress,
   type SessionData,
@@ -171,6 +173,14 @@ function App() {
   // See `RetranscribeJob`'s doc comment: survives a SessionView remount,
   // unlike a local boolean would.
   const [retranscribingJob, setRetranscribingJob] = useState<RetranscribeJob>(null);
+  // Which session (if any) an enhance is currently running for -- the same
+  // lifted-out-of-SessionView treatment `retranscribingJob` got: the backend
+  // runs at most one enhance app-wide (`enhance.rs`'s EnhanceState), a job
+  // can outlive the initiating SessionView instance (switching sessions
+  // remounts it under a fresh key), and the sidebar needs it for every
+  // session, not just the open one. Owned by the `enhance-progress`
+  // listener below.
+  const [enhancingPath, setEnhancingPath] = useState<string | null>(null);
   // Paths with a MANUALLY-initiated re-transcribe currently in flight
   // (review fix, Task 2): SessionView calls `handleManualRetranscribeStart`
   // the instant its own click handler starts the job, before awaiting
@@ -636,17 +646,43 @@ function App() {
     };
   }, [selectedPath, activePath]);
 
-  // A background (auto) enhance finished (stage 0.11): refresh the open
-  // note so the new summary appears without a manual switch-away-and-back,
-  // and surface failures through the global error notice -- an auto job has no
-  // awaiting promise to reject.
+  // Owns `enhancingPath` (see its doc comment). Every enhance -- manual or
+  // auto -- reports through this one event stream (`enhance.rs` emits
+  // `running` once the slot is claimed and exactly one terminal
+  // `done`/`error`), so this is the single place the UI learns about
+  // summarizing work: the toolbar chip and the sidebar spinner derive from
+  // `enhancingPath`, failures surface through the global error notice, and
+  // a finished job refetches the open note so the new summary (and a
+  // model-proposed title) appear without a manual switch-away-and-back.
   useEffect(() => {
-    const unlisten = listen<EnhanceDonePayload>("enhance-done", (event) => {
-      const { path, ok, message } = event.payload;
-      if (!ok) {
-        setStatus({ kind: "error", message: message ?? "enhance failed" });
+    const unlisten = listen<EnhanceProgress>("enhance-progress", (event) => {
+      const { path, phase, message } = event.payload;
+      if (phase === "running") {
+        setEnhancingPath(path);
         return;
       }
+      setEnhancingPath((prev) => (prev === path ? null : prev));
+      if (phase === "error") {
+        const errorMessage = message ?? "enhance failed";
+        setStatus((prev) => {
+          if (prev.kind === "recording") {
+            // Same stash-instead-of-drop treatment the re-transcribe
+            // listener above gives a background failure landing while the
+            // header shows a live recording -- see `suppressedAutoErrorRef`.
+            suppressedAutoErrorRef.current = errorMessage;
+            return prev;
+          }
+          return { kind: "error", message: errorMessage };
+        });
+        return;
+      }
+      // "done": refetch and remount the open note (same recipe as the
+      // re-transcribe listener above -- await the read, THEN bump the tick).
+      // Unconditional even for a manually initiated job: the initiating
+      // SessionView instance may have been unmounted mid-job, and a remount
+      // with the same fresh data is harmless when it wasn't. The sidebar
+      // list refreshes too: an enhance can retitle an auto-named note.
+      void refreshSessions();
       if (path === selectedPath && path !== activePath) {
         readSession(path)
           .then((data) => {
@@ -659,7 +695,7 @@ function App() {
     return () => {
       unlisten.then((f) => f());
     };
-  }, [selectedPath, activePath]);
+  }, [selectedPath, activePath, refreshSessions]);
 
   function clearLoadingFallback() {
     if (loadingFallbackRef.current !== null) {
@@ -904,6 +940,24 @@ function App() {
     }
   }
 
+  // The overflow menu's Enhance / Re-enhance (owner request: while testing
+  // summary models the re-run must be one obvious click away, not a quiet
+  // provenance-line link). Same recipe as SessionView's handleEnhance:
+  // flush pending edits FIRST so the model reads what's on screen, then let
+  // the enhance-progress event stream drive every visible consequence (the
+  // chip, the sidebar spinner, the toast on failure, the refetch on done).
+  async function handleEnhanceSelected() {
+    if (selectedPath === null || selectedPath === activePath || enhancingPath !== null) return;
+    try {
+      await activeSessionViewRef.current?.flushPendingEdits();
+      await enhanceSession(selectedPath);
+    } catch (err) {
+      // Already surfaced through the enhance-progress "error" event; the
+      // rejection here would only duplicate that toast.
+      console.error("failed to enhance session", err);
+    }
+  }
+
   async function handleNewSession() {
     if (busy) return;
     setBusy(true);
@@ -941,6 +995,13 @@ function App() {
   // hides the topbar entirely. A lone Record button floating over the
   // shortcut menu reads as clutter, so its branch renders a bare drag strip.
   const showTopbar = sessionActive || selectedPath !== null;
+  // Sidebar rows with machine work in flight, path -> the lowercase status
+  // word shown under the title (design language: quiet mono status).
+  // Enhance is written first so a same-path overlap shows the newer
+  // re-transcribe instead.
+  const busyPaths: Record<string, string> = {};
+  if (enhancingPath !== null) busyPaths[enhancingPath] = "summarizing";
+  if (retranscribingJob) busyPaths[retranscribingJob.path] = "transcribing";
   const statusText = status.kind === "loading-model"
     ? "loading model"
     : status.kind === "recording"
@@ -957,6 +1018,7 @@ function App() {
         sessions={sessions}
         selectedPath={selectedPath}
         activePath={activePath}
+        busyPaths={busyPaths}
         onSelect={(path) => {
           setSelectedPath(path);
         }}
@@ -1051,6 +1113,22 @@ function App() {
             <DropdownMenuContent align="end">
               {selectedPath !== null && (
                 <>
+                  <DropdownMenuItem
+                    disabled={
+                      viewingActiveSession ||
+                      enhancingPath !== null ||
+                      sessionData === null ||
+                      sessionData.transcript.trim().length === 0
+                    }
+                    onSelect={() => void handleEnhanceSelected()}
+                  >
+                    <Sparkles />
+                    {enhancingPath !== null
+                      ? "Summarizing..."
+                      : sessionData?.summary
+                        ? "Re-enhance"
+                        : "Enhance"}
+                  </DropdownMenuItem>
                   <DropdownMenuItem onSelect={() => void openPath(selectedPath)}>
                     <FileText />
                     Open file
@@ -1126,6 +1204,7 @@ function App() {
               interimMe={interimMe}
               interimThem={interimThem}
               retranscribingJob={retranscribingJob}
+              enhanceRunning={enhancingPath === selectedPath}
               onTitleChange={refreshSessions}
               onSaveError={(message) => setStatus({ kind: "error", message })}
               onActiveEdit={(title, notes) => {
@@ -1169,6 +1248,7 @@ function App() {
               interimMe={interimMe}
               interimThem={interimThem}
               retranscribingJob={retranscribingJob}
+              enhanceRunning={enhancingPath === selectedPath}
               onTitleChange={refreshSessions}
               onSaveError={(message) => setStatus({ kind: "error", message })}
               onRetranscribeStart={handleManualRetranscribeStart}

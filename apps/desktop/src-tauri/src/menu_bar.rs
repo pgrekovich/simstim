@@ -157,15 +157,25 @@ impl MenuBar {
     }
 
     fn tick_timer(&self, generation: u64) -> bool {
-        let state = self.presentation.lock().unwrap();
-        let Some(recording) = &state.recording else {
-            return false;
+        // Copy what the tick needs and drop the lock BEFORE touching the
+        // tray: `set_title` from a non-main thread enqueues onto the main
+        // thread and blocks until it runs, while the tray menu handler runs
+        // ON the main thread and takes this same mutex (`is_recording` for
+        // the NOTE_ID arm). Holding the lock across that dispatch let an
+        // "Add Note" click landing inside a tick deadlock the whole app
+        // mid-recording (review finding).
+        let started_at = {
+            let state = self.presentation.lock().unwrap();
+            let Some(recording) = &state.recording else {
+                return false;
+            };
+            if recording.generation != generation {
+                return false;
+            }
+            recording.started_at
         };
-        if recording.generation != generation {
-            return false;
-        }
         if let Some(tray) = self.app.tray_by_id(TRAY_ID) {
-            let _ = tray.set_title(Some(format_elapsed(recording.started_at.elapsed())));
+            let _ = tray.set_title(Some(format_elapsed(started_at.elapsed())));
         }
         true
     }

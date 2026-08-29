@@ -22,6 +22,8 @@ vi.mock("@/lib/ipc", () => ({
   setEnhanceProvider: vi.fn().mockResolvedValue(undefined),
   setEnhanceModel: vi.fn().mockResolvedValue(undefined),
   setAutoEnhance: vi.fn().mockResolvedValue(undefined),
+  setEnhanceRenameTitle: vi.fn().mockResolvedValue(undefined),
+  setEnhanceUseCalendar: vi.fn().mockResolvedValue(undefined),
   listEnhanceProviders: vi.fn().mockResolvedValue([
     { id: "local", name: "Local · Qwen3.5 9B", available: false, version: null },
     { id: "claude", name: "Claude Code", available: true, version: "2.0.0 (Claude Code)" },
@@ -51,6 +53,8 @@ const baseConfig: AppConfig = {
   enhance_provider: "claude",
   enhance_models: {},
   auto_enhance: false,
+  enhance_rename_title: false,
+  enhance_use_calendar: false,
   detect_calls: true,
   auto_stop_after_call: false,
 };
@@ -626,20 +630,20 @@ describe("SettingsDialog: model manager (stage 0.8 Task 2)", () => {
     expect(screen.queryByText(/selected model is not downloaded/i)).not.toBeInTheDocument();
   });
 
-  it("shows total disk used near each group heading, labeled with its own scope", async () => {
+  it("shows total disk used near each group heading, scoped to that group", async () => {
     vi.mocked(ipc.listModels).mockResolvedValue([parakeet, whisperQ8, whisperLargeV3NotDownloaded]);
 
     render(<SettingsDialog open onOpenChange={() => {}} />);
 
-    // "Live model", not "Recording": that word now names both a nav-rail
-    // item and a settings section.
-    await screen.findByRole("heading", { name: "Live model" });
-    // Recording: only parakeet, 487_000_000 bytes -> 487 MB.
+    // Live transcription: only parakeet, 487_000_000 bytes -> 487 MB.
     // Re-transcribe: only whisperQ8 is downloaded, 874_188_075 bytes -> 874 MB
-    // (the not-downloaded large-v3 contributes nothing). Each total names its
-    // own group so neither reads as a whole-app total.
-    await screen.findByText(/recording models: 487 mb on disk/i);
-    await screen.findByText(/re-transcribe models: 874 mb on disk/i);
+    // (the not-downloaded large-v3 contributes nothing). Each total sits in
+    // its own group's heading row so neither reads as a whole-app total.
+    const liveHeading = await screen.findByRole("heading", { name: "Live transcription" });
+    expect(within(liveHeading.parentElement!).getByText("487 MB on disk")).toBeInTheDocument();
+
+    const retranscribeHeading = screen.getByRole("heading", { name: "Re-transcribe" });
+    expect(within(retranscribeHeading.parentElement!).getByText("874 MB on disk")).toBeInTheDocument();
   });
 
   it("disarms an armed delete confirmation when the dialog closes and reopens", async () => {
@@ -674,16 +678,36 @@ describe("SettingsDialog: model manager (stage 0.8 Task 2)", () => {
 });
 
 describe("SettingsDialog: AI enhance provider (stage 0.11)", () => {
-  async function openAiSection() {
+  // The summary provider rows live on the merged Models page now: the local
+  // row is Qwen's own model-manager row (download/progress/delete inline)
+  // with its selection radio, so picking and downloading never span tabs.
+  const qwen: ModelInfo = {
+    id: "qwen3.5-9b-q4-k-m",
+    name: "Qwen3.5 9B",
+    tagline: "private summaries, needs 16 GB",
+    size_mb: 5680,
+    downloaded: false,
+    active: false,
+    role: "summary",
+    size_on_disk_bytes: null,
+    retired: false,
+  };
+  const qwenDownloaded: ModelInfo = {
+    ...qwen,
+    downloaded: true,
+    size_on_disk_bytes: 5_680_000_000,
+  };
+
+  async function openModelsSection() {
     render(<SettingsDialog open onOpenChange={() => {}} />);
-    fireEvent.click(await screen.findByRole("button", { name: /^summary$/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /^models$/i }));
   }
 
   it("lists probed providers with availability and picks one via the radio", async () => {
-    await openAiSection();
+    vi.mocked(ipc.listModels).mockResolvedValue([qwen]);
+    await openModelsSection();
 
     await screen.findByText("2.0.0 (Claude Code)");
-    expect(screen.getByText(/download Qwen3.5 9B in Models/i)).toBeInTheDocument();
     expect(screen.getByText(/not installed \(no `codex` CLI found\)/i)).toBeInTheDocument();
 
     const claudeRadio = screen.getByRole("radio", { name: "Claude Code" });
@@ -692,13 +716,41 @@ describe("SettingsDialog: AI enhance provider (stage 0.11)", () => {
     expect(codexRadio).toBeDisabled();
   });
 
+  it("renders the local row as one merged download-and-select row", async () => {
+    vi.mocked(ipc.listModels).mockResolvedValue([qwen]);
+    await openModelsSection();
+
+    // Not downloaded: the row offers Download right here (no pointer to a
+    // different tab) and its selection radio is disabled until it is ready.
+    const row = (await screen.findByText("Local · Qwen3.5 9B")).closest("li")!;
+    expect(within(row).getByRole("button", { name: /download/i })).toBeInTheDocument();
+    expect(within(row).getByRole("radio", { name: "Local · Qwen3.5 9B" })).toBeDisabled();
+    expect(within(row).getByText("5.68 GB")).toBeInTheDocument();
+  });
+
+  it("offers delete and an enabled radio once the local model is downloaded", async () => {
+    vi.mocked(ipc.listModels).mockResolvedValue([qwenDownloaded]);
+    vi.mocked(ipc.listEnhanceProviders).mockResolvedValue([
+      { id: "local", name: "Local · Qwen3.5 9B", available: true, version: "on-device · Metal" },
+      { id: "claude", name: "Claude Code", available: true, version: "2.0.0" },
+      { id: "codex", name: "Codex", available: false, version: null },
+    ]);
+    await openModelsSection();
+
+    const row = (await screen.findByText("Local · Qwen3.5 9B")).closest("li")!;
+    expect(within(row).queryByRole("button", { name: /download/i })).not.toBeInTheDocument();
+    expect(within(row).getByRole("button", { name: /delete qwen3.5 9b/i })).toBeInTheDocument();
+    expect(within(row).getByRole("radio", { name: "Local · Qwen3.5 9B" })).not.toBeDisabled();
+  });
+
   it("persists a provider switch", async () => {
+    vi.mocked(ipc.listModels).mockResolvedValue([qwenDownloaded]);
     vi.mocked(ipc.listEnhanceProviders).mockResolvedValue([
       { id: "local", name: "Local · Qwen3.5 9B", available: true, version: "on-device · Metal" },
       { id: "claude", name: "Claude Code", available: true, version: "2.0.0" },
       { id: "codex", name: "Codex", available: true, version: "codex-cli 0.149.0" },
     ]);
-    await openAiSection();
+    await openModelsSection();
 
     const codexRadio = await screen.findByRole("radio", { name: "Codex" });
     fireEvent.click(codexRadio);
@@ -710,11 +762,12 @@ describe("SettingsDialog: AI enhance provider (stage 0.11)", () => {
 
   it("offers the downloaded local provider without a model override menu", async () => {
     vi.mocked(ipc.getConfig).mockResolvedValue({ ...baseConfig, enhance_provider: "local" });
+    vi.mocked(ipc.listModels).mockResolvedValue([qwenDownloaded]);
     vi.mocked(ipc.listEnhanceProviders).mockResolvedValue([
       { id: "local", name: "Local · Qwen3.5 9B", available: true, version: "on-device · Metal" },
       { id: "claude", name: "Claude Code", available: true, version: "2.0.0" },
     ]);
-    await openAiSection();
+    await openModelsSection();
 
     expect(await screen.findByRole("radio", { name: "Local · Qwen3.5 9B" })).toBeChecked();
     expect(screen.queryByRole("combobox", { name: /local.*model/i })).not.toBeInTheDocument();
@@ -724,7 +777,7 @@ describe("SettingsDialog: AI enhance provider (stage 0.11)", () => {
 describe("SettingsDialog: enhance model override (stage 0.11)", () => {
   it("persists a model pick and clears it back to Default", async () => {
     render(<SettingsDialog open onOpenChange={() => {}} />);
-    fireEvent.click(await screen.findByRole("button", { name: /^summary$/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /^models$/i }));
 
     const select = await screen.findByRole("combobox", { name: /claude code model/i });
     fireEvent.change(select, { target: { value: "fable" } });
@@ -734,5 +787,89 @@ describe("SettingsDialog: enhance model override (stage 0.11)", () => {
 
     fireEvent.change(select, { target: { value: "" } });
     await waitFor(() => expect(ipc.setEnhanceModel).toHaveBeenLastCalledWith("claude", ""));
+  });
+});
+
+describe("SettingsDialog: model titles and calendar context", () => {
+  it("persists the title-renaming opt-in", async () => {
+    render(<SettingsDialog open onOpenChange={() => {}} />);
+
+    const toggle = await screen.findByRole("checkbox", { name: /let it title notes/i });
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    fireEvent.click(toggle);
+
+    await waitFor(() => expect(ipc.setEnhanceRenameTitle).toHaveBeenCalledWith(true));
+    expect(toggle).toHaveAttribute("aria-checked", "true");
+    // The copy must state the rule-6 boundary plainly.
+    await screen.findByText(/titles you typed yourself are never touched/i);
+  });
+
+  it("offers calendar context for both cloud providers", async () => {
+    render(<SettingsDialog open onOpenChange={() => {}} />);
+
+    // baseConfig selects claude: the toggle is live and persists.
+    const toggle = await screen.findByRole("checkbox", { name: /use your calendar for context/i });
+    expect(toggle).not.toBeDisabled();
+    fireEvent.click(toggle);
+    await waitFor(() => expect(ipc.setEnhanceUseCalendar).toHaveBeenCalledWith(true));
+  });
+
+  it("keeps the calendar toggle live for codex (the lookup runs via the claude CLI)", async () => {
+    vi.mocked(ipc.getConfig).mockResolvedValue({ ...baseConfig, enhance_provider: "codex" });
+    render(<SettingsDialog open onOpenChange={() => {}} />);
+
+    const toggle = await screen.findByRole("checkbox", { name: /use your calendar for context/i });
+    expect(toggle).not.toBeDisabled();
+  });
+
+  it("disables the calendar toggle for the local provider: local means no cloud call", async () => {
+    vi.mocked(ipc.getConfig).mockResolvedValue({ ...baseConfig, enhance_provider: "local" });
+    render(<SettingsDialog open onOpenChange={() => {}} />);
+
+    const toggle = await screen.findByRole("checkbox", { name: /use your calendar for context/i });
+    expect(toggle).toBeDisabled();
+  });
+});
+
+describe("SettingsDialog: two-page navigation (settings reorg)", () => {
+  it("offers exactly General and Models in the nav, with call detection and audio on General", async () => {
+    render(<SettingsDialog open onOpenChange={() => {}} />);
+
+    await screen.findByRole("button", { name: /^general$/i });
+    screen.getByRole("button", { name: /^models$/i });
+    expect(screen.queryByRole("button", { name: /^audio$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^summary$/i })).not.toBeInTheDocument();
+
+    // Call detection and call audio both render inside the General section
+    // (all sections stay mounted; visibility is CSS-only).
+    const general = document.getElementById("settings-general")!;
+    expect(
+      within(general).getByRole("checkbox", { name: /offer to record when a call starts/i }),
+    ).toBeInTheDocument();
+    expect(
+      within(general).getByRole("checkbox", { name: /keep call audio/i }),
+    ).toBeInTheDocument();
+  });
+
+  it("keeps Models a pure download center: every behavior toggle lives on General", async () => {
+    render(<SettingsDialog open onOpenChange={() => {}} />);
+    await screen.findByRole("checkbox", { name: /re-transcribe automatically/i });
+
+    // No switch of any kind on the Models page -- only downloads, deletes
+    // and per-function selection (radios, model menus).
+    const models = document.getElementById("settings-models")!;
+    expect(within(models).queryAllByRole("checkbox")).toHaveLength(0);
+
+    // The automation and summary-behavior toggles all sit inside General.
+    const general = document.getElementById("settings-general")!;
+    for (const name of [
+      /re-transcribe automatically after stopping/i,
+      /delete the audio after re-transcribing/i,
+      /enhance automatically after each call/i,
+      /let it title notes/i,
+      /use your calendar for context/i,
+    ]) {
+      expect(within(general).getByRole("checkbox", { name })).toBeInTheDocument();
+    }
   });
 });

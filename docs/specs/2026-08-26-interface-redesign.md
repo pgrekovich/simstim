@@ -190,7 +190,7 @@ global start/stop hotkey. Integrate final dock assets only after checking all
 required macOS sizes and template rendering.
 
 Status (2026-08-27): implemented on `codex/stage-3-menu-bar`, awaiting owner
-e2e. The owner explicitly removed the Stage 2 waveform from the near-term
+e2e. Status (2026-08-29): on main and shipped in v0.7.0. The owner explicitly removed the Stage 2 waveform from the near-term
 plan: measured waveform value does not justify its implementation cost. Stage
 3 therefore starts immediately after transcript find. The bounded behavior,
 implementation result, and acceptance checks live in
@@ -198,8 +198,8 @@ implementation result, and acceptance checks live in
 
 ### Stage 3.1: built-in local summaries
 
-Status (2026-08-29): implemented on `codex/stage-3.1-local-ai`, awaiting owner
-e2e. Qwen3.5 9B is the single explicitly downloaded local Enhance provider
+Status (2026-08-29): implemented on `codex/stage-3.1-local-ai`; on main and
+shipped in v0.7.0. Qwen3.5 9B is the single explicitly downloaded local Enhance provider
 through a bundled, short-lived llama.cpp Metal worker. It is isolated from
 Whisper's conflicting GGML runtime and is not a background server. The tested
 4B profile was retired to avoid a second lower-quality mode. Existing cloud CLI

@@ -36,6 +36,13 @@ struct Request {
     notes: String,
     transcript: String,
     full_prompt: String,
+    /// Whether the reply should lead with a `TITLE: ...` line (the app's
+    /// opt-in note retitling). `full_prompt` already carries the
+    /// instruction for the direct path; the map/reduce path rebuilds its
+    /// own final prompt and needs the flag. Defaulted so an older app
+    /// binary's request still parses.
+    #[serde(default)]
+    propose_title: bool,
 }
 
 #[derive(Serialize)]
@@ -146,6 +153,7 @@ fn run(request: Request) -> Result<String, String> {
         &reduced_transcript,
         language_rule,
         final_check,
+        request.propose_title,
     );
     if !prompt_fits(&model, &final_prompt, FINAL_OUTPUT_TOKENS, context_tokens)? {
         return Err(
@@ -323,7 +331,19 @@ fn build_summary_prompt(
     transcript: &str,
     language_rule: &str,
     final_check: &str,
+    propose_title: bool,
 ) -> String {
+    // Mirrors the app-side TITLE contract (`enhance::build_extra_rules`):
+    // the app peels the leading line off with its own parser, so the shape
+    // must match exactly.
+    let title_rule = if propose_title {
+        "\nThis note currently has only an automatic placeholder title. Begin the reply \
+         with a single line `TITLE: <title>` naming this call: specific, at most 8 words, \
+         in the output language, no quotes. Leave one empty line after it, then output \
+         the note; the TITLE line is the only text allowed outside the note itself.\n"
+    } else {
+        ""
+    };
     let notes_are_empty = notes.trim().is_empty();
     let notes = if notes_are_empty {
         "(the user took no notes during this call)"
@@ -366,7 +386,8 @@ fn build_summary_prompt(
          === TRANSCRIPT ===\n\
          {transcript}\n\
          === END TRANSCRIPT ===\n\
-         {final_check}. Stay under the requested word limit.\n"
+         {final_check}. Stay under the requested word limit.\n\
+         {title_rule}"
     )
 }
 
@@ -665,8 +686,27 @@ mod tests {
             "### Part 1\n- agreed",
             "Write in English",
             "Check the evidence",
+            false,
         );
         assert!(prompt.find("- ship Friday").unwrap() < prompt.find("### Part 1").unwrap());
+        assert!(!prompt.contains("TITLE:"));
+    }
+
+    /// The map/reduce path rebuilds its own final prompt, so the TITLE
+    /// contract must be re-attached there from the request flag -- and its
+    /// shape must match what the app-side parser peels off.
+    #[test]
+    fn reduction_prompt_carries_the_title_contract_when_requested() {
+        let prompt = build_summary_prompt(
+            "Sync",
+            "",
+            "### Part 1\n- agreed",
+            "Write in English",
+            "Check the evidence",
+            true,
+        );
+        assert!(prompt.contains("TITLE: <title>"));
+        assert!(prompt.contains("at most 8 words"));
     }
 
     #[test]

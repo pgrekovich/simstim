@@ -546,17 +546,11 @@ describe("SessionView: transcript find (stage 2.1)", () => {
 });
 
 describe("SessionView: enhance (stage 0.11)", () => {
-  it("enhances, re-reads the file and shows the summary labeled with its model", async () => {
-    vi.mocked(ipc.enhanceSession).mockResolvedValue("- **ship v2 friday**");
-    vi.mocked(ipc.readSession).mockResolvedValue({
-      title: "Weekly sync",
-      date: "",
-      notes: "rough",
-      transcript: "[00:00:01] Me: hi",
-      audio_path: null,
-      summary: "- **ship v2 friday**",
-      summary_model: "claude",
-    });
+  it("runs enhance from the toolbar pill and shows the working chip while the click is in flight", async () => {
+    let resolveEnhance: (value: string) => void = () => {};
+    vi.mocked(ipc.enhanceSession).mockImplementation(
+      () => new Promise<string>((resolve) => { resolveEnhance = resolve; })
+    );
 
     render(
       <SessionView
@@ -573,14 +567,34 @@ describe("SessionView: enhance (stage 0.11)", () => {
     fireEvent.click(screen.getByRole("button", { name: /^enhance$/i }));
     await waitFor(() => expect(ipc.enhanceSession).toHaveBeenCalledExactlyOnceWith("/tmp/call.md"));
 
-    await screen.findByText("Summary");
-    expect(screen.getByText("by claude")).toBeInTheDocument();
-    expect(screen.getByText("- **ship v2 friday**")).toBeInTheDocument();
-    // With a summary present the button reads Re-enhance.
-    expect(screen.getByRole("button", { name: /re-enhance/i })).toBeInTheDocument();
+    // While the command is in flight the pill is replaced in the same slot
+    // by the indeterminate work chip -- the refreshed summary itself arrives
+    // later via App (enhance-progress "done" refetches and remounts).
+    expect(screen.getByTestId("enhance-working")).toHaveTextContent("Summarizing...");
+    expect(screen.queryByRole("button", { name: /^enhance$/i })).toBeNull();
+
+    resolveEnhance("- **ship v2 friday**");
+    await waitFor(() => expect(screen.queryByTestId("enhance-working")).toBeNull());
   });
 
-  it("disables Enhance while recording and without a transcript", () => {
+  it("shows the working chip whenever App reports a running enhance for this path", () => {
+    render(
+      <SessionView
+        path="/tmp/call.md"
+        isActive={false}
+        initialData={{ ...baseData, transcript: "[00:00:01] Me: hi" }}
+        liveLines={[]}
+        interimMe=""
+        interimThem=""
+        retranscribingJob={null}
+        enhanceRunning
+      />
+    );
+    expect(screen.getByTestId("enhance-working")).toHaveTextContent("Summarizing...");
+    expect(screen.queryByRole("button", { name: /^enhance$/i })).toBeNull();
+  });
+
+  it("offers no Enhance control while recording or without a transcript", () => {
     const { unmount } = render(
       <SessionView
         path="/tmp/call.md"
@@ -592,7 +606,7 @@ describe("SessionView: enhance (stage 0.11)", () => {
         retranscribingJob={null}
       />
     );
-    expect(screen.getByRole("button", { name: /^enhance$/i })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: /^enhance$/i })).toBeNull();
     unmount();
 
     render(
@@ -606,18 +620,20 @@ describe("SessionView: enhance (stage 0.11)", () => {
         retranscribingJob={null}
       />
     );
-    expect(screen.getByRole("button", { name: /^enhance$/i })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: /^enhance$/i })).toBeNull();
   });
 
-  it("surfaces the backend's rejection inline", async () => {
-    vi.mocked(ipc.enhanceSession).mockRejectedValue(
-      "Claude Code isn't installed (no `claude` on this Mac)"
-    );
+  it("retires the pill once a summary exists and offers re-run in the Summary tab's provenance line", async () => {
     render(
       <SessionView
         path="/tmp/call.md"
         isActive={false}
-        initialData={{ ...baseData, transcript: "[00:00:01] Me: hi" }}
+        initialData={{
+          ...baseData,
+          transcript: "[00:00:01] Me: hi",
+          summary: "- **ship v2 friday**",
+          summary_model: "claude",
+        }}
         liveLines={[]}
         interimMe=""
         interimThem=""
@@ -625,7 +641,11 @@ describe("SessionView: enhance (stage 0.11)", () => {
       />
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /^enhance$/i }));
-    await screen.findByText(/isn't installed/i);
+    expect(screen.queryByRole("button", { name: /^enhance$/i })).toBeNull();
+
+    fireEvent.click(screen.getByRole("tab", { name: "Summary" }));
+    expect(screen.getByText(/by claude/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /re-run/i }));
+    await waitFor(() => expect(ipc.enhanceSession).toHaveBeenCalledExactlyOnceWith("/tmp/call.md"));
   });
 });

@@ -23,6 +23,8 @@ import {
   setAutoEnhance,
   setEnhanceModel,
   setEnhanceProvider,
+  setEnhanceRenameTitle,
+  setEnhanceUseCalendar,
   setKeepAudio,
   setOutputDir,
   setRetranscribeModel,
@@ -118,12 +120,23 @@ const ENHANCE_MODEL_OPTIONS: Record<string, { value: string; label: string }[]> 
   ],
 };
 
-/** The left-rail pages; a nav click swaps which section is visible. */
+/** The custom radio input every model/provider selection row uses. */
+const RADIO_CLASS =
+  "size-4 shrink-0 cursor-default appearance-none rounded-full border-[1.5px] border-muted-foreground/60 transition-all checked:border-[5px] checked:border-primary disabled:opacity-40";
+
+/**
+ * The left-rail pages; a nav click swaps which section is visible.
+ *
+ * Two pages, grouped by what the user is doing rather than by subsystem
+ * (owner request, refined during e2e): General holds ALL behavior -- the
+ * app, everything about a call (detection, audio retention), what happens
+ * after it ends, and how summaries behave. Models is a pure download
+ * center plus per-function selection (live, re-transcribe, summaries):
+ * no behavior toggles live there.
+ */
 const NAV_SECTIONS = [
   { id: "settings-general", label: "General" },
-  { id: "settings-recording", label: "Audio" },
-  { id: "settings-transcription", label: "Models" },
-  { id: "settings-ai", label: "Summary" },
+  { id: "settings-models", label: "Models" },
 ] as const;
 
 /**
@@ -207,6 +220,70 @@ function ModelProgress({ progress }: { progress: DownloadProgress | undefined })
   return null;
 }
 
+/**
+ * The download / delete / "Delete N MB?" confirm control cluster one model
+ * row's right side carries (stage 0.8 semantics, unchanged). Shared between
+ * the re-transcribe rows and the local summary provider row instead of two
+ * copy-pasted ~40-line blocks. The caller decides where `ModelProgress` and
+ * the per-row delete error render (their placement differs per list).
+ */
+function ModelActions({
+  model,
+  progress,
+  busy,
+  confirming,
+  onDownload,
+  onDeleteClick,
+  onConfirmDelete,
+  onCancelDelete,
+}: {
+  model: ModelInfo;
+  progress: DownloadProgress | undefined;
+  busy: boolean;
+  confirming: boolean;
+  onDownload: (id: string) => void;
+  onDeleteClick: (id: string) => void;
+  onConfirmDelete: (id: string) => void;
+  onCancelDelete: () => void;
+}) {
+  return (
+    <>
+      {!model.downloaded && !model.retired && (!progress || progress.phase === "error") && (
+        <Button variant="outline" size="sm" onClick={() => onDownload(model.id)}>
+          Download
+        </Button>
+      )}
+      {model.downloaded && !confirming && (
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label={`Delete ${model.name}`}
+          disabled={busy}
+          className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+          onClick={() => onDeleteClick(model.id)}
+        >
+          <Trash2 />
+        </Button>
+      )}
+      {model.downloaded && confirming && (
+        <>
+          <Button
+            variant="destructive"
+            size="sm"
+            disabled={busy}
+            onClick={() => onConfirmDelete(model.id)}
+          >
+            Delete {humanBytes(freedBytes(model))}?
+          </Button>
+          <Button variant="ghost" size="sm" disabled={busy} onClick={onCancelDelete}>
+            Cancel
+          </Button>
+        </>
+      )}
+    </>
+  );
+}
+
 export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: SettingsDialogProps) {
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [models, setModels] = useState<ModelInfo[]>([]);
@@ -214,6 +291,8 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
   const [enhanceProviders, setEnhanceProviders] = useState<EnhanceProviderInfo[]>([]);
   const [enhanceProviderError, setEnhanceProviderError] = useState<string | null>(null);
   const [autoEnhanceError, setAutoEnhanceError] = useState<string | null>(null);
+  const [renameTitleError, setRenameTitleError] = useState<string | null>(null);
+  const [useCalendarError, setUseCalendarError] = useState<string | null>(null);
   const [choosingDir, setChoosingDir] = useState(false);
   const [themeError, setThemeError] = useState<string | null>(null);
   const [showInDockError, setShowInDockError] = useState<string | null>(null);
@@ -225,6 +304,7 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
   const [detectCallsError, setDetectCallsError] = useState<string | null>(null);
   const [autoStopAfterCallError, setAutoStopAfterCallError] = useState<string | null>(null);
   const [retranscribeError, setRetranscribeError] = useState<string | null>(null);
+  const [liveModelError, setLiveModelError] = useState<string | null>(null);
   const [progress, setProgress] = useState<Record<string, DownloadProgress>>({});
   const [busyIds, setBusyIds] = useState<Set<string>>(new Set());
   // Id of the row currently showing the inline "Delete N MB?" confirm step
@@ -242,6 +322,10 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
   // landed: state updates alone aren't enough since two click events can, in
   // principle, both run before React commits the first one.
   const inFlightDownloadsRef = useRef<Set<string>>(new Set());
+  // The one scroll container both pages share (sections are CSS-hidden, not
+  // remounted): switching pages must not inherit the previous page's scroll
+  // position, so the nav click resets it.
+  const contentScrollRef = useRef<HTMLDivElement>(null);
 
   const refresh = useCallback(async () => {
     const [freshConfig, freshModels] = await Promise.all([getConfig(), listModels()]);
@@ -294,6 +378,34 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
     } catch (err) {
       setConfig((prev) => (prev ? { ...prev, auto_enhance: previous } : prev));
       setAutoEnhanceError(String(err));
+    }
+  }
+
+  /** Toggles model-proposed titles. Optimistic with rollback like the rest. */
+  async function handleSetEnhanceRenameTitle(enabled: boolean) {
+    const previous = config?.enhance_rename_title;
+    if (previous === undefined || enabled === previous) return;
+    setRenameTitleError(null);
+    setConfig((prev) => (prev ? { ...prev, enhance_rename_title: enabled } : prev));
+    try {
+      await setEnhanceRenameTitle(enabled);
+    } catch (err) {
+      setConfig((prev) => (prev ? { ...prev, enhance_rename_title: previous } : prev));
+      setRenameTitleError(String(err));
+    }
+  }
+
+  /** Toggles calendar context for Claude Code. Optimistic with rollback like the rest. */
+  async function handleSetEnhanceUseCalendar(enabled: boolean) {
+    const previous = config?.enhance_use_calendar;
+    if (previous === undefined || enabled === previous) return;
+    setUseCalendarError(null);
+    setConfig((prev) => (prev ? { ...prev, enhance_use_calendar: enabled } : prev));
+    try {
+      await setEnhanceUseCalendar(enabled);
+    } catch (err) {
+      setConfig((prev) => (prev ? { ...prev, enhance_use_calendar: previous } : prev));
+      setUseCalendarError(String(err));
     }
   }
 
@@ -537,9 +649,14 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
 
   async function handleUse(id: string) {
     setBusyIds((prev) => new Set(prev).add(id));
+    setLiveModelError(null);
     try {
       await setActiveModel(id);
       await refresh();
+    } catch (err) {
+      // Every other control surfaces its rejection inline; this one used to
+      // swallow it as an unhandled rejection (silent no-op for the user).
+      setLiveModelError(String(err));
     } finally {
       setBusyIds((prev) => {
         const next = new Set(prev);
@@ -695,7 +812,10 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
               <button
                 key={id}
                 type="button"
-                onClick={() => setActiveSection(id)}
+                onClick={() => {
+                  setActiveSection(id);
+                  contentScrollRef.current?.scrollTo({ top: 0 });
+                }}
                 className={cn(
                   "flex h-[30px] items-center rounded-[7px] px-2.5 text-left text-[12.5px] transition-colors duration-150",
                   activeSection === id
@@ -715,9 +835,15 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
               </DialogTitle>
               <span className="font-mono text-[10.5px] text-muted-foreground">saved automatically</span>
             </header>
-            <div className="min-h-0 flex-1 overflow-y-auto">
+            <div ref={contentScrollRef} className="min-h-0 flex-1 overflow-y-auto">
               <div className="flex w-full flex-col px-8 pb-10 pt-1.5">
-                <section id="settings-general" className={cn("flex flex-col gap-5", activeSection !== "settings-general" && "hidden")}>
+                {/* General: app behavior plus everything about a call --
+                    detection lives here (it decides when recording is
+                    offered, nothing to do with audio encoding), followed by
+                    what gets kept afterwards. */}
+                <section id="settings-general" className={cn("flex flex-col gap-6", activeSection !== "settings-general" && "hidden")}>
+                  <div className="flex flex-col gap-1.5">
+                  <h4 className="font-mono text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">App</h4>
                   <Group>
                     <Row label="Theme" error={themeError}>
                       {THEME_OPTIONS.map((option) => (
@@ -763,9 +889,42 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                       </Button>
                     </Row>
                   </Group>
-                </section>
-
-                <section id="settings-recording" className={cn("flex flex-col gap-5", activeSection !== "settings-recording" && "hidden")}>
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                  <h4 className="font-mono text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">Call detection</h4>
+                  <Group>
+                    <Row
+                      label="Offer to record when a call starts"
+                      htmlFor="detect-calls"
+                      description="Watches microphone activity from known calling apps. Recording still needs your click."
+                      error={detectCallsError}
+                    >
+                      <Checkbox
+                        variant="switch"
+                        id="detect-calls"
+                        checked={config?.detect_calls ?? true}
+                        disabled={!config}
+                        onCheckedChange={(checked) => handleSetDetectCalls(checked === true)}
+                      />
+                    </Row>
+                    <Row
+                      label="Stop automatically when the call ends"
+                      htmlFor="auto-stop-after-call"
+                      description="Waits for the call app to release audio and for the remote channel to stay silent."
+                      error={autoStopAfterCallError}
+                    >
+                      <Checkbox
+                        variant="switch"
+                        id="auto-stop-after-call"
+                        checked={config?.auto_stop_after_call ?? false}
+                        disabled={!config || !config.detect_calls}
+                        onCheckedChange={(checked) => handleSetAutoStopAfterCall(checked === true)}
+                      />
+                    </Row>
+                  </Group>
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                  <h4 className="font-mono text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">Call audio</h4>
                   <Group>
                     <Row
                       label="Keep call audio"
@@ -776,7 +935,7 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                       <Checkbox
                         variant="switch"
                         id="keep-audio"
-                        checked={config?.keep_audio ?? false}
+                        checked={config?.keep_audio ?? true}
                         disabled={!config}
                         onCheckedChange={(checked) => handleSetKeepAudio(checked === true)}
                       />
@@ -799,48 +958,22 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                       ))}
                     </Row>
                   </Group>
+                  </div>
+                  {/* What the app does on its own once a call ends. These
+                      configure behavior, not models, so they live here
+                      (owner request): Models stays a pure download center
+                      plus per-function selection. */}
+                  <div className="flex flex-col gap-1.5">
+                  <h4 className="font-mono text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">After a call</h4>
                   <Group>
-                    <Row
-                      label="Offer to record when a call starts"
-                      htmlFor="detect-calls"
-                      description="Watches microphone activity from known calling apps. Recording still needs your click."
-                      error={detectCallsError}
-                    >
-                      <Checkbox
-                        variant="switch"
-                        id="detect-calls"
-                        checked={config?.detect_calls ?? false}
-                        disabled={!config}
-                        onCheckedChange={(checked) => handleSetDetectCalls(checked === true)}
-                      />
-                    </Row>
-                    <Row
-                      label="Stop automatically when the call ends"
-                      htmlFor="auto-stop-after-call"
-                      description="Waits for the call app to release audio and for the remote channel to stay silent."
-                      error={autoStopAfterCallError}
-                    >
-                      <Checkbox
-                        variant="switch"
-                        id="auto-stop-after-call"
-                        checked={config?.auto_stop_after_call ?? false}
-                        disabled={!config || !config.detect_calls}
-                        onCheckedChange={(checked) => handleSetAutoStopAfterCall(checked === true)}
-                      />
-                    </Row>
-                  </Group>
-                </section>
-
-                <section id="settings-transcription" className={cn("flex flex-col gap-5", activeSection !== "settings-transcription" && "hidden")}>
-                  {/* Stage 0.9 (fix-review correction): only the AUTO toggle
-                      needs `keep_audio` on -- it fires right after a recording
-                      stops, so it's useless without an audio file having just
-                      been kept. The delete toggle is NOT gated the same way:
-                      `retranscribe_session` applies delete-after to ANY
-                      successful re-transcribe, including a MANUAL one on an
-                      old session that still has audio from back when
-                      `keep_audio` was on, even if it's off right now. */}
-                  <Group>
+                    {/* Stage 0.9 (fix-review correction): only the AUTO
+                        toggle needs `keep_audio` on -- it fires right after
+                        a recording stops, so it's useless without an audio
+                        file having just been kept. The delete toggle is NOT
+                        gated the same way: delete-after applies to ANY
+                        successful re-transcribe, including a MANUAL one on
+                        an old session that still has audio from back when
+                        `keep_audio` was on, even if it's off right now. */}
                     <Row
                       label="Re-transcribe automatically after stopping"
                       htmlFor="auto-retranscribe"
@@ -876,9 +1009,63 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                         onCheckedChange={(checked) => handleSetDeleteAudioAfterRetranscribe(checked === true)}
                       />
                     </Row>
+                    <Row
+                      label="Enhance automatically after each call"
+                      htmlFor="auto-enhance"
+                      description={'Fires once the call stops (after the automatic re-transcribe when that is on) and after any successful re-transcribe. With empty notes it writes a summary with key points and action items.'}
+                      error={autoEnhanceError}
+                    >
+                      <Checkbox
+                        variant="switch"
+                        id="auto-enhance"
+                        checked={config?.auto_enhance ?? false}
+                        disabled={!config}
+                        onCheckedChange={(checked) => handleSetAutoEnhance(checked === true)}
+                      />
+                    </Row>
                   </Group>
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                  <h4 className="font-mono text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">Summaries</h4>
+                  <Group>
+                    <Row
+                      label="Let it title notes"
+                      htmlFor="enhance-rename-title"
+                      description={'Replaces automatic titles ("Untitled", "Zoom call 14:03") with one proposed by the summary. Titles you typed yourself are never touched.'}
+                      error={renameTitleError}
+                    >
+                      <Checkbox
+                        variant="switch"
+                        id="enhance-rename-title"
+                        checked={config?.enhance_rename_title ?? false}
+                        disabled={!config}
+                        onCheckedChange={(checked) => handleSetEnhanceRenameTitle(checked === true)}
+                      />
+                    </Row>
+                    <Row
+                      label="Use your calendar for context"
+                      htmlFor="enhance-use-calendar"
+                      description="Looks up the meeting that overlapped the call through your own calendar connectors, via the Claude Code CLI, and hands its name and participants to whichever cloud provider summarizes. A found event names the note with the event's own name, verbatim, when title renaming is on. Not offered for the local provider: local means no cloud call at all."
+                      error={useCalendarError}
+                    >
+                      <Checkbox
+                        variant="switch"
+                        id="enhance-use-calendar"
+                        checked={config?.enhance_use_calendar ?? false}
+                        disabled={!config || config.enhance_provider === "local"}
+                        onCheckedChange={(checked) => handleSetEnhanceUseCalendar(checked === true)}
+                      />
+                    </Row>
+                  </Group>
+                  </div>
+                </section>
 
-            {/* Recording group (stage 0.8): every `role === "live"` entry.
+                {/* Models: a pure download center plus per-function
+                    selection (owner request) -- which model records live,
+                    which re-transcribes, which provider summarizes. All
+                    behavior toggles live on General. */}
+                <section id="settings-models" className={cn("flex flex-col gap-7", activeSection !== "settings-models" && "hidden")}>
+            {/* Live transcription (stage 0.8): every `role === "live"` entry.
                 Parakeet is the only one today and stays the only one a future
                 entry could add to without this section changing -- it's
                 driven by `role`, not a hardcoded id. Live models never get a
@@ -887,12 +1074,13 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
             <div className="flex flex-col gap-1.5">
               <div className="flex items-baseline justify-between gap-2">
                 <h4 className="font-mono text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
-                  Live model
+                  Live transcription
                 </h4>
                 <span className="font-mono text-[10.5px] text-muted-foreground">
-                  Recording models: {humanBytes(totalDiskUsed(liveModels))} on disk
+                  {humanBytes(totalDiskUsed(liveModels))} on disk
                 </span>
               </div>
+              {liveModelError && <span className="text-xs text-destructive">{liveModelError}</span>}
               <ul className="flex flex-col divide-y divide-border border-y border-border">
                 {liveModels.map((model) => {
                   const p = progress[model.id];
@@ -925,18 +1113,19 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
               </ul>
             </div>
 
-            {/* Re-transcribe group (stage 0.8): every `role === "retranscribe"`
+            {/* Re-transcribe (stage 0.8): every `role === "retranscribe"`
                 entry (the whisper family). Radio-style selection among
                 downloaded models only reflects `config.retranscribe_model`;
                 every downloaded row also gets a delete control to reclaim
-                disk. */}
+                disk. The two automation toggles that configure this pass sit
+                in the same list, under the models they run. */}
             <div className="flex flex-col gap-1.5">
               <div className="flex items-baseline justify-between gap-2">
                 <h4 className="font-mono text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
                   Re-transcribe
                 </h4>
                 <span className="font-mono text-[10.5px] text-muted-foreground">
-                  Re-transcribe models: {humanBytes(totalDiskUsed(retranscribeModels))} on disk
+                  {humanBytes(totalDiskUsed(retranscribeModels))} on disk
                 </span>
               </div>
               <span className="text-xs text-muted-foreground">
@@ -958,7 +1147,6 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                 {retranscribeModels.map((model) => {
                   const p = progress[model.id];
                   const busy = busyIds.has(model.id);
-                  const confirming = deleteConfirmId === model.id;
                   // Retired (stage 0.8.x curation): this row only exists at
                   // all because its files are still on disk (`list_models`
                   // hides an absent retired entry outright, see
@@ -979,7 +1167,7 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                               checked={config?.retranscribe_model === model.id}
                               disabled={busy}
                               onChange={() => handleSetRetranscribeModel(model.id)}
-                              className="size-4 shrink-0 cursor-default appearance-none rounded-full border-[1.5px] border-muted-foreground/60 transition-all checked:border-[5px] checked:border-primary disabled:opacity-40"
+                              className={RADIO_CLASS}
                             />
                           )}
                           <div className="flex min-w-0 flex-col">
@@ -1002,38 +1190,16 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                         </div>
 
                         <div className="flex shrink-0 items-center gap-1.5">
-                          {!model.downloaded && !model.retired && (!p || p.phase === "error") && (
-                            <Button variant="outline" size="sm" onClick={() => handleDownload(model.id)}>
-                              Download
-                            </Button>
-                          )}
-                          {model.downloaded && !confirming && (
-                            <Button
-                              variant="ghost"
-                              size="icon-sm"
-                              aria-label={`Delete ${model.name}`}
-                              disabled={busy}
-                              className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                              onClick={() => handleDeleteClick(model.id)}
-                            >
-                              <Trash2 />
-                            </Button>
-                          )}
-                          {model.downloaded && confirming && (
-                            <>
-                              <Button
-                                variant="destructive"
-                                size="sm"
-                                disabled={busy}
-                                onClick={() => handleConfirmDelete(model.id)}
-                              >
-                                Delete {humanBytes(freedBytes(model))}?
-                              </Button>
-                              <Button variant="ghost" size="sm" disabled={busy} onClick={handleCancelDelete}>
-                                Cancel
-                              </Button>
-                            </>
-                          )}
+                          <ModelActions
+                            model={model}
+                            progress={p}
+                            busy={busy}
+                            confirming={deleteConfirmId === model.id}
+                            onDownload={handleDownload}
+                            onDeleteClick={handleDeleteClick}
+                            onConfirmDelete={handleConfirmDelete}
+                            onCancelDelete={handleCancelDelete}
+                          />
                         </div>
                       </div>
                       {!model.downloaded && <ModelProgress progress={p} />}
@@ -1046,69 +1212,67 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
               </ul>
             </div>
 
-            {/* Local text-generation models are downloaded and removed in
-                the same manager as the ASR models, but are never selectable
-                as a recording or re-transcribe engine. The Summary page
-                exposes them as providers once their files are present. */}
+            {/* Summaries: the provider picker IS the model manager (owner
+                request: download, selection and configuration on one page).
+                The local row carries Qwen's download/progress/delete controls
+                inline, next to its own selection radio, instead of pointing
+                at a different tab; the cloud CLI rows keep their model
+                override menus; the automation toggle sits below them. */}
             <div className="flex flex-col gap-1.5">
               <div className="flex items-baseline justify-between gap-2">
                 <h4 className="font-mono text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
-                  Local summaries
+                  Summaries
                 </h4>
                 <span className="font-mono text-[10.5px] text-muted-foreground">
-                  Summary models: {humanBytes(totalDiskUsed(summaryModels))} on disk
+                  {humanBytes(totalDiskUsed(summaryModels))} on disk
                 </span>
               </div>
               <span className="text-xs text-muted-foreground">
-                Runs entirely on this Mac. Notes and transcripts stay private.
+                The local model runs entirely on this Mac: notes and transcripts stay private.
+                Claude Code and Codex are optional cloud providers: they send only the note's
+                text and transcript, and only when you click Enhance or enable automatic
+                summaries.
               </span>
               <ul className="flex flex-col divide-y divide-border border-y border-border">
                 {summaryModels.map((model) => {
                   const p = progress[model.id];
                   const busy = busyIds.has(model.id);
-                  const confirming = deleteConfirmId === model.id;
+                  const localProvider = enhanceProviders.find((provider) => provider.id === "local");
+                  const name = localProvider?.name ?? model.name;
                   return (
                     <li key={model.id} className="flex flex-col gap-2 px-0.5 py-3.5">
                       <div className="flex items-center justify-between gap-3">
                         <div className="flex min-w-0 flex-col">
-                          <span className="truncate text-sm font-medium">{model.name}</span>
+                          <span className="truncate text-sm font-medium">{name}</span>
                           {model.tagline && (
                             <span className="text-xs text-muted-foreground">{model.tagline}</span>
                           )}
-                          <span className="text-xs text-muted-foreground">{humanSizeMb(model.size_mb)}</span>
+                          <span className="text-xs text-muted-foreground">
+                            {humanSizeMb(model.size_mb)}
+                            {model.downloaded && " · on-device, Metal"}
+                          </span>
                         </div>
                         <div className="flex shrink-0 items-center gap-1.5">
-                          {!model.downloaded && (!p || p.phase === "error") && (
-                            <Button variant="outline" size="sm" onClick={() => handleDownload(model.id)}>
-                              Download
-                            </Button>
-                          )}
-                          {model.downloaded && !confirming && (
-                            <Button
-                              variant="ghost"
-                              size="icon-sm"
-                              aria-label={`Delete ${model.name}`}
-                              disabled={busy}
-                              className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                              onClick={() => handleDeleteClick(model.id)}
-                            >
-                              <Trash2 />
-                            </Button>
-                          )}
-                          {model.downloaded && confirming && (
-                            <>
-                              <Button
-                                variant="destructive"
-                                size="sm"
-                                disabled={busy}
-                                onClick={() => handleConfirmDelete(model.id)}
-                              >
-                                Delete {humanBytes(freedBytes(model))}?
-                              </Button>
-                              <Button variant="ghost" size="sm" disabled={busy} onClick={handleCancelDelete}>
-                                Cancel
-                              </Button>
-                            </>
+                          <ModelActions
+                            model={model}
+                            progress={p}
+                            busy={busy}
+                            confirming={deleteConfirmId === model.id}
+                            onDownload={handleDownload}
+                            onDeleteClick={handleDeleteClick}
+                            onConfirmDelete={handleConfirmDelete}
+                            onCancelDelete={handleCancelDelete}
+                          />
+                          {!model.retired && (
+                            <input
+                              type="radio"
+                              name="enhance-provider"
+                              aria-label={name}
+                              checked={config?.enhance_provider === "local"}
+                              disabled={!localProvider?.available}
+                              onChange={() => handleSetEnhanceProvider("local")}
+                              className={RADIO_CLASS}
+                            />
                           )}
                         </div>
                       </div>
@@ -1116,39 +1280,28 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                       {deleteErrors[model.id] && (
                         <span className="text-xs text-destructive">{deleteErrors[model.id]}</span>
                       )}
+                      {config?.enhance_provider === "local" && enhanceProviderError && (
+                        <span className="text-xs text-destructive">{enhanceProviderError}</span>
+                      )}
                     </li>
                   );
                 })}
-              </ul>
-            </div>
-                </section>
-
-                <section
-                  id="settings-ai"
-                  className={cn("flex flex-col gap-5", activeSection !== "settings-ai" && "hidden")}
-                >
-                  <p className="px-1 text-xs text-muted-foreground">
-                    Local summaries run entirely on this Mac. Claude Code and Codex are optional
-                    cloud providers: they send only the note's text and transcript, and only when
-                    you click Enhance or enable automatic summaries.
-                  </p>
-                  <Group>
-                    {enhanceProviders.map((provider) => (
+                {enhanceProviders
+                  .filter((provider) => provider.id !== "local")
+                  .map((provider) => (
+                    <li key={provider.id}>
                       <Row
-                        key={provider.id}
                         label={provider.name}
                         description={
                           provider.available
                             ? provider.version ?? "installed"
-                            : provider.id === "local"
-                              ? "download Qwen3.5 9B in Models"
-                              : `not installed (no \`${provider.id}\` CLI found)`
+                            : `not installed (no \`${provider.id}\` CLI found)`
                         }
                         error={
                           config?.enhance_provider === provider.id ? enhanceProviderError : null
                         }
                       >
-                        {provider.available && !provider.id.startsWith("local") && (
+                        {provider.available && (
                           <select
                             aria-label={`${provider.name} model`}
                             value={config?.enhance_models?.[provider.id] ?? ""}
@@ -1171,31 +1324,21 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                           checked={config?.enhance_provider === provider.id}
                           disabled={!provider.available}
                           onChange={() => handleSetEnhanceProvider(provider.id)}
-                          className="size-4 shrink-0 cursor-default appearance-none rounded-full border-[1.5px] border-muted-foreground/60 transition-all checked:border-[5px] checked:border-primary disabled:opacity-40"
+                          className={RADIO_CLASS}
                         />
                       </Row>
-                    ))}
+                    </li>
+                  ))}
+                {enhanceProviders.length === 0 && (
+                  <li>
                     <Row
-                      label="Enhance automatically after each call"
-                      htmlFor="auto-enhance"
-                      description={'Fires once the call stops (after the automatic re-transcribe when that is on) and after any successful re-transcribe. With empty notes it writes a summary with key points and action items.'}
-                      error={autoEnhanceError}
-                    >
-                      <Checkbox
-                        variant="switch"
-                        id="auto-enhance"
-                        checked={config?.auto_enhance ?? false}
-                        disabled={!config}
-                        onCheckedChange={(checked) => handleSetAutoEnhance(checked === true)}
-                      />
-                    </Row>
-                    {enhanceProviders.length === 0 && (
-                      <Row
-                        label="No providers probed yet"
-                        description="Reopen Settings to check local and cloud providers."
-                      />
-                    )}
-                  </Group>
+                      label="Cloud providers not probed yet"
+                      description="Reopen Settings to check for the claude and codex CLIs."
+                    />
+                  </li>
+                )}
+              </ul>
+            </div>
                 </section>
               </div>
             </div>

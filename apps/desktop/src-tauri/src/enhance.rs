@@ -97,6 +97,52 @@ impl EnhanceState {
     }
 }
 
+/// Clears the enhance slot when dropped, so a panic anywhere inside the
+/// pipeline (which unwinds through `spawn_blocking`) can't leave the slot
+/// occupied forever -- that would refuse every future enhance AND block
+/// deleting the local model until restart (review finding).
+struct SlotGuard<'a>(&'a EnhanceState);
+
+impl Drop for SlotGuard<'_> {
+    fn drop(&mut self) {
+        *self.0 .0.lock().unwrap() = None;
+    }
+}
+
+/// `enhance-progress` event payload: one job's lifecycle, for BOTH manual
+/// and automatic runs (they share `enhance_path_blocking`). Mirrors
+/// `EnhanceProgress` in `ipc.ts`. `running` fires once the slot is claimed;
+/// `done`/`error` fire after the slot is released, so a listener reacting to
+/// a terminal phase can immediately start another enhance.
+#[derive(Debug, Clone, Serialize)]
+struct EnhanceProgressPayload {
+    path: String,
+    /// `"running" | "done" | "error"`.
+    phase: &'static str,
+    /// The provider id that ran (`"local"`, `"claude"`, `"codex"`).
+    provider: String,
+    message: Option<String>,
+}
+
+fn emit_progress<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    path: &str,
+    phase: &'static str,
+    provider: &str,
+    message: Option<String>,
+) {
+    use tauri::Emitter;
+    let _ = app.emit(
+        "enhance-progress",
+        EnhanceProgressPayload {
+            path: path.to_string(),
+            phase,
+            provider: provider.to_string(),
+            message,
+        },
+    );
+}
+
 /// Resolves `binary` to an executable path. A bundled GUI app launches with
 /// a minimal PATH (no /opt/homebrew/bin), so well-known install dirs are
 /// checked explicitly before falling back to whatever PATH has.
@@ -164,13 +210,185 @@ pub async fn list_enhance_providers() -> Vec<EnhanceProviderInfo> {
     .unwrap_or_default()
 }
 
+/// One calendar event resolved by the dedicated lookup call (the opt-in
+/// `enhance_use_calendar` setting): matched to the call strictly by date
+/// and time overlap, never by name. Its `title` is the note's title
+/// verbatim when renaming is enabled.
+#[derive(Debug, Clone)]
+pub(crate) struct CalendarEvent {
+    pub title: String,
+    pub attendees: Vec<String>,
+}
+
+/// The strict-JSON reply shape the lookup prompt demands.
+#[derive(serde::Deserialize)]
+struct CalendarLookupReply {
+    found: bool,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    attendees: Vec<String>,
+}
+
+/// The lookup is one small tool-using request; it must never eat the whole
+/// enhance budget when a connector hangs.
+const CALENDAR_LOOKUP_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// The call's window from its frontmatter: `date:` (RFC3339) plus the
+/// recorded duration (an hour when the file has none). `None` only for an
+/// unparseable date, which real session files never have.
+pub(crate) fn calendar_window(start: &str, duration_secs: Option<u64>) -> Option<(String, String)> {
+    let start_dt = chrono::DateTime::parse_from_rfc3339(start).ok()?;
+    let secs = duration_secs.unwrap_or(3600).max(60);
+    let end = start_dt + chrono::Duration::seconds(secs as i64);
+    Some((
+        start.to_string(),
+        end.to_rfc3339_opts(chrono::SecondsFormat::Secs, false),
+    ))
+}
+
+/// The dedicated lookup prompt: a single narrow job with a machine-checkable
+/// answer, instead of burying tool use inside the big summary prompt (owner
+/// bug report: the event must be matched by date and time, deterministically,
+/// and re-enhance must re-apply it).
+pub(crate) fn calendar_lookup_prompt(start: &str, end: &str) -> String {
+    format!(
+        "Use your calendar MCP tools to find the user's calendar event that OVERLAPS          this exact time window:\n\
+         window start: {start}\n\
+         window end: {end}\n\
+         Match strictly by date and time overlap: list or search events in that range. \
+         Never match by name similarity and never pick an event outside the window. If \
+         several events overlap, pick the one with the largest overlap. Reply with \
+         STRICT JSON only, no prose, no code fences, in exactly one of these shapes:\n\
+         {{\"found\": true, \"title\": \"<the event's title, verbatim>\", \"attendees\": [\"name\"]}}\n\
+         {{\"found\": false}}\n\
+         Never invent an event: if the tools fail or nothing overlaps, reply with found false.\n"
+    )
+}
+
+/// Parses the lookup reply, tolerating stray prose around the JSON object.
+/// Anything malformed means "no event": the summary still runs.
+pub(crate) fn parse_calendar_reply(text: &str) -> Option<CalendarEvent> {
+    let start = text.find('{')?;
+    let end = text.rfind('}')?;
+    let reply: CalendarLookupReply = serde_json::from_str(&text[start..=end]).ok()?;
+    if !reply.found {
+        return None;
+    }
+    let title = sanitize_event_title(reply.title.as_deref()?);
+    (!title.is_empty()).then_some(CalendarEvent {
+        title,
+        attendees: reply.attendees,
+    })
+}
+
+/// The event name stays verbatim except what the line-oriented `title:`
+/// frontmatter cannot carry: newlines and runs of whitespace collapse to
+/// single spaces, and a runaway length is capped.
+fn sanitize_event_title(raw: &str) -> String {
+    const MAX_CHARS: usize = 160;
+    let mut title = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    if title.chars().count() > MAX_CHARS {
+        title = title.chars().take(MAX_CHARS).collect::<String>().trim_end().to_string();
+    }
+    title
+}
+
+/// Runs the dedicated calendar lookup through the claude CLI with ONLY the
+/// calendar connectors allowlisted. Every failure path is a quiet `None`.
+fn lookup_calendar_event(
+    claude: &Path,
+    allowed_tools: &str,
+    start: &str,
+    end: &str,
+) -> Option<CalendarEvent> {
+    let prompt = calendar_lookup_prompt(start, end);
+    let output = run_cli_capture(
+        claude,
+        &["-p", "--output-format", "text", "--allowedTools", allowed_tools],
+        &prompt,
+        CALENDAR_LOOKUP_TIMEOUT,
+    )
+    .ok()?;
+    parse_calendar_reply(&output)
+}
+
+/// Runs `binary` with `args` and `prompt` on stdin in a fresh empty temp
+/// dir, killed at `timeout`; returns trimmed stdout of a successful exit.
+/// The same subprocess hygiene as `run_provider`, for one-shot helper calls.
+fn run_cli_capture(
+    binary: &Path,
+    args: &[&str],
+    prompt: &str,
+    timeout: Duration,
+) -> Result<String, String> {
+    let workdir = tempfile::tempdir().map_err(|e| e.to_string())?;
+    let mut child = Command::new(binary)
+        .args(args)
+        .current_dir(workdir.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    child
+        .stdin
+        .take()
+        .expect("stdin was piped")
+        .write_all(prompt.as_bytes())
+        .map_err(|e| e.to_string())?;
+
+    let stdout = child.stdout.take().expect("stdout was piped");
+    let stderr = child.stderr.take().expect("stderr was piped");
+    let reader = std::thread::spawn(move || {
+        use std::io::Read;
+        let mut out = String::new();
+        let mut err = String::new();
+        let _ = std::io::BufReader::new(stdout).read_to_string(&mut out);
+        let _ = std::io::BufReader::new(stderr).read_to_string(&mut err);
+        (out, err)
+    });
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait().map_err(|e| e.to_string())? {
+            Some(status) => break status,
+            None if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("timed out".to_string());
+            }
+            None => std::thread::sleep(Duration::from_millis(200)),
+        }
+    };
+    let (out, err) = reader.join().unwrap_or_default();
+    if !status.success() {
+        return Err(err.trim().to_string());
+    }
+    Ok(out.trim().to_string())
+}
+
 /// The Granola contract, spelled out (owner decision, stage 0.11): the
 /// user's rough notes lead, the transcript backs them up. With EMPTY notes
 /// (owner decision: the auto-enhance case for a call nobody took notes on)
 /// the ask flips to a fixed structure: short summary, key points, action
 /// items. Kept as a plain function of the inputs so tests can pin its shape
 /// without running any CLI.
-pub(crate) fn build_prompt(title: &str, notes: &str, transcript: &str) -> String {
+///
+/// `propose_title` adds the TITLE output contract (opt-in
+/// `enhance_rename_title`, only while the title is machine-owned and only
+/// when no calendar event was matched): the reply must lead with one
+/// `TITLE: ...` line, which [`split_title_line`] peels off before the
+/// summary is written. `event` is the calendar event the dedicated lookup
+/// already matched by date and time: it enters the prompt as source data
+/// (this IS the meeting), while its verbatim name is applied to the title
+/// by the app itself, never trusted to the model to echo back.
+pub(crate) fn build_prompt(
+    title: &str,
+    notes: &str,
+    transcript: &str,
+    propose_title: bool,
+    event: Option<&CalendarEvent>,
+) -> String {
     let notes_are_empty = notes.trim().is_empty();
     let notes_block = if notes_are_empty {
         "(the user took no notes during this call)".to_string()
@@ -185,6 +403,7 @@ pub(crate) fn build_prompt(title: &str, notes: &str, transcript: &str) -> String
     let cyrillic_output = uses_cyrillic_output(notes, transcript);
     let language_rule = output_language_rule(cyrillic_output);
     let prompt_transcript = compact_transcript(transcript);
+    let extra_rules = build_extra_rules(propose_title, event, cyrillic_output);
     let final_check = if cyrillic_output {
         "Пиши только на языке расшифровки кириллицей; не переводи на английский. Используй только явные утверждения. Сохраняй направление из источника в цель и область действия каждого компонента. Позднее уточнение «не X, а Y» отменяет X. Не смешивай текущее состояние, предпочтительный план и fallback. Условие остается условием. Действие допустимо только при явном обязательстве владельца. Не заполняй раздел ради формата: сомнительное и побочные истории исключи"
     } else {
@@ -213,7 +432,8 @@ pub(crate) fn build_prompt(title: &str, notes: &str, transcript: &str) -> String
              дополняет их фактами, решениями, числами и именами. {cyrillic_task}.\n\
              Учитывай поздние уточнения. Полностью исключи приветствия, шутки,\n\
              повторы, ругань, старые инциденты и побочные истории.\n\
-             {final_check}. Верни только короткий Markdown без заголовка документа.\n"
+             {final_check}. Верни только короткий Markdown без заголовка документа.\n\
+             {extra_rules}"
         );
     }
 
@@ -251,8 +471,107 @@ pub(crate) fn build_prompt(title: &str, notes: &str, transcript: &str) -> String
          - Output ONLY the enhanced note itself: no preamble, no closing remarks,\n\
            no top-level title heading.\n\
          \n\
-         {final_check}. Stay under the requested word limit.\n"
+         {final_check}. Stay under the requested word limit.\n\
+         {extra_rules}"
     )
+}
+
+/// The optional trailing prompt rules: the matched calendar event as source
+/// data, and the TITLE output contract, in the branch's language. Empty
+/// when neither applies.
+fn build_extra_rules(
+    propose_title: bool,
+    event: Option<&CalendarEvent>,
+    cyrillic_output: bool,
+) -> String {
+    let mut rules = String::new();
+    if let Some(event) = event {
+        let title = event.title.as_str();
+        let attendees = event.attendees.join(", ");
+        if cyrillic_output {
+            let participants = if attendees.is_empty() {
+                String::new()
+            } else {
+                format!("; участники: {attendees}")
+            };
+            rules.push_str(&format!(
+                "\nСобытие календаря, совпавшее с этим звонком по дате и времени \
+                 (исходные данные): «{title}»{participants}. Это и есть встреча: \
+                 используй её название в первой строке заметки и не выдумывай \
+                 другое название встречи.\n"
+            ));
+        } else {
+            let participants = if attendees.is_empty() {
+                String::new()
+            } else {
+                format!("; participants: {attendees}")
+            };
+            rules.push_str(&format!(
+                "\nCalendar event matched to this call by date and time (source \
+                 data): \"{title}\"{participants}. This IS the meeting: use its \
+                 name in the note's opening line and do not invent a different \
+                 meeting name.\n"
+            ));
+        }
+    }
+    if propose_title {
+        if cyrillic_output {
+            rules.push_str(
+                "\nЭта заметка пока называется автоматически. Начни ответ одной \
+                 строкой вида `TITLE: <название>`: конкретное название этого звонка, \
+                 не больше 8 слов, на языке расшифровки, без кавычек. После неё \
+                 оставь пустую строку и выведи саму заметку.\n",
+            );
+        } else {
+            rules.push_str(
+                "\nThis note currently has only an automatic placeholder title. \
+                 Begin the reply with a single line `TITLE: <title>` naming this \
+                 call: specific, at most 8 words, in the output language, no \
+                 quotes. Leave one empty line after it, then output the note; the \
+                 TITLE line is the only text allowed outside the note itself.\n",
+            );
+        }
+    }
+    rules
+}
+
+/// Peels the requested leading `TITLE: ...` line off a model reply:
+/// `(proposed title, summary body)`. A missing or malformed title line
+/// gracefully means "no rename" -- the whole reply is the summary. The
+/// title is sanitized to one plain frontmatter-safe line.
+pub(crate) fn split_title_line(text: &str) -> (Option<String>, String) {
+    let trimmed = text.trim();
+    let Some(rest) = trimmed.strip_prefix("TITLE:") else {
+        return (None, trimmed.to_string());
+    };
+    let (line, body) = match rest.split_once('\n') {
+        Some((line, body)) => (line, body),
+        None => (rest, ""),
+    };
+    let title = sanitize_title(line);
+    let body = body.trim();
+    if title.is_empty() || body.is_empty() {
+        return (None, trimmed.to_string());
+    }
+    (Some(title), body.to_string())
+}
+
+/// One plain line: markdown/quote wrapping stripped, whitespace collapsed
+/// (the `title:` frontmatter field is line-oriented), length bounded so a
+/// runaway model cannot write a paragraph into the sidebar.
+fn sanitize_title(raw: &str) -> String {
+    const MAX_CHARS: usize = 80;
+    let cleaned = raw
+        .trim()
+        .trim_start_matches('#')
+        .trim()
+        .trim_matches(|c: char| matches!(c, '"' | '\'' | '`' | '*' | '«' | '»'))
+        .trim();
+    let mut title = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
+    if title.chars().count() > MAX_CHARS {
+        title = title.chars().take(MAX_CHARS).collect::<String>().trim_end().to_string();
+    }
+    title
 }
 
 /// Removes low-information acknowledgements and joins adjacent fragments from
@@ -347,9 +666,105 @@ fn summary_label(spec: &ProviderSpec, model: Option<&str>) -> String {
     }
 }
 
+/// MCP server names that look like calendar connectors, from `claude mcp
+/// list`. Best-effort by design: an empty result only means the model runs
+/// without calendar tools and the prompt's calendar paragraph degrades to
+/// "none available". Tries the machine-readable `--json` first (newer
+/// CLIs), then falls back to the human-readable listing (`name: command -
+/// status` per line).
+fn discover_calendar_servers(claude: &Path) -> Vec<String> {
+    if let Ok(out) = Command::new(claude).args(["mcp", "list", "--json"]).output() {
+        if out.status.success() {
+            if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&out.stdout) {
+                return filter_calendar_names(mcp_server_names(&value));
+            }
+        }
+    }
+    let Ok(out) = Command::new(claude).args(["mcp", "list"]).output() else {
+        return Vec::new();
+    };
+    if !out.status.success() {
+        return Vec::new();
+    }
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    filter_calendar_names(parse_mcp_list_text(&stdout))
+}
+
+/// Server names out of the human-readable `claude mcp list` output, one
+/// `name: command-or-url - status` line per server. Names CAN contain
+/// spaces and dots ("claude.ai Google Calendar" is a real one); the header
+/// and blank lines carry no `:` value and are skipped.
+fn parse_mcp_list_text(stdout: &str) -> Vec<String> {
+    stdout
+        .lines()
+        .filter_map(|line| {
+            let (name, rest) = line.split_once(':')?;
+            let name = name.trim();
+            (!name.is_empty() && !rest.trim().is_empty()).then(|| name.to_string())
+        })
+        .collect()
+}
+
+/// Server names out of whatever shape `claude mcp list --json` returns: an
+/// array of objects with a `name` field, or an object keyed by server name.
+fn mcp_server_names(value: &serde_json::Value) -> Vec<String> {
+    match value {
+        serde_json::Value::Array(items) => items
+            .iter()
+            .filter_map(|item| item.get("name")?.as_str().map(str::to_string))
+            .collect(),
+        serde_json::Value::Object(map) => map.keys().cloned().collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Only calendar-looking connectors are ever allowlisted: granting the CLI
+/// every configured MCP server would hand a background summarizer whatever
+/// write tools the user happens to have (Slack, email, ...). Deliberately
+/// name-based and narrow; a connector this misses just isn't used.
+fn filter_calendar_names(mut names: Vec<String>) -> Vec<String> {
+    names.retain(|name| {
+        let lower = name.to_lowercase();
+        lower.contains("calendar") || lower.contains("gcal") || lower.contains("eventkit")
+    });
+    names.sort();
+    names.dedup();
+    names
+}
+
+/// The `--allowedTools` value covering every tool of the given servers.
+/// Both documented rule shapes are emitted per server (`mcp__name` and
+/// `mcp__name__*`) so the allowlist works across CLI versions.
+pub(crate) fn calendar_allowed_tools(servers: &[String]) -> String {
+    servers
+        .iter()
+        .map(|name| normalize_server_name(name))
+        .flat_map(|name| [format!("mcp__{name}"), format!("mcp__{name}__*")])
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+/// The CLI exposes a server's tools as `mcp__<normalized name>__<tool>`,
+/// where characters a tool id cannot carry (spaces, dots) become
+/// underscores: the "claude.ai Google Calendar" connector's tools are
+/// `mcp__claude_ai_Google_Calendar__*` (verified against the real CLI).
+fn normalize_server_name(name: &str) -> String {
+    name.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
 /// Runs `spec`'s CLI over `prompt` (with `model` overriding the CLI's
 /// default when set) and returns the generated text. Blocking -- callers
-/// run it inside `spawn_blocking`; killed at [`ENHANCE_TIMEOUT`].
+/// run it inside `spawn_blocking`; killed at [`ENHANCE_TIMEOUT`]. Tools are
+/// never allowlisted here: calendar work happens in the dedicated
+/// `lookup_calendar_event` call, and the summarizer runs on text alone.
 fn run_provider(spec: &ProviderSpec, model: Option<&str>, prompt: &str) -> Result<String, String> {
     let ProviderKind::Cli { binary } = spec.kind else {
         return Err("the local provider must run through the embedded model".to_string());
@@ -464,6 +879,7 @@ fn validate_enhance(
     active: Option<&Path>,
     finalizing: Option<&Path>,
     already_running: Option<&str>,
+    retranscribe_involves: bool,
     transcript: &str,
 ) -> Result<(), String> {
     if active == Some(md_path) {
@@ -478,6 +894,16 @@ fn validate_enhance(
         } else {
             "another note is being enhanced; wait for it to finish".to_string()
         });
+    }
+    // A running or queued re-transcribe will replace this note's transcript
+    // (architecture-review finding): summarizing the pre-retranscribe text is
+    // stale on arrival at best, and both final writes are whole-file
+    // read-modify-write, so an interleaving could revert the fresh transcript
+    // outright. The re-transcribe completion re-triggers auto-enhance itself.
+    if retranscribe_involves {
+        return Err(
+            "this note is being re-transcribed; enhance it once that finishes".to_string(),
+        );
     }
     if transcript.trim().is_empty() {
         return Err("nothing to enhance: this note has no transcript yet".to_string());
@@ -504,7 +930,27 @@ pub async fn enhance_session(path: String, app: tauri::AppHandle) -> Result<Stri
 /// The whole blocking enhance pipeline (parse -> validate -> subprocess ->
 /// atomic write), shared between the manual command above and the
 /// auto-enhance trigger below. Must run inside `spawn_blocking`.
+///
+/// Every run reports its lifecycle through `enhance-progress` events from
+/// this single wrapper -- `running` once the slot is claimed (inside
+/// `enhance_path_inner`), then exactly one terminal `done`/`error` here, so
+/// a failure that never reaches the slot (validation, a parse error, an
+/// unknown provider) is still visible to the UI. The manual command's
+/// promise carries the same result; auto runs have only these events.
 fn enhance_path_blocking<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    path: &str,
+) -> Result<String, String> {
+    let provider = Config::load().enhance_provider;
+    let result = enhance_path_inner(app, path);
+    match &result {
+        Ok(_) => emit_progress(app, path, "done", &provider, None),
+        Err(message) => emit_progress(app, path, "error", &provider, Some(message.clone())),
+    }
+    result
+}
+
+fn enhance_path_inner<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     path: &str,
 ) -> Result<String, String> {
@@ -524,6 +970,24 @@ fn enhance_path_blocking<R: tauri::Runtime>(
         .map(str::to_string);
 
     let existing = simstim_transcript::parse_session(md_path).map_err(|e| e.to_string())?;
+    // A title proposal only ever lands while the title is machine-owned:
+    // the automatic "Untitled"/detected shape, or one a previous enhance
+    // wrote (`title_by:` frontmatter) -- so re-enhancing regenerates the
+    // title too (owner request). The writer re-checks against the freshly
+    // parsed file, so a title the user types mid-run still wins.
+    let title_machine_owned =
+        crate::sessions::title_is_auto(&existing.title) || existing.title_by.is_some();
+    let rename_title = cfg.enhance_rename_title && title_machine_owned;
+    // The calendar lookup always runs through the claude CLI (codex's
+    // non-interactive sandbox cancels MCP tool calls, so it cannot do its
+    // own lookup) -- but since the summarizer only receives the found event
+    // as text, ANY cloud provider can use it. The local provider stays
+    // excluded on purpose: "local" promises the note involves no cloud call
+    // at all, and even a timestamp-only lookup would break that promise.
+    let calendar_enabled = cfg.enhance_use_calendar && spec.id != "local";
+    let duration_secs = simstim_transcript::parse_meta(md_path)
+        .ok()
+        .and_then(|meta| meta.duration_secs);
     {
         let mut running = enhance.0.lock().unwrap();
         validate_enhance(
@@ -531,14 +995,47 @@ fn enhance_path_blocking<R: tauri::Runtime>(
             state.active_output_path().as_deref(),
             state.finalizing_match(md_path).as_deref(),
             running.as_deref(),
+            app.state::<crate::retranscribe::RetranscribeState>()
+                .involves(path),
             &existing.transcript,
         )?;
         *running = Some(path.to_string());
     }
-    // The slot is held; release it on EVERY exit path below.
+    // The slot is held; the guard releases it on EVERY exit path below,
+    // including a panic unwinding through spawn_blocking.
+    let slot = SlotGuard(enhance.inner());
+    emit_progress(app, path, "running", spec.id, None);
     let result = (|| {
-        let prompt = build_prompt(&existing.title, &existing.notes, &existing.transcript);
-        let summary = match spec.kind {
+        // The dedicated calendar lookup runs first, inside the slot (the
+        // UI's "Summarizing..." covers it): one narrow tool-using request
+        // that matches the event strictly by the call's date/time window
+        // and answers in machine-checkable JSON. Discovery runs per enhance
+        // (connector lineups change; nothing to invalidate a cache with),
+        // and every failure path is a quiet "no event".
+        let event = if calendar_enabled {
+            resolve_binary("claude").and_then(|claude| {
+                let servers = discover_calendar_servers(&claude);
+                if servers.is_empty() {
+                    return None;
+                }
+                let (start, end) = calendar_window(&existing.date, duration_secs)?;
+                lookup_calendar_event(&claude, &calendar_allowed_tools(&servers), &start, &end)
+            })
+        } else {
+            None
+        };
+        // With a matched event the app applies its name itself, verbatim
+        // (owner rule: never rephrased or improved); the TITLE output
+        // contract is only requested when the model must compose one.
+        let compose_title = rename_title && event.is_none();
+        let prompt = build_prompt(
+            &existing.title,
+            &existing.notes,
+            &existing.transcript,
+            compose_title,
+            event.as_ref(),
+        );
+        let raw = match spec.kind {
             ProviderKind::Local { model_id } => {
                 let model_path = crate::models::model_file_path(model_id)?;
                 crate::local_ai::summarize(
@@ -547,9 +1044,20 @@ fn enhance_path_blocking<R: tauri::Runtime>(
                     &existing.notes,
                     &existing.transcript,
                     &prompt,
+                    compose_title,
                 )?
             }
             ProviderKind::Cli { .. } => run_provider(spec, model.as_deref(), &prompt)?,
+        };
+        let (composed_title, summary) = if compose_title {
+            split_title_line(&raw)
+        } else {
+            (None, raw)
+        };
+        let proposed_title = if rename_title {
+            event.as_ref().map(|event| event.title.clone()).or(composed_title)
+        } else {
+            None
         };
         // Re-check the single-writer rule right before the write: the
         // user could have started recording into this same note while
@@ -560,22 +1068,19 @@ fn enhance_path_blocking<R: tauri::Runtime>(
                     .to_string(),
             );
         }
-        crate::sessions::set_summary_at(md_path, &summary, &summary_label(spec, model.as_deref()))
-            .map_err(|e| e.to_string())?;
+        crate::sessions::set_summary_at(
+            md_path,
+            &summary,
+            &summary_label(spec, model.as_deref()),
+            proposed_title.as_deref(),
+        )
+        .map_err(|e| e.to_string())?;
         Ok(summary)
     })();
-    *enhance.0.lock().unwrap() = None;
+    // Release the slot BEFORE the wrapper announces the terminal phase, so
+    // a listener reacting to it can immediately start another enhance.
+    drop(slot);
     result
-}
-
-/// `enhance-done` event payload: how a BACKGROUND (auto) enhance ended.
-/// Mirrors `EnhanceDonePayload` in `ipc.ts`. The manual command reports
-/// through its own promise instead and never emits this.
-#[derive(Debug, Clone, Serialize)]
-struct EnhanceDonePayload {
-    path: String,
-    ok: bool,
-    message: Option<String>,
 }
 
 /// Fires an auto-enhance for `path` if the setting is on (stage 0.11,
@@ -590,9 +1095,10 @@ struct EnhanceDonePayload {
 ///   queue no longer involves this path, so the check passes): a rewritten
 ///   transcript makes any existing summary stale, so it regenerates.
 ///
-/// Fire-and-forget: the outcome lands as an `enhance-done` event, never a
+/// Fire-and-forget: the outcome lands as `enhance-progress` events (emitted
+/// by `enhance_path_blocking` for every run, manual or auto), never a
 /// blocked stop. Failures (provider missing, another enhance running) are
-/// reported through the same event rather than dropped.
+/// reported through the same events rather than dropped.
 pub(crate) fn maybe_auto_enhance<R: tauri::Runtime>(app: tauri::AppHandle<R>, path: String) {
     let cfg = Config::load();
     if !cfg.auto_enhance {
@@ -605,14 +1111,7 @@ pub(crate) fn maybe_auto_enhance<R: tauri::Runtime>(app: tauri::AppHandle<R>, pa
         return;
     }
     tauri::async_runtime::spawn_blocking(move || {
-        use tauri::Emitter;
-        let result = enhance_path_blocking(&app, &path);
-        let payload = EnhanceDonePayload {
-            path,
-            ok: result.is_ok(),
-            message: result.err(),
-        };
-        let _ = app.emit("enhance-done", payload);
+        let _ = enhance_path_blocking(&app, &path);
     });
 }
 
@@ -625,7 +1124,7 @@ mod tests {
 
         #[test]
         fn notes_lead_and_transcript_backs() {
-            let p = build_prompt("Weekly sync", "- budget approved", "[00:00:01] Me: hi");
+            let p = build_prompt("Weekly sync", "- budget approved", "[00:00:01] Me: hi", false, None);
             let notes_at = p.find("- budget approved").unwrap();
             let transcript_at = p.find("[00:00:01] Me: hi").unwrap();
             assert!(
@@ -638,7 +1137,7 @@ mod tests {
 
         #[test]
         fn empty_notes_ask_for_a_structured_summary_instead() {
-            let p = build_prompt("Untitled", "   ", "[00:00:01] Them: hello");
+            let p = build_prompt("Untitled", "   ", "[00:00:01] Them: hello", false, None);
             assert!(p.contains("took no notes"));
             assert!(p.contains("under 140 words"));
             assert!(p.contains("at most 3 bullets"));
@@ -651,6 +1150,8 @@ mod tests {
                 "Weekly sync",
                 "",
                 "[00:00:01] Me: Давайте выпустим новую версию в пятницу и проверим тесты",
+                false,
+                None,
             );
             assert!(p.contains("Пиши только на языке расшифровки"));
             assert!(p.contains("не переводи на английский"));
@@ -686,6 +1187,198 @@ mod tests {
             let transcript = "Speaker A said the release is ready.";
             assert_eq!(compact_transcript(transcript), transcript);
         }
+
+        #[test]
+        fn title_contract_appears_only_when_requested_in_both_languages() {
+            let plain = build_prompt("Untitled", "", "[00:00:01] Me: hi", false, None);
+            assert!(!plain.contains("TITLE:"));
+
+            let english = build_prompt("Untitled", "", "[00:00:01] Me: hi", true, None);
+            assert!(english.contains("TITLE: <title>"), "{english}");
+            assert!(english.contains("at most 8 words"));
+
+            let cyrillic = build_prompt(
+                "Untitled",
+                "",
+                "[00:00:01] Me: Давайте выпустим новую версию в пятницу и проверим тесты",
+                true,
+                None,
+            );
+            assert!(cyrillic.contains("TITLE: <название>"), "{cyrillic}");
+            assert!(cyrillic.contains("не больше 8 слов"));
+        }
+
+        /// A matched event enters the prompt as source data in both
+        /// languages: it IS the meeting, its name is not to be reinvented.
+        /// (Its verbatim use as the note title is enforced by the app in
+        /// `enhance_path_inner`/`set_summary_at`, not by the prompt.)
+        #[test]
+        fn a_matched_calendar_event_is_source_data_in_both_languages() {
+            let event = CalendarEvent {
+                title: "Q3 Budget Review".to_string(),
+                attendees: vec!["Pavel".to_string(), "Dana".to_string()],
+            };
+            let english = build_prompt("Untitled", "", "[00:00:01] Me: hi", false, Some(&event));
+            assert!(english.contains("\"Q3 Budget Review\""), "{english}");
+            assert!(english.contains("participants: Pavel, Dana"));
+            assert!(english.contains("This IS the meeting"));
+            // No event means no TITLE contract was requested here either.
+            assert!(!english.contains("TITLE:"));
+
+            let cyrillic = build_prompt(
+                "Untitled",
+                "",
+                "[00:00:01] Me: Давайте выпустим новую версию в пятницу и проверим тесты",
+                false,
+                Some(&event),
+            );
+            assert!(cyrillic.contains("«Q3 Budget Review»"), "{cyrillic}");
+            assert!(cyrillic.contains("участники: Pavel, Dana"));
+        }
+    }
+
+    mod calendar_lookup {
+        use super::*;
+
+        #[test]
+        fn window_comes_from_the_notes_date_and_duration() {
+            let (start, end) =
+                calendar_window("2026-08-29T14:03:00+02:00", Some(1810)).unwrap();
+            assert_eq!(start, "2026-08-29T14:03:00+02:00");
+            assert_eq!(end, "2026-08-29T14:33:10+02:00");
+
+            // No recorded duration: assume an hour so short notes still
+            // overlap their meeting.
+            let (_, end) = calendar_window("2026-08-29T14:03:00+02:00", None).unwrap();
+            assert_eq!(end, "2026-08-29T15:03:00+02:00");
+
+            assert!(calendar_window("not a date", Some(60)).is_none());
+        }
+
+        #[test]
+        fn lookup_prompt_pins_the_window_and_the_json_contract() {
+            let p = calendar_lookup_prompt("2026-08-29T14:03:00+02:00", "2026-08-29T14:33:10+02:00");
+            assert!(p.contains("window start: 2026-08-29T14:03:00+02:00"));
+            assert!(p.contains("window end: 2026-08-29T14:33:10+02:00"));
+            assert!(p.contains("date and time overlap"));
+            assert!(p.contains("STRICT JSON"));
+            assert!(p.contains("Never invent an event"));
+        }
+
+        #[test]
+        fn reply_parsing_takes_the_event_verbatim_and_rejects_junk() {
+            let event = parse_calendar_reply(
+                r#"{"found": true, "title": "Q3 Budget Review", "attendees": ["Pavel"]}"#,
+            )
+            .unwrap();
+            assert_eq!(event.title, "Q3 Budget Review");
+            assert_eq!(event.attendees, vec!["Pavel"]);
+
+            // Stray prose or fences around the JSON are tolerated.
+            let fenced = parse_calendar_reply(
+                "Here you go:\n```json\n{\"found\": true, \"title\": \"Sync\"}\n```",
+            )
+            .unwrap();
+            assert_eq!(fenced.title, "Sync");
+
+            assert!(parse_calendar_reply(r#"{"found": false}"#).is_none());
+            assert!(parse_calendar_reply(r#"{"found": true}"#).is_none(), "no title");
+            assert!(parse_calendar_reply("no json at all").is_none());
+            assert!(parse_calendar_reply(r#"{"found": true, "title": "   "}"#).is_none());
+        }
+
+        #[test]
+        fn event_titles_stay_single_line_but_otherwise_verbatim() {
+            let event = parse_calendar_reply(
+                "{\"found\": true, \"title\": \"Weekly  sync\\nwith platform\"}",
+            )
+            .unwrap();
+            assert_eq!(event.title, "Weekly sync with platform");
+        }
+
+        /// The exact output shape of the owner's real CLI (2.1.228): a
+        /// health-check header, then `name: url - status` lines where names
+        /// carry spaces and dots.
+        #[test]
+        fn mcp_list_text_parses_claude_ai_connector_names() {
+            let stdout = "Checking MCP server health…\n\n\
+                claude.ai Figma: https://mcp.figma.com/mcp - ✔ Connected\n\
+                claude.ai Google Calendar: https://calendarmcp.googleapis.com/mcp/v1 - ✔ Connected\n\
+                claude.ai Slack: https://mcp.slack.com/mcp - ✔ Connected\n";
+            let names = parse_mcp_list_text(stdout);
+            assert!(names.contains(&"claude.ai Google Calendar".to_string()), "{names:?}");
+            assert_eq!(
+                filter_calendar_names(names),
+                vec!["claude.ai Google Calendar"]
+            );
+        }
+    }
+
+    mod title_line {
+        use super::*;
+
+        #[test]
+        fn splits_a_leading_title_line_off_the_summary() {
+            let (title, summary) =
+                split_title_line("TITLE: Budget review with finance\n\n- decided X\n- next Y");
+            assert_eq!(title.as_deref(), Some("Budget review with finance"));
+            assert_eq!(summary, "- decided X\n- next Y");
+        }
+
+        #[test]
+        fn missing_or_malformed_title_means_no_rename() {
+            let (title, summary) = split_title_line("- decided X\n- next Y");
+            assert_eq!(title, None);
+            assert_eq!(summary, "- decided X\n- next Y");
+
+            // A title with no body would leave an empty summary: keep the
+            // whole reply as the summary instead of writing a blank one.
+            let (title, summary) = split_title_line("TITLE: Budget review");
+            assert_eq!(title, None);
+            assert_eq!(summary, "TITLE: Budget review");
+        }
+
+        #[test]
+        fn sanitizes_markdown_quotes_and_length() {
+            let (title, _) = split_title_line("TITLE: # \"Budget   review\"\n\nbody");
+            assert_eq!(title.as_deref(), Some("Budget review"));
+
+            let long = format!("TITLE: {}\n\nbody", "word ".repeat(40));
+            let (title, _) = split_title_line(&long);
+            assert!(title.unwrap().chars().count() <= 80);
+        }
+    }
+
+    /// Tool ids normalize spaces and dots to underscores (verified against
+    /// the real CLI: "claude.ai Google Calendar" ->
+    /// `mcp__claude_ai_Google_Calendar__list_events`); a plain local name
+    /// passes through untouched.
+    #[test]
+    fn calendar_allowed_tools_covers_both_rule_shapes_per_normalized_server() {
+        let servers = vec![
+            "google-calendar".to_string(),
+            "claude.ai Google Calendar".to_string(),
+        ];
+        assert_eq!(
+            calendar_allowed_tools(&servers),
+            "mcp__google-calendar,mcp__google-calendar__*,\
+             mcp__claude_ai_Google_Calendar,mcp__claude_ai_Google_Calendar__*"
+        );
+    }
+
+    #[test]
+    fn calendar_filter_keeps_only_calendar_looking_connectors() {
+        let names = vec![
+            "google-calendar".to_string(),
+            "GCal".to_string(),
+            "slack".to_string(),
+            "github".to_string(),
+            "eventkit-mac".to_string(),
+        ];
+        assert_eq!(
+            filter_calendar_names(names),
+            vec!["GCal", "eventkit-mac", "google-calendar"]
+        );
     }
 
     mod validation {
@@ -698,6 +1391,7 @@ mod tests {
                 Some(Path::new("/tmp/a.md")),
                 None,
                 None,
+                false,
                 "[00:00:01] Me: hi",
             )
             .unwrap_err();
@@ -711,6 +1405,7 @@ mod tests {
                 None,
                 Some(Path::new("/tmp/a.md")),
                 None,
+                false,
                 "[00:00:01] Me: hi",
             )
             .unwrap_err();
@@ -724,6 +1419,7 @@ mod tests {
                 None,
                 None,
                 Some("/tmp/b.md"),
+                false,
                 "[00:00:01] Me: hi",
             )
             .unwrap_err();
@@ -734,6 +1430,7 @@ mod tests {
                 None,
                 None,
                 Some("/tmp/a.md"),
+                false,
                 "[00:00:01] Me: hi",
             )
             .unwrap_err();
@@ -743,8 +1440,22 @@ mod tests {
         #[test]
         fn rejects_an_empty_transcript() {
             let err =
-                validate_enhance(Path::new("/tmp/a.md"), None, None, None, "  \n ").unwrap_err();
+                validate_enhance(Path::new("/tmp/a.md"), None, None, None, false, "  \n ").unwrap_err();
             assert!(err.contains("no transcript"), "{err}");
+        }
+
+        #[test]
+        fn rejects_while_a_retranscribe_involves_the_note() {
+            let err = validate_enhance(
+                Path::new("/tmp/a.md"),
+                None,
+                None,
+                None,
+                true,
+                "[00:00:01] Me: hi",
+            )
+            .unwrap_err();
+            assert!(err.contains("re-transcribed"), "{err}");
         }
 
         #[test]
@@ -754,6 +1465,7 @@ mod tests {
                 Some(Path::new("/tmp/other.md")),
                 None,
                 None,
+                false,
                 "[00:00:01] Me: hi",
             )
             .is_ok());
@@ -778,6 +1490,8 @@ mod tests {
             "Test call",
             "- agreed to ship v2 friday",
             "[00:00:01] Me: let's ship version two on friday\n[00:00:04] Them: deal, friday it is",
+            false,
+            None,
         );
         let summary = run_provider(spec, None, &prompt).expect("provider run failed");
         eprintln!("--- summary ---\n{summary}\n---------------");
@@ -798,7 +1512,7 @@ mod tests {
             .expect("SIMSTIM_LOCAL_AI_E2E_MODEL is required");
         let session = simstim_transcript::parse_session(Path::new(&note_path))
             .expect("couldn't parse the test note");
-        let prompt = build_prompt(&session.title, &session.notes, &session.transcript);
+        let prompt = build_prompt(&session.title, &session.notes, &session.transcript, false, None);
         let started = Instant::now();
         let summary = crate::local_ai::summarize(
             Path::new(&model_path),
@@ -806,6 +1520,7 @@ mod tests {
             &session.notes,
             &session.transcript,
             &prompt,
+            false,
         )
         .expect("local summary failed");
         eprintln!("local summary in {:?}:\n{summary}", started.elapsed());

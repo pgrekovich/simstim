@@ -43,8 +43,8 @@ export interface AppConfig {
    * Whether `stop_recording` automatically queues a re-transcribe job for
    * the session that just stopped (stage 0.9). Only actually fires when
    * `keep_audio` is also on and the session has audio. Defaults to `false`.
-   * Toggled from the Settings dialog's Output section (Task 2) via
-   * `setAutoRetranscribe`.
+   * Toggled from the Settings dialog's Models section (Re-transcribe group)
+   * via `setAutoRetranscribe`.
    */
   auto_retranscribe: boolean;
   /**
@@ -52,7 +52,7 @@ export interface AppConfig {
    * depend on how it was triggered -- deletes the session's audio file
    * afterward (stage 0.9). Irreversible: once the audio is gone, the call
    * can never be re-transcribed again. Defaults to `false`. Toggled from
-   * the Settings dialog's Output section (Task 2) via
+   * the Settings dialog's Models section (Re-transcribe group) via
    * `setDeleteAudioAfterRetranscribe`.
    */
   delete_audio_after_retranscribe: boolean;
@@ -72,6 +72,22 @@ export interface AppConfig {
    * any successful re-transcribe. Defaults to `false`.
    */
   auto_enhance: boolean;
+  /**
+   * Whether an enhance may replace an AUTOMATIC title ("Untitled", or the
+   * detected "Zoom call 14:03" shape) with one proposed by the summary
+   * model. A title the user typed themselves is never touched, regardless
+   * of this setting. Defaults to `false`.
+   */
+  enhance_rename_title: boolean;
+  /**
+   * Whether an enhance may look up the calendar event that overlapped the
+   * call through the user's own connectors. The lookup itself always runs
+   * through the Claude Code CLI (codex's non-interactive sandbox cannot run
+   * MCP tools); the found event feeds any CLOUD summary provider as text.
+   * Never offered for the local provider: local promises no cloud call at
+   * all. Defaults to `false`.
+   */
+  enhance_use_calendar: boolean;
   /** Whether known mic-using call apps may surface a recording suggestion. */
   detect_calls: boolean;
   /** Whether an associated recording stops after app I/O release and remote-channel silence. */
@@ -399,10 +415,20 @@ export function setEnhanceProvider(provider: string): Promise<void> {
   return invoke("set_enhance_provider", { provider });
 }
 
-/** Mirrors `enhance::EnhanceDonePayload`, the `enhance-done` event a BACKGROUND (auto) enhance ends with. */
-export interface EnhanceDonePayload {
+export type EnhancePhase = "running" | "done" | "error";
+
+/**
+ * Mirrors `enhance::EnhanceProgressPayload`, the `enhance-progress` event
+ * payload: one enhance job's lifecycle, emitted for BOTH manual and
+ * automatic runs. `running` fires once the job actually claims the
+ * one-at-a-time slot; exactly one terminal `done`/`error` follows, including
+ * for failures that never reach the slot (validation, a missing provider).
+ */
+export interface EnhanceProgress {
   path: string;
-  ok: boolean;
+  phase: EnhancePhase;
+  /** The provider id that ran (`"local"`, `"claude"`, `"codex"`). */
+  provider: string;
   message: string | null;
 }
 
@@ -410,6 +436,24 @@ export interface EnhanceDonePayload {
 export function setAutoEnhance(autoEnhance: boolean): Promise<void> {
   return invoke("set_auto_enhance", { autoEnhance });
 }
+
+/**
+ * Sets and persists whether an enhance may retitle automatically-named
+ * notes from the summary. Mirrors `config::set_enhance_rename_title`.
+ */
+export function setEnhanceRenameTitle(enhanceRenameTitle: boolean): Promise<void> {
+  return invoke("set_enhance_rename_title", { enhanceRenameTitle });
+}
+
+/**
+ * Sets and persists whether the Claude Code provider may consult the
+ * user's calendar connectors for meeting context. Mirrors
+ * `config::set_enhance_use_calendar`.
+ */
+export function setEnhanceUseCalendar(enhanceUseCalendar: boolean): Promise<void> {
+  return invoke("set_enhance_use_calendar", { enhanceUseCalendar });
+}
+
 
 /**
  * Sets one provider's model override (stage 0.11); an empty string clears

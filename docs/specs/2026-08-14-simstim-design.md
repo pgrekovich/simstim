@@ -379,10 +379,58 @@ Generated text replaces only `## Summary` and is labeled
 remain unchanged and available as cloud alternatives.
 
 Status (2026-08-28): implemented on `codex/stage-3.1-local-ai`; all four gates
-and a signed release bundle with the helper pass. Awaiting the owner's native
-M1 quality and peak-memory e2e before merge. See
+and a signed release bundle with the helper pass. See
 `docs/plans/2026-08-28-stage-3.1-local-ai.md` and
 `docs/research/local-summary-models.md`.
+
+Status (2026-08-29): on main and shipped in v0.7.0 (the owner exercised local
+and cloud summaries during the stage 3.2 e2e loop and authorized the release).
+
+## Stage 3.2: settings logic, enhance visibility, model titles (implemented 2026-08-29)
+
+Three owner requests implemented in one overnight pass on
+`night/settings-enhance-title`:
+
+1. Settings reorganized into two pages grouped by intent (refined during
+   the owner's e2e). General holds ALL behavior: the app, everything about
+   a call (detection, audio retention), an "After a call" automation group
+   (auto re-transcribe, delete audio, auto enhance) and a "Summaries"
+   behavior group (titling, calendar). Models is a pure download center
+   plus per-function selection; the summary provider picker is the model
+   manager itself, so the local Qwen row carries its download, progress,
+   delete and selection radio inline. No behavior toggles live on Models.
+2. Enhance reports its lifecycle through one `enhance-progress` event stream
+   for manual and automatic runs. The button is a compact pill next to the
+   tab switcher, replaced in place by the indeterminate "Summarizing..."
+   chip while a job runs; re-run lives in the Summary tab's provenance line;
+   the sidebar shows a work spinner plus a quiet "summarizing" or
+   "transcribing" word on any session with a background job.
+3. Opt-in model-proposed titles (`enhance_rename_title`, default off): a
+   proposal replaces only MACHINE-OWNED titles -- the automatic
+   "Untitled"/detected shape, or one a previous enhance wrote, tracked by
+   the new optional `title_by:` frontmatter field (round-trip safe, absent
+   on old files) -- so re-enhancing regenerates the title too, while a
+   user-typed title always wins (rule 6; a manual rename clears the
+   marker). Opt-in calendar context (`enhance_use_calendar`, default off,
+   cloud providers only): a DEDICATED lookup call runs before the summary,
+   matching the event strictly by the call's date/time window (frontmatter
+   date + duration) and answering in strict JSON; the found event's own
+   name becomes the note title VERBATIM (owner rule: never rephrased,
+   translated or improved -- applied by the app, not trusted to the model),
+   and the event enters the summary prompt as source data, so it works for
+   codex too (the lookup itself always runs through the claude CLI, since
+   codex's non-interactive sandbox cancels MCP tool calls). Connector
+   discovery parses `claude mcp list` (names can carry spaces and dots,
+   e.g. "claude.ai Google Calendar") and allowlists tool ids in their
+   normalized `mcp__claude_ai_Google_Calendar__*` form. The local provider
+   stays excluded on purpose: local promises no cloud call at all. The
+   overflow menu carries Enhance / Re-enhance so re-running while comparing
+   models is one obvious click.
+
+Status (2026-08-29): the owner e2e'd the branch iteratively through the
+morning (overflow re-enhance, deterministic calendar titles, the pure
+download-center Models page all came out of that loop), approved it, and
+authorized merge and release as v0.7.0.
 
 ## Milestones after MVP-0
 

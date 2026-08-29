@@ -654,6 +654,8 @@ pub fn run() {
             config::set_enhance_provider,
             config::set_enhance_model,
             config::set_auto_enhance,
+            config::set_enhance_rename_title,
+            config::set_enhance_use_calendar,
             enhance::list_enhance_providers,
             enhance::enhance_session,
             detect::set_detect_calls,

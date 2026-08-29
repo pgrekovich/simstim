@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main, banner, and menu-bar panel windows",
-  "windows": ["main", "banner", "menu-bar"],
+  "description": "Capability for the main and banner windows",
+  "windows": ["main", "banner"],
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",

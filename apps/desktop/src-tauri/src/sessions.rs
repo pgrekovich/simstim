@@ -145,6 +145,7 @@ pub fn save_session_at(
     title: &str,
     notes: &str,
     active_path: Option<&Path>,
+    finalizing: Option<&Path>,
 ) -> Result<()> {
     if active_path == Some(path) {
         // User-facing (Important fix-review finding): the previous wording
@@ -154,6 +155,14 @@ pub fn save_session_at(
         return Err(anyhow!(
             "this note is currently recording; edits are saved automatically"
         ));
+    }
+    // Architecture-review finding: every other writer of a session file
+    // checks BOTH owners. During the stop-to-encode window the worker is
+    // still inside session.stop() writing the final transcript lines; a
+    // title/notes rewrite racing that is a genuine second writer (rule 5),
+    // and last-atomic-write-wins would silently drop one side's content.
+    if finalizing == Some(path) {
+        return Err(anyhow!("this call is still being saved, try again in a moment"));
     }
     rewrite_session(path, title, notes)
 }
@@ -203,6 +212,14 @@ fn rewrite_session(path: &Path, title: &str, notes: &str) -> Result<()> {
     let mut transcript = Transcript::new(started_at);
     transcript.set_raw_date(existing.date.clone());
     transcript.set_title(title.to_string());
+    // A machine-given title stays marked as such only while the user leaves
+    // it alone: saving a DIFFERENT title is the user renaming the note, and
+    // from then on no enhance may replace it (rule 6).
+    transcript.set_title_by(if title == existing.title {
+        existing.title_by.clone()
+    } else {
+        None
+    });
     transcript.set_notes(notes.to_string());
     transcript.set_asr(meta.asr.clone());
     if let Some(duration_secs) = meta.duration_secs {
@@ -277,6 +294,7 @@ pub fn rewrite_transcript_at(path: &Path, new_transcript: &str, asr_id: &str) ->
     let mut transcript = Transcript::new(started_at);
     transcript.set_raw_date(existing.date.clone());
     transcript.set_title(existing.title.clone());
+    transcript.set_title_by(existing.title_by.clone());
     transcript.set_notes(existing.notes.clone());
     if let Some(duration_secs) = meta.duration_secs {
         transcript.set_duration_secs(duration_secs);
@@ -290,21 +308,81 @@ pub fn rewrite_transcript_at(path: &Path, new_transcript: &str, asr_id: &str) ->
     transcript.save(path)
 }
 
+/// Whether `title` is one the APP generated rather than one the user
+/// typed: the "Untitled" default (`create_session`, a fresh recording), or
+/// the detected-call shape `"{app} call {time}"` (`detectedCallTitle` in
+/// App.tsx -- the time part is locale-formatted, so both "14:03" and
+/// "2:03 PM" occur). Only such titles may ever be replaced by a
+/// model-proposed one: a title the user typed themselves is their words
+/// (rule 6) and is never touched.
+pub(crate) fn title_is_auto(title: &str) -> bool {
+    let title = title.trim();
+    if title == "Untitled" {
+        return true;
+    }
+    match title.rsplit_once(" call ") {
+        Some((app, tail)) => !app.is_empty() && tail_is_clock_time(tail),
+        None => false,
+    }
+}
+
+/// "14:03", "02:03", "2:03 PM", "2:03 am" -- the hour/minute shapes
+/// `toLocaleTimeString` produces in common locales.
+fn tail_is_clock_time(tail: &str) -> bool {
+    let tail = tail.trim();
+    let clock = tail
+        .strip_suffix(" PM")
+        .or_else(|| tail.strip_suffix(" AM"))
+        .or_else(|| tail.strip_suffix(" pm"))
+        .or_else(|| tail.strip_suffix(" am"))
+        .unwrap_or(tail);
+    let Some((hours, minutes)) = clock.split_once(':') else {
+        return false;
+    };
+    (1..=2).contains(&hours.len())
+        && minutes.len() == 2
+        && hours.chars().all(|c| c.is_ascii_digit())
+        && minutes.chars().all(|c| c.is_ascii_digit())
+}
+
 /// Rewrites `path` with a new `## Summary` section (stage 0.11 enhance),
-/// preserving title, notes, date, duration, asr and the transcript exactly
-/// -- the third sibling of `rewrite_session` (title/notes) and
+/// preserving notes, date, duration, asr and the transcript exactly -- the
+/// third sibling of `rewrite_session` (title/notes) and
 /// `rewrite_transcript_at` (transcript), replacing only its own section.
 /// `model` labels the section via the `summary_model:` frontmatter field.
-pub fn set_summary_at(path: &Path, summary: &str, model: &str) -> Result<()> {
+///
+/// `proposed_title` is the enhance run's suggested title (the opt-in
+/// `enhance_rename_title` setting): a verbatim calendar-event name, or one
+/// the model composed. It is applied ONLY while the title on disk is still
+/// machine-owned -- the automatic "Untitled"/detected shape, or one a
+/// previous enhance wrote (`title_by:` frontmatter) -- so re-enhancing
+/// regenerates the title too (owner request), while a title the user typed
+/// themselves is never replaced. Checked here against the freshly parsed
+/// file, not against whatever the caller read minutes earlier: if the user
+/// typed a real title while the model was thinking, their words win and
+/// the proposal is dropped.
+pub fn set_summary_at(
+    path: &Path,
+    summary: &str,
+    model: &str,
+    proposed_title: Option<&str>,
+) -> Result<()> {
     let existing = parse_session(path)?;
     let meta = parse_meta(path)?;
     let started_at = DateTime::parse_from_rfc3339(&existing.date)
         .map(|dt| dt.with_timezone(&Local))
         .unwrap_or_else(|_| Local::now());
 
+    let machine_owned = title_is_auto(&existing.title) || existing.title_by.is_some();
+    let (title, title_by) = match proposed_title {
+        Some(new_title) if machine_owned => (new_title.to_string(), Some(model.to_string())),
+        _ => (existing.title.clone(), existing.title_by.clone()),
+    };
+
     let mut transcript = Transcript::new(started_at);
     transcript.set_raw_date(existing.date.clone());
-    transcript.set_title(existing.title.clone());
+    transcript.set_title(title);
+    transcript.set_title_by(title_by);
     transcript.set_notes(existing.notes.clone());
     transcript.set_asr(meta.asr.clone());
     if let Some(duration_secs) = meta.duration_secs {
@@ -523,7 +601,10 @@ pub fn save_session(
     state: State<AppState>,
 ) -> Result<(), String> {
     let active = state.active_output_path();
-    save_session_at(Path::new(&path), &title, &notes, active.as_deref()).map_err(|e| e.to_string())
+    let md_path = Path::new(&path);
+    let finalizing = state.finalizing_match(md_path);
+    save_session_at(md_path, &title, &notes, active.as_deref(), finalizing.as_deref())
+        .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -643,7 +724,7 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             let path = note_with_summary(dir.path());
 
-            set_summary_at(&path, "- new summary", "codex").unwrap();
+            set_summary_at(&path, "- new summary", "codex", None).unwrap();
 
             let data = parse_session(&path).unwrap();
             assert_eq!(data.summary, "- new summary");
@@ -653,12 +734,87 @@ mod tests {
             assert_eq!(data.transcript, "[00:00:03] Me: hello");
         }
 
+        /// Re-enhance regenerates a machine-given title (owner request):
+        /// once an enhance wrote the title (title_by frontmatter), a later
+        /// proposal may replace it again -- until the user renames the note
+        /// themselves, which clears the marker for good.
+        #[test]
+        fn a_machine_given_title_is_replaced_again_and_a_user_rename_ends_that() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("untitled.md");
+            let mut note = Transcript::new(t(9, 0, 0));
+            note.add(Speaker::Me, 3.0, "hello".into());
+            note.save(&path).unwrap();
+
+            // First enhance: renames the automatic title and marks it.
+            set_summary_at(&path, "- s", "claude", Some("Composed title")).unwrap();
+            assert_eq!(parse_session(&path).unwrap().title, "Composed title");
+
+            // Re-enhance: the machine-given title is fair game again.
+            set_summary_at(&path, "- s2", "claude", Some("Q3 Budget Review")).unwrap();
+            assert_eq!(parse_session(&path).unwrap().title, "Q3 Budget Review");
+
+            // A notes-only save (same title) keeps the machine marker...
+            save_session_at(&path, "Q3 Budget Review", "my notes", None, None).unwrap();
+            set_summary_at(&path, "- s3", "claude", Some("Renamed by model again")).unwrap();
+            assert_eq!(parse_session(&path).unwrap().title, "Renamed by model again");
+
+            // ...but the user typing their own title ends machine renames.
+            save_session_at(&path, "My own name", "my notes", None, None).unwrap();
+            set_summary_at(&path, "- s4", "claude", Some("Should not land")).unwrap();
+            assert_eq!(parse_session(&path).unwrap().title, "My own name");
+        }
+
+        /// Rule 6 at the writer: a proposed title lands only when the title
+        /// on disk is still an automatic one, re-checked against the
+        /// freshly parsed file rather than trusted from the caller.
+        #[test]
+        fn set_summary_at_applies_a_proposed_title_only_over_automatic_titles() {
+            let dir = tempfile::tempdir().unwrap();
+
+            // A user-typed title survives even when a proposal arrives.
+            let typed = note_with_summary(dir.path());
+            set_summary_at(&typed, "- s", "codex", Some("Model title")).unwrap();
+            assert_eq!(parse_session(&typed).unwrap().title, "Sync");
+
+            // The "Untitled" default is replaced.
+            let untitled = dir.path().join("untitled.md");
+            let mut note = Transcript::new(t(9, 0, 0));
+            note.add(Speaker::Me, 3.0, "hello".into());
+            note.save(&untitled).unwrap();
+            set_summary_at(&untitled, "- s", "codex", Some("Budget review")).unwrap();
+            assert_eq!(parse_session(&untitled).unwrap().title, "Budget review");
+
+            // The detected-call shape is replaced too.
+            let detected = dir.path().join("detected.md");
+            let mut note = Transcript::new(t(9, 0, 0));
+            note.set_title("Zoom call 14:03".into());
+            note.add(Speaker::Me, 3.0, "hello".into());
+            note.save(&detected).unwrap();
+            set_summary_at(&detected, "- s", "codex", Some("Budget review")).unwrap();
+            assert_eq!(parse_session(&detected).unwrap().title, "Budget review");
+        }
+
+        #[test]
+        fn title_is_auto_matches_only_generated_shapes() {
+            assert!(title_is_auto("Untitled"));
+            assert!(title_is_auto("Zoom call 14:03"));
+            assert!(title_is_auto("Microsoft Teams call 02:03"));
+            assert!(title_is_auto("Zoom call 2:03 PM"));
+            assert!(title_is_auto("Zoom call 2:03 am"));
+
+            assert!(!title_is_auto("Weekly sync"));
+            assert!(!title_is_auto("Notes about the call 1"));
+            assert!(!title_is_auto("call 14:03"));
+            assert!(!title_is_auto("Planning call today"));
+        }
+
         #[test]
         fn a_title_notes_edit_keeps_the_summary() {
             let dir = tempfile::tempdir().unwrap();
             let path = note_with_summary(dir.path());
 
-            save_session_at(&path, "Renamed", "edited notes", None).unwrap();
+            save_session_at(&path, "Renamed", "edited notes", None, None).unwrap();
 
             let data = parse_session(&path).unwrap();
             assert_eq!(data.summary, "- shipped v2");
@@ -911,11 +1067,31 @@ mod tests {
         let path = dir.path().join("call.md");
         Transcript::new(t(10, 0, 0)).save(&path).unwrap();
 
-        let err = save_session_at(&path, "New title", "notes", Some(&path)).unwrap_err();
+        let err = save_session_at(&path, "New title", "notes", Some(&path), None).unwrap_err();
         assert!(
             err.to_string().contains("recording"),
             "unexpected error: {err}"
         );
+    }
+
+    /// Rule 5 (architecture-review fix): during the stop-to-encode window
+    /// the worker is still writing this file; a title/notes rewrite then is
+    /// a second writer and must be refused, exactly like delete,
+    /// re-transcribe and enhance already refuse it.
+    #[test]
+    fn save_session_at_rejects_the_finalizing_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("call.md");
+        Transcript::new(t(10, 0, 0)).save(&path).unwrap();
+
+        let err = save_session_at(&path, "New title", "notes", None, Some(&path)).unwrap_err();
+        assert!(
+            err.to_string().contains("still being saved"),
+            "unexpected error: {err}"
+        );
+
+        let untouched = std::fs::read_to_string(&path).unwrap();
+        assert!(!untouched.contains("New title"));
     }
 
     #[test]
@@ -925,7 +1101,7 @@ mod tests {
         Transcript::new(t(10, 0, 0)).save(&path).unwrap();
         let other_active = dir.path().join("other-call.md");
 
-        save_session_at(&path, "New title", "notes", Some(&other_active)).unwrap();
+        save_session_at(&path, "New title", "notes", Some(&other_active), None).unwrap();
 
         let after = std::fs::read_to_string(&path).unwrap();
         assert!(after.contains("title: New title"));
@@ -944,7 +1120,7 @@ mod tests {
         tr.save(&path).unwrap();
         let before = std::fs::read_to_string(&path).unwrap();
 
-        save_session_at(&path, "New title", "New notes", None).unwrap();
+        save_session_at(&path, "New title", "New notes", None, None).unwrap();
 
         let after = std::fs::read_to_string(&path).unwrap();
         assert!(after.contains("title: New title"));
@@ -974,7 +1150,7 @@ mod tests {
         let v1 = "---\ndate: 2026-06-01T09:00:00-05:00\nasr: parakeet-tdt-0.6b-v3\n---\n\n## Transcript\n\n[00:00:01] Me: hi\n";
         std::fs::write(&path, v1).unwrap();
 
-        save_session_at(&path, "New title", "New notes", None).unwrap();
+        save_session_at(&path, "New title", "New notes", None, None).unwrap();
 
         let after = std::fs::read_to_string(&path).unwrap();
         let date_line = after.lines().find(|l| l.starts_with("date:")).unwrap();
@@ -998,7 +1174,7 @@ mod tests {
         let content = "---\ndate: 2026-06-01T09:00:00+02:00\ntitle: Old title\nasr: parakeet-tdt-0.6b-v3\n---\n\n## Notes\n\nOld notes\n\n## Transcript\n\n[00:00:01] Me: hi\n-- stray hand-added annotation, not a real transcript line --\n[00:00:04] Them: hey\n";
         std::fs::write(&path, content).unwrap();
 
-        save_session_at(&path, "New title", "New notes", None).unwrap();
+        save_session_at(&path, "New title", "New notes", None, None).unwrap();
 
         let after = std::fs::read_to_string(&path).unwrap();
         let marker = "## Transcript\n\n";
@@ -1065,7 +1241,7 @@ mod tests {
         let content = "---\ndate: 2026-06-01T09:00:00+02:00\ntitle: Old title\nasr: whisper-large-v3-turbo-q8\n---\n\n## Notes\n\nOld notes\n\n## Transcript\n\n[00:00:01] Me: hi\n";
         std::fs::write(&path, content).unwrap();
 
-        save_session_at(&path, "New title", "New notes", None).unwrap();
+        save_session_at(&path, "New title", "New notes", None, None).unwrap();
 
         let after = std::fs::read_to_string(&path).unwrap();
         assert!(after.contains("asr: whisper-large-v3-turbo-q8"));
@@ -1118,7 +1294,7 @@ mod tests {
         let v1 = "---\ndate: 2026-06-01T09:00:00+02:00\nasr: parakeet-tdt-0.6b-v3\n---\n\n## Transcript\n\n[00:00:01] Me: hi\n[00:00:04] Them: hey\n";
         std::fs::write(&path, v1).unwrap();
 
-        save_session_at(&path, "Named now", "First notes", None).unwrap();
+        save_session_at(&path, "Named now", "First notes", None, None).unwrap();
 
         let after = std::fs::read_to_string(&path).unwrap();
         assert!(after.contains("title: Named now"));

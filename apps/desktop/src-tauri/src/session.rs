@@ -203,6 +203,9 @@ fn apply_pending_edits(pending: &Mutex<PendingEdits>, transcript: &mut Transcrip
     let mut applied = false;
     if let Some(title) = title {
         transcript.set_title(title);
+        // The user typed this title themselves: it is theirs now, and no
+        // later enhance may replace it (see Transcript::set_title_by).
+        transcript.set_title_by(None);
         applied = true;
     }
     if let Some(notes) = notes {
@@ -241,6 +244,10 @@ pub struct ContinueFrom {
     /// the note, same as notes and the transcript prefix do.
     pub summary: String,
     pub summary_model: Option<String>,
+    /// Whether the existing title was machine-given (`title_by:`
+    /// frontmatter); carried through so recording into a note doesn't
+    /// silently promote a model-written title to a user-owned one.
+    pub title_by: Option<String>,
 }
 
 /// Loads `path`'s existing content into a [`ContinueFrom`] seed for
@@ -260,6 +267,7 @@ pub fn load_continue_from(path: &Path) -> anyhow::Result<ContinueFrom> {
         previous_duration_secs: meta.duration_secs.unwrap_or(0),
         summary: data.summary,
         summary_model: data.summary_model,
+        title_by: data.title_by,
     })
 }
 
@@ -502,6 +510,7 @@ fn run_worker(
     let continuation = match continue_from {
         Some(seed) => {
             transcript.set_title(seed.title);
+            transcript.set_title_by(seed.title_by);
             transcript.set_notes(seed.notes);
             transcript.set_raw_date(seed.raw_date);
             transcript.set_transcript_prefix(seed.transcript_prefix);

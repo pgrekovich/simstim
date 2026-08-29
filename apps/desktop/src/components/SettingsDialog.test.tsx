@@ -850,4 +850,26 @@ describe("SettingsDialog: two-page navigation (settings reorg)", () => {
       within(general).getByRole("checkbox", { name: /keep call audio/i }),
     ).toBeInTheDocument();
   });
+
+  it("keeps Models a pure download center: every behavior toggle lives on General", async () => {
+    render(<SettingsDialog open onOpenChange={() => {}} />);
+    await screen.findByRole("checkbox", { name: /re-transcribe automatically/i });
+
+    // No switch of any kind on the Models page -- only downloads, deletes
+    // and per-function selection (radios, model menus).
+    const models = document.getElementById("settings-models")!;
+    expect(within(models).queryAllByRole("checkbox")).toHaveLength(0);
+
+    // The automation and summary-behavior toggles all sit inside General.
+    const general = document.getElementById("settings-general")!;
+    for (const name of [
+      /re-transcribe automatically after stopping/i,
+      /delete the audio after re-transcribing/i,
+      /enhance automatically after each call/i,
+      /let it title notes/i,
+      /use your calendar for context/i,
+    ]) {
+      expect(within(general).getByRole("checkbox", { name })).toBeInTheDocument();
+    }
+  });
 });

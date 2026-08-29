@@ -389,12 +389,14 @@ M1 quality and peak-memory e2e before merge. See
 Three owner requests implemented in one overnight pass on
 `night/settings-enhance-title`:
 
-1. Settings reorganized into two pages grouped by intent. General holds app
-   behavior plus everything about a call: detection (moved out of Audio) and
-   audio retention. Models holds every model and provider with download,
-   selection and configuration together; the summary provider picker is the
-   model manager itself, so the local Qwen row carries its download,
-   progress, delete and selection radio inline.
+1. Settings reorganized into two pages grouped by intent (refined during
+   the owner's e2e). General holds ALL behavior: the app, everything about
+   a call (detection, audio retention), an "After a call" automation group
+   (auto re-transcribe, delete audio, auto enhance) and a "Summaries"
+   behavior group (titling, calendar). Models is a pure download center
+   plus per-function selection; the summary provider picker is the model
+   manager itself, so the local Qwen row carries its download, progress,
+   delete and selection radio inline. No behavior toggles live on Models.
 2. Enhance reports its lifecycle through one `enhance-progress` event stream
    for manual and automatic runs. The button is a compact pill next to the
    tab switcher, replaced in place by the indeterminate "Summarizing..."

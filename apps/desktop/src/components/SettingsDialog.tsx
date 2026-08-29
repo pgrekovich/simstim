@@ -128,10 +128,11 @@ const RADIO_CLASS =
  * The left-rail pages; a nav click swaps which section is visible.
  *
  * Two pages, grouped by what the user is doing rather than by subsystem
- * (owner request): General holds app behavior and everything about a call
- * (detection, audio retention), Models holds every model and AI provider --
- * download, selection and configuration together on one page, so picking a
- * summary provider never sends the user to a different tab to download it.
+ * (owner request, refined during e2e): General holds ALL behavior -- the
+ * app, everything about a call (detection, audio retention), what happens
+ * after it ends, and how summaries behave. Models is a pure download
+ * center plus per-function selection (live, re-transcribe, summaries):
+ * no behavior toggles live there.
  */
 const NAV_SECTIONS = [
   { id: "settings-general", label: "General" },
@@ -321,6 +322,10 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
   // landed: state updates alone aren't enough since two click events can, in
   // principle, both run before React commits the first one.
   const inFlightDownloadsRef = useRef<Set<string>>(new Set());
+  // The one scroll container both pages share (sections are CSS-hidden, not
+  // remounted): switching pages must not inherit the previous page's scroll
+  // position, so the nav click resets it.
+  const contentScrollRef = useRef<HTMLDivElement>(null);
 
   const refresh = useCallback(async () => {
     const [freshConfig, freshModels] = await Promise.all([getConfig(), listModels()]);
@@ -807,7 +812,10 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
               <button
                 key={id}
                 type="button"
-                onClick={() => setActiveSection(id)}
+                onClick={() => {
+                  setActiveSection(id);
+                  contentScrollRef.current?.scrollTo({ top: 0 });
+                }}
                 className={cn(
                   "flex h-[30px] items-center rounded-[7px] px-2.5 text-left text-[12.5px] transition-colors duration-150",
                   activeSection === id
@@ -827,13 +835,15 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
               </DialogTitle>
               <span className="font-mono text-[10.5px] text-muted-foreground">saved automatically</span>
             </header>
-            <div className="min-h-0 flex-1 overflow-y-auto">
+            <div ref={contentScrollRef} className="min-h-0 flex-1 overflow-y-auto">
               <div className="flex w-full flex-col px-8 pb-10 pt-1.5">
                 {/* General: app behavior plus everything about a call --
                     detection lives here (it decides when recording is
                     offered, nothing to do with audio encoding), followed by
                     what gets kept afterwards. */}
-                <section id="settings-general" className={cn("flex flex-col gap-5", activeSection !== "settings-general" && "hidden")}>
+                <section id="settings-general" className={cn("flex flex-col gap-6", activeSection !== "settings-general" && "hidden")}>
+                  <div className="flex flex-col gap-1.5">
+                  <h4 className="font-mono text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">App</h4>
                   <Group>
                     <Row label="Theme" error={themeError}>
                       {THEME_OPTIONS.map((option) => (
@@ -879,6 +889,9 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                       </Button>
                     </Row>
                   </Group>
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                  <h4 className="font-mono text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">Call detection</h4>
                   <Group>
                     <Row
                       label="Offer to record when a call starts"
@@ -909,6 +922,9 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                       />
                     </Row>
                   </Group>
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                  <h4 className="font-mono text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">Call audio</h4>
                   <Group>
                     <Row
                       label="Keep call audio"
@@ -942,11 +958,112 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                       ))}
                     </Row>
                   </Group>
+                  </div>
+                  {/* What the app does on its own once a call ends. These
+                      configure behavior, not models, so they live here
+                      (owner request): Models stays a pure download center
+                      plus per-function selection. */}
+                  <div className="flex flex-col gap-1.5">
+                  <h4 className="font-mono text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">After a call</h4>
+                  <Group>
+                    {/* Stage 0.9 (fix-review correction): only the AUTO
+                        toggle needs `keep_audio` on -- it fires right after
+                        a recording stops, so it's useless without an audio
+                        file having just been kept. The delete toggle is NOT
+                        gated the same way: delete-after applies to ANY
+                        successful re-transcribe, including a MANUAL one on
+                        an old session that still has audio from back when
+                        `keep_audio` was on, even if it's off right now. */}
+                    <Row
+                      label="Re-transcribe automatically after stopping"
+                      htmlFor="auto-retranscribe"
+                      description={
+                        <>
+                          Runs the selected whisper model on the finished call in the background.
+                          {config && !config.keep_audio && " Needs call audio."}
+                        </>
+                      }
+                      error={autoRetranscribeError}
+                    >
+                      <Checkbox
+                        variant="switch"
+                        id="auto-retranscribe"
+                        checked={config?.auto_retranscribe ?? false}
+                        disabled={!config || !config.keep_audio}
+                        onCheckedChange={(checked) => handleSetAutoRetranscribe(checked === true)}
+                      />
+                    </Row>
+                    <Row
+                      label="Delete the audio after re-transcribing"
+                      htmlFor="delete-audio-after-retranscribe"
+                      description={
+                        'Removes the recording once a re-transcribe succeeds - manual or automatic, it always applies, regardless of whether "Keep call audio" is currently on (an old session recorded with it on can still be re-transcribed manually) - and that call can never be re-transcribed again.'
+                      }
+                      error={deleteAudioAfterError}
+                    >
+                      <Checkbox
+                        variant="switch"
+                        id="delete-audio-after-retranscribe"
+                        checked={config?.delete_audio_after_retranscribe ?? false}
+                        disabled={!config}
+                        onCheckedChange={(checked) => handleSetDeleteAudioAfterRetranscribe(checked === true)}
+                      />
+                    </Row>
+                    <Row
+                      label="Enhance automatically after each call"
+                      htmlFor="auto-enhance"
+                      description={'Fires once the call stops (after the automatic re-transcribe when that is on) and after any successful re-transcribe. With empty notes it writes a summary with key points and action items.'}
+                      error={autoEnhanceError}
+                    >
+                      <Checkbox
+                        variant="switch"
+                        id="auto-enhance"
+                        checked={config?.auto_enhance ?? false}
+                        disabled={!config}
+                        onCheckedChange={(checked) => handleSetAutoEnhance(checked === true)}
+                      />
+                    </Row>
+                  </Group>
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                  <h4 className="font-mono text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">Summaries</h4>
+                  <Group>
+                    <Row
+                      label="Let it title notes"
+                      htmlFor="enhance-rename-title"
+                      description={'Replaces automatic titles ("Untitled", "Zoom call 14:03") with one proposed by the summary. Titles you typed yourself are never touched.'}
+                      error={renameTitleError}
+                    >
+                      <Checkbox
+                        variant="switch"
+                        id="enhance-rename-title"
+                        checked={config?.enhance_rename_title ?? false}
+                        disabled={!config}
+                        onCheckedChange={(checked) => handleSetEnhanceRenameTitle(checked === true)}
+                      />
+                    </Row>
+                    <Row
+                      label="Use your calendar for context"
+                      htmlFor="enhance-use-calendar"
+                      description="Looks up the meeting that overlapped the call through your own calendar connectors, via the Claude Code CLI, and hands its name and participants to whichever cloud provider summarizes. A found event names the note with the event's own name, verbatim, when title renaming is on. Not offered for the local provider: local means no cloud call at all."
+                      error={useCalendarError}
+                    >
+                      <Checkbox
+                        variant="switch"
+                        id="enhance-use-calendar"
+                        checked={config?.enhance_use_calendar ?? false}
+                        disabled={!config || config.enhance_provider === "local"}
+                        onCheckedChange={(checked) => handleSetEnhanceUseCalendar(checked === true)}
+                      />
+                    </Row>
+                  </Group>
+                  </div>
                 </section>
 
-                {/* Models: every model and provider the app can run --
-                    download, selection and the behavior toggles that
-                    configure each one live together, per domain. */}
+                {/* Models: a pure download center plus per-function
+                    selection (owner request) -- which model records live,
+                    which re-transcribes, which provider summarizes. All
+                    behavior toggles live on General. */}
                 <section id="settings-models" className={cn("flex flex-col gap-7", activeSection !== "settings-models" && "hidden")}>
             {/* Live transcription (stage 0.8): every `role === "live"` entry.
                 Parakeet is the only one today and stays the only one a future
@@ -1092,53 +1209,6 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                     </li>
                   );
                 })}
-                {/* Stage 0.9 (fix-review correction): only the AUTO toggle
-                    needs `keep_audio` on -- it fires right after a recording
-                    stops, so it's useless without an audio file having just
-                    been kept. The delete toggle is NOT gated the same way:
-                    `retranscribe_session` applies delete-after to ANY
-                    successful re-transcribe, including a MANUAL one on an
-                    old session that still has audio from back when
-                    `keep_audio` was on, even if it's off right now. */}
-                <li>
-                  <Row
-                    label="Re-transcribe automatically after stopping"
-                    htmlFor="auto-retranscribe"
-                    description={
-                      <>
-                        Runs the selected whisper model on the finished call in the background.
-                        {config && !config.keep_audio && " Needs call audio."}
-                      </>
-                    }
-                    error={autoRetranscribeError}
-                  >
-                    <Checkbox
-                      variant="switch"
-                      id="auto-retranscribe"
-                      checked={config?.auto_retranscribe ?? false}
-                      disabled={!config || !config.keep_audio}
-                      onCheckedChange={(checked) => handleSetAutoRetranscribe(checked === true)}
-                    />
-                  </Row>
-                </li>
-                <li>
-                  <Row
-                    label="Delete the audio after re-transcribing"
-                    htmlFor="delete-audio-after-retranscribe"
-                    description={
-                      'Removes the recording once a re-transcribe succeeds - manual or automatic, it always applies, regardless of whether "Keep call audio" is currently on (an old session recorded with it on can still be re-transcribed manually) - and that call can never be re-transcribed again.'
-                    }
-                    error={deleteAudioAfterError}
-                  >
-                    <Checkbox
-                      variant="switch"
-                      id="delete-audio-after-retranscribe"
-                      checked={config?.delete_audio_after_retranscribe ?? false}
-                      disabled={!config}
-                      onCheckedChange={(checked) => handleSetDeleteAudioAfterRetranscribe(checked === true)}
-                    />
-                  </Row>
-                </li>
               </ul>
             </div>
 
@@ -1259,54 +1329,6 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                       </Row>
                     </li>
                   ))}
-                <li>
-                  <Row
-                    label="Enhance automatically after each call"
-                    htmlFor="auto-enhance"
-                    description={'Fires once the call stops (after the automatic re-transcribe when that is on) and after any successful re-transcribe. With empty notes it writes a summary with key points and action items.'}
-                    error={autoEnhanceError}
-                  >
-                    <Checkbox
-                      variant="switch"
-                      id="auto-enhance"
-                      checked={config?.auto_enhance ?? false}
-                      disabled={!config}
-                      onCheckedChange={(checked) => handleSetAutoEnhance(checked === true)}
-                    />
-                  </Row>
-                </li>
-                <li>
-                  <Row
-                    label="Let it title notes"
-                    htmlFor="enhance-rename-title"
-                    description={'Replaces automatic titles ("Untitled", "Zoom call 14:03") with one proposed by the summary. Titles you typed yourself are never touched.'}
-                    error={renameTitleError}
-                  >
-                    <Checkbox
-                      variant="switch"
-                      id="enhance-rename-title"
-                      checked={config?.enhance_rename_title ?? false}
-                      disabled={!config}
-                      onCheckedChange={(checked) => handleSetEnhanceRenameTitle(checked === true)}
-                    />
-                  </Row>
-                </li>
-                <li>
-                  <Row
-                    label="Use your calendar for context"
-                    htmlFor="enhance-use-calendar"
-                    description="Looks up the meeting that overlapped the call through your own calendar connectors, via the Claude Code CLI, and hands its name and participants to whichever cloud provider summarizes. A found event names the note with the event's own name, verbatim, when title renaming is on. Not offered for the local provider: local means no cloud call at all."
-                    error={useCalendarError}
-                  >
-                    <Checkbox
-                      variant="switch"
-                      id="enhance-use-calendar"
-                      checked={config?.enhance_use_calendar ?? false}
-                      disabled={!config || config.enhance_provider === "local"}
-                      onCheckedChange={(checked) => handleSetEnhanceUseCalendar(checked === true)}
-                    />
-                  </Row>
-                </li>
                 {enhanceProviders.length === 0 && (
                   <li>
                     <Row

@@ -814,7 +814,13 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                 type="button"
                 onClick={() => {
                   setActiveSection(id);
-                  contentScrollRef.current?.scrollTo({ top: 0 });
+                  // A plain property write, not scrollTo(): jsdom (the test
+                  // environment) does not implement scrolling methods and
+                  // throws from them, which fails vitest after the suite as
+                  // an unhandled onClick error (v0.7.0's first CI run).
+                  if (contentScrollRef.current) {
+                    contentScrollRef.current.scrollTop = 0;
+                  }
                 }}
                 className={cn(
                   "flex h-[30px] items-center rounded-[7px] px-2.5 text-left text-[12.5px] transition-colors duration-150",

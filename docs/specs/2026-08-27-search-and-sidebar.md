@@ -50,7 +50,8 @@ open anything the user has written or said. This stage adapts design sections
 - Opening a spoken result originally opened only its note. Stage 2.1 adds
   precise in-note find and navigation.
 - Search originally kept `Command+F` as a compatibility alias. Stage 2.1 gives
-  it to transcript-local find while `Command+K` remains the global shortcut.
+  it to transcript-local find while `Command+K` remains the active-window
+  shortcut.
 - Search result ordering follows the existing backend order: newest notes
   first, with matching lines in file order.
 

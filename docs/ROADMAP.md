@@ -1,76 +1,60 @@
 # Roadmap
 
-Owner-ordered priorities as of 2026-08-16. The next stage is decided; the
-rest is a ranked backlog, re-ranked after real usage, not a promise. History
-and per-stage detail live in the spec's status lines and `docs/plans/`.
+Owner-ordered priorities as of 2026-08-31. Items are a ranked backlog that may
+move after real usage. Detailed history lives in the main spec's status lines
+and `docs/plans/`.
 
-## Shipped (MVP-0 through 0.9)
+## Shipped through stage 3.3
 
-Live local transcription (Parakeet, Me/Them from channel separation), the
-notes-app shell over a plain-files store, interim (draft) lines while
-speaking, light/dark themes, audio retention (AAC default / FLAC option),
-whisper re-transcribe with model selection and deletion, click-to-seek
-playback, auto re-transcribe on stop, audio cleanup after re-transcribe,
-recording into an existing note with audio and timestamp continuation.
+- Local live transcription with exact `Me` and `Them` channel separation,
+  plain Markdown storage, crash-safe audio, notes, titles and continuation.
+- Retained AAC or FLAC audio, click-to-seek playback, offline Whisper
+  re-transcribe, model selection, FIFO jobs and optional audio cleanup.
+- Core Audio call detection, the floating start/stop banner, optional auto-stop,
+  and a menu-bar recording indicator. Recording still starts only on a click.
+- The paper-and-ink interface, folder-backed sidebar, full-text search,
+  transcript-local find and active-window keyboard shortcuts.
+- Local Qwen summaries plus optional Claude Code and Codex providers, generated
+  titles and calendar connector context. User notes remain separate and sacred.
+- One Linux-style TOML configuration file shared with the Settings UI.
 
-## Implemented, awaiting owner e2e: stage 1.0, call detection
+There are no global shortcuts. Keyboard shortcuts work only while a simstim
+window is active, so browser and system shortcuts remain untouched.
 
-The original Granola magic and the last big piece of daily friction: today
-you must remember the app exists before a call starts.
+## Ranked backlog
 
-- Detect "an app started using the microphone" via Core Audio callbacks on
-  every audio device and process objects (no extra permission expected).
-  Track process output after recording starts so a muted listener remains in
-  the call. Use a low-frequency reconciliation scan only while an episode is
-  active, because macOS can omit a browser helper's final callback. Match
-  against the static whitelist of calling apps, including Firefox and
-  Chromium helpers.
-- Notify with the app's name; one click starts recording into a new note.
-  **Never auto-record** (product principle 5): detection suggests, the human
-  decides. This is also the legal line Granola is being sued over.
-- Auto-stop consideration: when the detected app releases the mic, either
-  suggest stopping or stop automatically (stopping is the safe direction;
-  recording silently is the dangerous one). Decide during design.
-- Known limitation to accept up front: a browser using the mic is
-  indistinguishable from a call in that browser without an extension.
-  Granola notifies anyway with the browser's name; so will we.
-- Research: `docs/research/detection.md` (API verification measured before
-  the plan was written).
+1. **Guided first run.** Explain microphone and system-audio permissions,
+   verify both channels, and guide the first required model download without
+   hiding the ordinary Settings path.
+2. **Calendar metadata.** EventKit first for local event names and attendees.
+   Full Google OAuth only if EventKit proves insufficient. Cloud connector
+   context for summaries already exists and remains an explicit opt-in.
+3. **Richer transcript structure.** Consider generated chapters only after a
+   clear product contract and reliable round-trip behavior exist.
+4. **Windows, then Linux.** WASAPI loopback and session notifications first,
+   then PipeWire. Capture and detection stay behind the existing boundaries.
+5. **Public release polish.** Broader onboarding, updater and public launch
+   once the owner is comfortable handing the app to someone else.
 
-## Ranked backlog (after 1.0)
+## Smaller known items
 
-1. **Menu bar presence + global hotkey.** Detection makes the window
-   optional; the tray icon with a recording indicator and a start/stop
-   hotkey completes "the app disappears until needed". Pairs naturally with
-   1.0 but kept separate so 1.0 stays small.
-2. **Enhance (the Granola notes mechanic).** Rough notes + transcript ->
-   polished notes via the owner's own API key, into a separate `## Summary`
-   section (user text stays sacred). Deliberately postponed until transcript
-   quality was worth enhancing; whisper re-transcribe closed that.
-3. **Calendar.** EventKit first (free ride on macOS Calendar accounts,
-   including Google), full Google OAuth only if EventKit proves not enough.
-   Value: pre-titled notes ("Daily stand-up", attendees) instead of
-   "Untitled". Explicitly the LAST macOS feature per the original decision.
-4. **Windows port** (WASAPI loopback + session notifications), then Linux
-   (PipeWire). The capture and detect layers were designed behind traits for
-   exactly this; everything else is already portable.
-5. **Public release**: signing, notarization, updater, docs, Show HN. The
-   niche ("transcribe -> plain md in a folder -> nothing else") was empty as
-   of 2026-08; prior-art research says people literally ask for this.
+- Measure AAC compression loss on Russian specifically.
+- Whisper timestamps drift on some segments after re-transcribe.
+- Add download resume for multi-GB models.
+- Re-detect sample rate when audio devices change mid-call.
+- Clean up the suppressed-error stash, repeated-continuation FLAC padding and
+  orphaned `.recovering.wav` after a double failure when they become painful.
 
-## Smaller known items (do opportunistically, tracked in spec Known issues)
+## Rejected experiments
 
-- Measure compression loss on Russian specifically (the 4% WER number was
-  measured on other languages).
-- Whisper timestamps drift on some segments after re-transcribe (owner
-  accepted; revisit only if it starts to hurt seeking).
-- Download resume for multi-GB models; sample-rate re-detection when audio
-  devices change mid-call; the single-slot suppressed-error stash; FLAC
-  padding accumulation on repeated continuations; orphaned
-  `.recovering.wav` after a double failure.
+- **Remote speaker diarization.** Automatic and fixed-count clustering both
+  produced unreliable speaker attribution on real calls, including severe
+  over-segmentation. The prototype, model downloads and configuration were
+  removed. Do not put it back on the roadmap without a materially more reliable
+  approach and a new owner decision.
 
-## Non-goals (decided, do not resurrect without the owner)
+## Non-goals
 
-Accounts, cloud sync, telemetry, sharing infrastructure, chat-with-notes,
-mobile/watch apps, SQLite anything. The prior-art doc explains why: these
-are exactly the features that made every alternative unusable.
+Accounts, hosted sync, telemetry, upsell, sharing infrastructure, mobile/watch
+apps and SQLite as a source of truth. Chat across notes remains blocked on an
+explicit product decision; it must not sneak in as incidental roadmap work.

@@ -80,11 +80,10 @@ Coming (design for these now):
     folder of notes ("what did Marek promise across our last five calls?").
     Runs through the user's own AI CLI, same privacy contract as enhance.
     This is a first-class surface, not a bolt-on bubble.
-11. **Menu bar presence + global hotkey**: the window becomes optional.
+11. **Menu bar presence**: the window becomes optional; shortcuts stay scoped
+    to the active simstim window.
 12. **Calendar awareness** (EventKit): upcoming call context, one-click start.
-13. **Remote speaker diarization**: transcript lines become Them 1 / Them 2,
-    later renameable to real names.
-14. **Search across all notes** (ripgrep-fast, local).
+13. **Search across all notes** (ripgrep-fast, local).
 
 ## Hard rules (product principles the design may not violate)
 

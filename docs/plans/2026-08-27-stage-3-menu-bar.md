@@ -1,12 +1,12 @@
 # Stage 3: optional app presence
 
-Date: 2026-08-27. Status: implemented, awaiting owner e2e.
+Date: 2026-08-27. Status: shipped; global shortcut removed 2026-08-29.
 
 ## Goal
 
 Make the main window optional during a call. simstim remains reachable from
-the macOS menu bar, clearly shows whether it is recording, and exposes one
-global start/stop shortcut.
+the macOS menu bar and clearly shows whether it is recording. Keyboard
+shortcuts work only while a simstim window is active.
 
 ## Scope
 
@@ -17,12 +17,13 @@ global start/stop shortcut.
 3. Clicking the item opens a native macOS menu. Idle state offers Start
    Recording, New Note, Open simstim, Settings, and Quit simstim. Recording
    state changes the first two actions to Stop Recording and Add Note.
-4. `Command+Shift+N` is registered as a global start/stop shortcut, matching
-   the shortcut already shown and handled inside the app.
+4. `Command+Shift+N` is handled only inside the active app window. It is not
+   registered with macOS and cannot shadow shortcuts in other applications.
 5. Menu-bar and shortcut actions route through the existing main-window
    recording flow. There remains one UI coordinator and one backend writer.
 6. The main window may be hidden without ending the application. The native
-   menu and global shortcut continue to work while it is hidden.
+   menu continues to work while it is hidden; keyboard shortcuts require an
+   active simstim window.
 7. A General setting controls whether simstim appears in the Dock. It defaults
    on for existing and new configs, applies immediately, and can be turned off
    for menu-bar-only use.

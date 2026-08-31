@@ -40,8 +40,8 @@ HN commenters on the Hyprnote launch literally begged for this product.
    structurally separate from what the user typed (Granola's black/gray
    lesson, implemented as separate markdown sections).
 5. **Never record silently.** Recording starts only on explicit user action
-   (button, hotkey, or one click on a detection notification). Auto-detection
-   suggests; it never starts capture by itself.
+   (button, active-window shortcut, or one click on a detection notification).
+   Auto-detection suggests; it never starts capture by itself.
 6. **Crash-safe by construction.** Transcript segments are appended to disk as
    they are finalized. Killing the app mid-call loses at most the last segment.
 7. **Quality bar**: reliable, fast, small, beautiful. Nerd-community grade.
@@ -288,8 +288,8 @@ Research basis: `docs/research/detection.md` (APIs verified with live probes).
   stop path. Stopping is the safe direction to automate; starting never is.
 - Settings: `detect_calls: bool` (default on: it only ever notifies).
 
-Out of 1.0: calendar signals, tray/menu-bar presence, global hotkey, tab
-identification in browsers, AX-based in-meeting confidence.
+Out of 1.0: calendar signals, tray/menu-bar presence, active-window shortcuts,
+tab identification in browsers, AX-based in-meeting confidence.
 
 ## Stage 1.1: floating call banner (approved 2026-08-19)
 
@@ -463,24 +463,13 @@ and value reference.
 6. Windows port, then Linux.
 7. Public release: signing, notarization, updater, docs, Show HN.
 
-Idea backlog (owner-approved direction, no stage yet):
+## Rejected experiments
 
-- **Them-channel diarization in the offline pass** (idea saved 2026-08-23).
-  Whisper doesn't diarize; sherpa-onnx (already in the stack) ships an
-  offline pipeline for it: pyannote segmentation (~6 MB) + speaker
-  embeddings (~20-70 MB) + clustering. Run it on the THEM channel only
-  during re-transcribe -- Me stays exact by construction, and the model
-  only has to answer "which remote speaker", a strictly easier task than
-  the mixed-track diarization competitors run (our channel split removes
-  the own-voice-vs-remote confusion entirely). Map speaker turns onto
-  whisper segments by timestamp, the same mechanic the silence-cut
-  offset mapping already uses; lines become `Them 1:` / `Them 2:`.
-  Costs to plan for: format v2 change (parse/render round-trip, old
-  notes stay valid), unknown speaker count (threshold clustering),
-  call-codec-compressed audio weakening embeddings (fine at 2-3 remote
-  speakers, degrades in a six-person shared-mic room, same as everyone).
-  Strictly an opt-in re-transcribe toggle, off by default. Possible
-  follow-up: renaming `Them N` to real names in the note.
+- **Remote speaker diarization** (rejected 2026-08-31). Automatic speaker-count
+  inference severely over-segmented real calls. Supplying the exact count still
+  produced unreliable attribution. The prototype, optional models and setting
+  were removed after owner e2e. Reconsider only if a materially more reliable
+  local approach exists.
 
 ## Risks / open questions
 

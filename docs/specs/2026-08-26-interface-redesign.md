@@ -113,9 +113,7 @@ short state transitions. No decorative animation runs during a call.
 - Transcript chapters and generated chapter labels.
 - A real waveform. The current player exposes only a seek slider.
 - A persistent three-tab information model when no Summary exists.
-- Multi-speaker remote diarization and speaker renaming.
 - Guided first-run flow for permissions, model download, and summary engine.
-- Menu-bar app, menu-bar panel, and global system hotkey.
 - Calendar metadata and calendar-driven titles.
 - Summary-ready banner notification.
 - New dock and menu-bar icon assets integrated into the bundle.
@@ -185,9 +183,8 @@ backend support but do not change the product's privacy position.
 
 ### Stage 3: optional app presence
 
-Implement the menu-bar item, idle and recording template icon, panel, and a
-global start/stop hotkey. Integrate final dock assets only after checking all
-required macOS sizes and template rendering.
+Implement the menu-bar item and idle and recording template icon. Keyboard
+shortcuts remain scoped to the active simstim window.
 
 Status (2026-08-27): implemented on `codex/stage-3-menu-bar`, awaiting owner
 e2e. Status (2026-08-29): on main and shipped in v0.7.0. The owner explicitly removed the Stage 2 waveform from the near-term
@@ -210,9 +207,9 @@ remain Stage 5. See `docs/plans/2026-08-28-stage-3.1-local-ai.md` and
 
 ### Stage 4: richer transcript structure
 
-Add optional remote-speaker diarization and renameable speakers, then chapters
-derived from transcript content. Both need file-format and round-trip decisions
-before UI work.
+Consider generated chapters only after their product contract, file format and
+round-trip behavior are clear. A remote-speaker diarization prototype was
+removed after owner e2e found its attribution unreliable on real calls.
 
 ### Stage 5: knowledge interaction, blocked on product decision
 

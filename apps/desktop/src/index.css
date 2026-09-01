@@ -276,8 +276,8 @@
     --sidebar-accent-foreground: #1E1B16;
     --sidebar-border: rgb(30 27 22 / 10%);
     --sidebar-ring: rgb(30 27 22 / 28%);
-    --scrollbar-thumb: rgb(30 27 22 / 22%);
-    --scrollbar-thumb-hover: rgb(30 27 22 / 36%);
+    --scrollbar-thumb: rgb(30 27 22 / 16%);
+    --scrollbar-thumb-hover: rgb(30 27 22 / 30%);
 }
 
 .dark {
@@ -315,15 +315,26 @@
     --sidebar-accent-foreground: #F0EBDD;
     --sidebar-border: rgb(233 228 214 / 8%);
     --sidebar-ring: rgb(233 228 214 / 30%);
-    --scrollbar-thumb: rgb(233 228 214 / 24%);
-    --scrollbar-thumb-hover: rgb(233 228 214 / 40%);
+    --scrollbar-thumb: rgb(233 228 214 / 18%);
+    --scrollbar-thumb-hover: rgb(233 228 214 / 32%);
 }
 
 @layer base {
+  /* Scrollbars stay invisible until the pointer is over the scroll container
+     or it is actively scrolling (the `is-scrolling` class is tagged by
+     scrollbar-reveal.ts, since WebKit loses its native "show while
+     scrolling" overlay behavior the moment ::-webkit-scrollbar is
+     customized). Both the standard scrollbar-color path and the -webkit
+     pseudo-element path get the same treatment: which one WKWebView honors
+     depends on its version. */
   * {
     @apply border-border outline-ring/50;
-    scrollbar-color: var(--scrollbar-thumb) transparent;
+    scrollbar-color: transparent transparent;
     scrollbar-width: thin;
+    }
+  *:hover,
+  .is-scrolling {
+    scrollbar-color: var(--scrollbar-thumb) transparent;
     }
   *::-webkit-scrollbar {
     width: 8px;
@@ -337,6 +348,11 @@
     min-height: 36px;
     border: 2px solid transparent;
     border-radius: 999px;
+    background: transparent;
+    background-clip: padding-box;
+    }
+  *:hover::-webkit-scrollbar-thumb,
+  .is-scrolling::-webkit-scrollbar-thumb {
     background: var(--scrollbar-thumb);
     background-clip: padding-box;
     }

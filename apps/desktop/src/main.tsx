@@ -4,6 +4,9 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import "./index.css";
 import App from "./App";
 import BannerApp from "./banner/BannerApp";
+import { installScrollbarReveal } from "./lib/scrollbar-reveal";
+
+installScrollbarReveal();
 
 // One dist serves every window; the label picks the UI. The banner window
 // additionally needs a transparent body (it is a floating card on a

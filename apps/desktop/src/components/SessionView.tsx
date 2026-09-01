@@ -357,6 +357,28 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
   // that must never close over a stale render's value.
   const titleRef = useRef(title);
   const notesRef = useRef(notes);
+  const titleFieldRef = useRef<HTMLTextAreaElement | null>(null);
+
+  // The title field is a textarea so long titles wrap instead of clipping,
+  // but it must never scroll internally: grow it to fit its content, and
+  // re-fit when the available width changes (window resize, sidebar toggle).
+  const fitTitleField = () => {
+    const el = titleFieldRef.current;
+    if (!el) return;
+    el.style.height = "0";
+    el.style.height = `${el.scrollHeight}px`;
+  };
+
+  useLayoutEffect(fitTitleField, [title]);
+
+  useEffect(() => {
+    const el = titleFieldRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver(fitTitleField);
+    observer.observe(el);
+    return () => observer.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const notesInputRef = useRef<MarkdownEditorHandle>(null);
   const savedTitleRef = useRef(title);
   const savedNotesRef = useRef(notes);
@@ -558,15 +580,19 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
     }
   }
 
-  function handleTitleChange(e: React.ChangeEvent<HTMLInputElement>) {
-    const value = e.target.value;
+  function handleTitleChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
+    // The field is a textarea only so long titles can wrap; the title
+    // itself stays one logical line (it is the file's H1). Enter never
+    // types (see handleTitleKeyDown), but a multiline paste would slip
+    // newlines in, so collapse them here.
+    const value = e.target.value.replace(/\s*\n\s*/g, " ");
     setTitle(value);
     titleRef.current = value;
     onActiveEdit?.(titleRef.current, notesRef.current);
   }
 
-  // Enter blurs the input, which triggers the save via onBlur below.
-  function handleTitleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+  // Enter blurs the field, which triggers the save via onBlur below.
+  function handleTitleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === "Enter") {
       e.preventDefault();
       e.currentTarget.blur();
@@ -660,13 +686,15 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
       : null;
 
   const titleInput = (
-    <input
+    <textarea
+      ref={titleFieldRef}
       value={title}
       onChange={handleTitleChange}
       onKeyDown={handleTitleKeyDown}
       onBlur={commitTitle}
       placeholder="Untitled"
-      className="w-full min-w-0 bg-transparent font-serif text-[26px] font-semibold leading-[1.25] tracking-[-0.01em] outline-none placeholder:text-muted-foreground"
+      rows={1}
+      className="block w-full min-w-0 resize-none overflow-hidden bg-transparent font-serif text-[26px] font-semibold leading-[1.25] tracking-[-0.01em] outline-none placeholder:text-muted-foreground"
     />
   );
 

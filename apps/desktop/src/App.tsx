@@ -183,8 +183,12 @@ function App() {
   // can outlive the initiating SessionView instance (switching sessions
   // remounts it under a fresh key), and the sidebar needs it for every
   // session, not just the open one. Owned by the `enhance-progress`
-  // listener below.
-  const [enhancingPath, setEnhancingPath] = useState<string | null>(null);
+  // listener below. `message` carries the local provider's map/reduce step
+  // ("Summarizing part 2 of 7...") so a long run shows real progress.
+  const [enhancing, setEnhancing] = useState<{ path: string; message: string | null } | null>(
+    null,
+  );
+  const enhancingPath = enhancing?.path ?? null;
   // Paths with a MANUALLY-initiated re-transcribe currently in flight
   // (review fix, Task 2): SessionView calls `handleManualRetranscribeStart`
   // the instant its own click handler starts the job, before awaiting
@@ -683,10 +687,10 @@ function App() {
     const unlisten = listen<EnhanceProgress>("enhance-progress", (event) => {
       const { path, phase, message } = event.payload;
       if (phase === "running") {
-        setEnhancingPath(path);
+        setEnhancing({ path, message });
         return;
       }
-      setEnhancingPath((prev) => (prev === path ? null : prev));
+      setEnhancing((prev) => (prev?.path === path ? null : prev));
       if (phase === "error") {
         const errorMessage = message ?? "enhance failed";
         setStatus((prev) => {
@@ -1260,6 +1264,7 @@ function App() {
               interimThem={interimThem}
               retranscribingJob={retranscribingJob}
               enhanceRunning={enhancingPath === selectedPath}
+              enhanceProgress={enhancing?.path === selectedPath ? enhancing.message : null}
               onTitleChange={refreshSessions}
               onSaveError={(message) => setStatus({ kind: "error", message })}
               onActiveEdit={(title, notes) => {
@@ -1304,6 +1309,7 @@ function App() {
               interimThem={interimThem}
               retranscribingJob={retranscribingJob}
               enhanceRunning={enhancingPath === selectedPath}
+              enhanceProgress={enhancing?.path === selectedPath ? enhancing.message : null}
               onTitleChange={refreshSessions}
               onSaveError={(message) => setStatus({ kind: "error", message })}
               onRetranscribeStart={handleManualRetranscribeStart}

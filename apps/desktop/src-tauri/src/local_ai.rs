@@ -8,12 +8,18 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
 pub const MODEL_ID: &str = "qwen3.5-4b-q4-k-m";
-const WORKER_TIMEOUT: Duration = Duration::from_secs(300);
+/// Hang safety net only. The worker owns the real time budget (it scales
+/// with the number of map/reduce chunks and self-caps at 30 minutes, see
+/// `crates/local-ai`), so this must stay above that largest legitimate
+/// budget plus model-load time. It exists solely for a worker stuck inside
+/// a native llama call that never returns to a deadline check.
+const WORKER_TIMEOUT: Duration = Duration::from_secs(35 * 60);
 
 #[derive(Serialize)]
 struct Request<'a> {
@@ -47,6 +53,13 @@ impl Drop for ChildGuard {
     }
 }
 
+/// Runs the bundled worker to one summary. `progress` receives the worker's
+/// map/reduce step reports as `(part, total)` while it runs. `should_cancel`
+/// is polled every 100ms; the moment it turns true the worker is killed and
+/// an error explains why -- the local model must never compete with live
+/// transcription (see `docs/research/local-summary-models.md`), so a
+/// recording that starts mid-generation aborts the summary.
+#[allow(clippy::too_many_arguments)]
 pub fn summarize(
     model_path: &Path,
     title: &str,
@@ -54,6 +67,8 @@ pub fn summarize(
     transcript: &str,
     full_prompt: &str,
     propose_title: bool,
+    progress: &dyn Fn(usize, usize),
+    should_cancel: &dyn Fn() -> bool,
 ) -> Result<String, String> {
     let worker = worker_path()?;
     let request = serde_json::to_vec(&Request {
@@ -84,27 +99,53 @@ pub fn summarize(
 
     let stdout = child.0.stdout.take().expect("stdout was piped");
     let stderr = child.0.stderr.take().expect("stderr was piped");
-    let reader = std::thread::spawn(move || {
+    let stdout_reader = std::thread::spawn(move || {
         use std::io::Read;
         let mut out = Vec::new();
-        let mut err = String::new();
         let _ = std::io::BufReader::new(stdout).read_to_end(&mut out);
-        let _ = std::io::BufReader::new(stderr).read_to_string(&mut err);
-        (out, err)
+        out
+    });
+    // stderr is read line by line WHILE the worker runs: progress lines are
+    // forwarded immediately (a long map/reduce is otherwise a silent chip
+    // for many minutes), everything else accumulates as error detail.
+    let (progress_tx, progress_rx) = mpsc::channel();
+    let stderr_reader = std::thread::spawn(move || {
+        use std::io::BufRead;
+        let mut detail = String::new();
+        for line in std::io::BufReader::new(stderr).lines() {
+            let Ok(line) = line else { break };
+            if let Some(step) = parse_progress_line(&line) {
+                let _ = progress_tx.send(step);
+            } else {
+                detail.push_str(&line);
+                detail.push('\n');
+            }
+        }
+        detail
     });
 
     let deadline = Instant::now() + WORKER_TIMEOUT;
     let status = loop {
+        while let Ok((part, total)) = progress_rx.try_recv() {
+            progress(part, total);
+        }
+        // The guard's drop kills and reaps on every early return below.
+        if should_cancel() {
+            return Err(
+                "a recording started, so the local summary was stopped; it must not compete with live transcription"
+                    .to_string(),
+            );
+        }
         match child.0.try_wait().map_err(|e| e.to_string())? {
             Some(status) => break status,
             None if Instant::now() >= deadline => {
-                // The guard's drop kills and reaps.
-                return Err("local summary took longer than 5 minutes and was stopped".to_string());
+                return Err("the local summary stalled and was stopped".to_string());
             }
             None => std::thread::sleep(Duration::from_millis(100)),
         }
     };
-    let (stdout, stderr) = reader.join().unwrap_or_default();
+    let stdout = stdout_reader.join().unwrap_or_default();
+    let stderr = stderr_reader.join().unwrap_or_default();
     if !status.success() {
         let detail = stderr.trim();
         return Err(if detail.is_empty() {
@@ -123,6 +164,15 @@ pub fn summarize(
         .summary
         .filter(|summary| !summary.trim().is_empty())
         .ok_or_else(|| "the local model returned an empty response".to_string())
+}
+
+/// One worker progress report: `SIMSTIM_LOCAL_AI_PROGRESS <part>/<total>`.
+/// Any other stderr line is error detail, so the prefix must never match
+/// llama log output.
+fn parse_progress_line(line: &str) -> Option<(usize, usize)> {
+    let rest = line.strip_prefix("SIMSTIM_LOCAL_AI_PROGRESS ")?;
+    let (part, total) = rest.trim().split_once('/')?;
+    Some((part.parse().ok()?, total.parse().ok()?))
 }
 
 fn worker_path() -> Result<PathBuf, String> {
@@ -156,5 +206,16 @@ mod tests {
     #[test]
     fn local_model_id_is_stable() {
         assert_eq!(MODEL_ID, "qwen3.5-4b-q4-k-m");
+    }
+
+    #[test]
+    fn progress_lines_parse_and_noise_does_not() {
+        assert_eq!(
+            parse_progress_line("SIMSTIM_LOCAL_AI_PROGRESS 2/7"),
+            Some((2, 7))
+        );
+        assert_eq!(parse_progress_line("llama_model_load: loading"), None);
+        assert_eq!(parse_progress_line("SIMSTIM_LOCAL_AI_PROGRESS x/y"), None);
+        assert_eq!(parse_progress_line(""), None);
     }
 }

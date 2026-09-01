@@ -387,6 +387,20 @@ and cloud summaries during the stage 3.2 e2e loop and authorized the release).
 Status (2026-08-31): local model changed from 9B to 4B by explicit owner
 decision after reviewing the onboarding download cost.
 
+Fix (2026-09-01): the three open local-AI review findings closed by owner
+ruling. (1) The worker now owns its time budget (10 minutes direct, plus 2
+minutes per map/reduce chunk, capped at 30) instead of dying at a flat
+5-minute app-side kill mid map/reduce; the app-side timeout is only a hang
+safety net above the worker's ceiling. (2) Output caps scale: doubled for
+Cyrillic output (the tokenizer spends about twice the tokens per word) and
+the final cap grows with the user's notes, since the rewrite must preserve
+every point; running out of output tokens is now a retryable defect instead
+of an instant abort. (3) The local provider is rejected while ANY recording
+is live, and a recording that starts mid-generation kills the worker: the
+research ruling is that the summary model never competes with live ASR, and
+cloud providers remain available during calls. Long local runs also report
+map/reduce progress to the UI chip ("Summarizing part 2 of 7...").
+
 ## Stage 3.2: settings logic, enhance visibility, model titles (implemented 2026-08-29)
 
 Three owner requests implemented in one overnight pass on

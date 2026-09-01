@@ -73,6 +73,12 @@ interface SessionViewProps {
    * and re-run. Optional so tests exercising unrelated behavior can omit it.
    */
   enhanceRunning?: boolean;
+  /**
+   * The running job's step message ("Summarizing part 2 of 7..."), when the
+   * local provider reports map/reduce progress; null shows the plain
+   * "Summarizing..." chip. Owned by App's `enhance-progress` listener too.
+   */
+  enhanceProgress?: string | null;
   /** Notifies the caller after a title save resolves, so it can refresh the sidebar. */
   onTitleChange?: () => void;
   /**
@@ -218,6 +224,7 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
     interimThem,
     retranscribingJob,
     enhanceRunning = false,
+    enhanceProgress = null,
     onTitleChange,
     onSaveError,
     onActiveEdit,
@@ -746,7 +753,7 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
       className="ml-3 inline-flex h-[30px] shrink-0 items-center gap-2 rounded-full border border-input bg-foreground/[0.04] px-[15px] font-mono text-[11px] font-medium tracking-[0.04em] text-muted-foreground"
     >
       <span aria-hidden="true" className="working-spinner size-3.5" />
-      Summarizing...
+      {enhanceProgress ?? "Summarizing..."}
     </span>
   ) : canEnhance && !summary ? (
     <Button

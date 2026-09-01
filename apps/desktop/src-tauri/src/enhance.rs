@@ -111,7 +111,8 @@ impl Drop for SlotGuard<'_> {
 
 /// `enhance-progress` event payload: one job's lifecycle, for BOTH manual
 /// and automatic runs (they share `enhance_path_blocking`). Mirrors
-/// `EnhanceProgress` in `ipc.ts`. `running` fires once the slot is claimed;
+/// `EnhanceProgress` in `ipc.ts`. `running` fires once the slot is claimed,
+/// then again per local map/reduce step with a progress `message`;
 /// `done`/`error` fire after the slot is released, so a listener reacting to
 /// a terminal phase can immediately start another enhance.
 #[derive(Debug, Clone, Serialize)]
@@ -880,10 +881,21 @@ fn validate_enhance(
     finalizing: Option<&Path>,
     already_running: Option<&str>,
     retranscribe_involves: bool,
+    provider_is_local: bool,
     transcript: &str,
 ) -> Result<(), String> {
     if active == Some(md_path) {
         return Err("this session is currently recording; stop it before enhancing".to_string());
+    }
+    // The local model shares the GPU with live transcription, and the live
+    // path is the one that loses data when starved (research ruling: the
+    // summary model must not compete with live ASR). Cloud providers cost
+    // no local compute worth blocking over.
+    if provider_is_local && active.is_some() {
+        return Err(
+            "a recording is live; the local model would compete with live transcription. Enhance after the call or use a cloud provider"
+                .to_string(),
+        );
     }
     if finalizing == Some(md_path) {
         return Err("this call is still being saved, try again in a moment".to_string());
@@ -997,6 +1009,7 @@ fn enhance_path_inner<R: tauri::Runtime>(
             running.as_deref(),
             app.state::<crate::retranscribe::RetranscribeState>()
                 .involves(path),
+            matches!(spec.kind, ProviderKind::Local { .. }),
             &existing.transcript,
         )?;
         *running = Some(path.to_string());
@@ -1045,6 +1058,22 @@ fn enhance_path_inner<R: tauri::Runtime>(
                     &existing.transcript,
                     &prompt,
                     compose_title,
+                    // Long calls run map/reduce for many minutes; each step
+                    // re-emits `running` with a message so the chip shows
+                    // real progress instead of an indeterminate spinner.
+                    &|part, total| {
+                        emit_progress(
+                            app,
+                            path,
+                            "running",
+                            spec.id,
+                            Some(format!("Summarizing part {part} of {total}...")),
+                        );
+                    },
+                    // The entry guard above rejects a live recording, but a
+                    // generation can run for minutes; a recording that
+                    // starts mid-run must still win the GPU immediately.
+                    &|| state.active_output_path().is_some(),
                 )?
             }
             ProviderKind::Cli { .. } => run_provider(spec, model.as_deref(), &prompt)?,
@@ -1392,6 +1421,7 @@ mod tests {
                 None,
                 None,
                 false,
+                false,
                 "[00:00:01] Me: hi",
             )
             .unwrap_err();
@@ -1405,6 +1435,7 @@ mod tests {
                 None,
                 Some(Path::new("/tmp/a.md")),
                 None,
+                false,
                 false,
                 "[00:00:01] Me: hi",
             )
@@ -1420,6 +1451,7 @@ mod tests {
                 None,
                 Some("/tmp/b.md"),
                 false,
+                false,
                 "[00:00:01] Me: hi",
             )
             .unwrap_err();
@@ -1431,6 +1463,7 @@ mod tests {
                 None,
                 Some("/tmp/a.md"),
                 false,
+                false,
                 "[00:00:01] Me: hi",
             )
             .unwrap_err();
@@ -1440,7 +1473,7 @@ mod tests {
         #[test]
         fn rejects_an_empty_transcript() {
             let err =
-                validate_enhance(Path::new("/tmp/a.md"), None, None, None, false, "  \n ").unwrap_err();
+                validate_enhance(Path::new("/tmp/a.md"), None, None, None, false, false, "  \n ").unwrap_err();
             assert!(err.contains("no transcript"), "{err}");
         }
 
@@ -1452,6 +1485,7 @@ mod tests {
                 None,
                 None,
                 true,
+                false,
                 "[00:00:01] Me: hi",
             )
             .unwrap_err();
@@ -1466,6 +1500,39 @@ mod tests {
                 None,
                 None,
                 false,
+                false,
+                "[00:00:01] Me: hi",
+            )
+            .is_ok());
+        }
+
+        /// The local model must never compete with live ASR (research
+        /// ruling), so a live recording blocks it even for a DIFFERENT
+        /// note -- while a cloud provider stays allowed (the case above).
+        #[test]
+        fn rejects_the_local_provider_while_any_recording_is_live() {
+            let err = validate_enhance(
+                Path::new("/tmp/a.md"),
+                Some(Path::new("/tmp/other.md")),
+                None,
+                None,
+                false,
+                true,
+                "[00:00:01] Me: hi",
+            )
+            .unwrap_err();
+            assert!(err.contains("compete with live transcription"), "{err}");
+        }
+
+        #[test]
+        fn accepts_the_local_provider_when_nothing_records() {
+            assert!(validate_enhance(
+                Path::new("/tmp/a.md"),
+                None,
+                None,
+                None,
+                false,
+                true,
                 "[00:00:01] Me: hi",
             )
             .is_ok());
@@ -1521,6 +1588,8 @@ mod tests {
             &session.transcript,
             &prompt,
             false,
+            &|part, total| eprintln!("progress: part {part} of {total}"),
+            &|| false,
         )
         .expect("local summary failed");
         eprintln!("local summary in {:?}:\n{summary}", started.elapsed());

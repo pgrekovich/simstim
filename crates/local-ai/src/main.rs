@@ -26,8 +26,18 @@ const BATCH_TOKENS: usize = 1024;
 const MICRO_BATCH_TOKENS: u32 = 512;
 const FINAL_OUTPUT_TOKENS: usize = 560;
 const MAP_OUTPUT_TOKENS: usize = 240;
+const MAX_FINAL_OUTPUT_TOKENS: usize = 2048;
 const RETRY_PROMPT_RESERVE: usize = 128;
-const GENERATION_TIMEOUT: Duration = Duration::from_secs(300);
+// The worker owns the run's time budget (the app-side timeout is only a
+// hang safety net above these numbers): the direct path covers one
+// generation plus one validation retry, and the map/reduce path grows with
+// the number of chunks because every chunk is its own bounded generation.
+// A flat per-run limit was the original design and it killed legitimate
+// long-call map/reduce work mid-flight.
+const DIRECT_TIME_BUDGET: Duration = Duration::from_secs(600);
+const MAP_REDUCE_BASE_TIME_BUDGET: Duration = Duration::from_secs(600);
+const MAP_CHUNK_TIME_BUDGET: Duration = Duration::from_secs(120);
+const MAX_TIME_BUDGET: Duration = Duration::from_secs(1800);
 
 #[derive(Deserialize)]
 struct Request {
@@ -94,25 +104,31 @@ fn run(request: Request) -> Result<String, String> {
 
     let context_tokens = context_tokens_for_this_mac();
     let output_language = OutputLanguage::detect(&request.notes, &request.transcript);
-    if prompt_fits(
-        &model,
-        &request.full_prompt,
-        FINAL_OUTPUT_TOKENS,
-        context_tokens,
-    )? {
+    let notes_tokens = if request.notes.trim().is_empty() {
+        0
+    } else {
+        model
+            .str_to_token(&request.notes, AddBos::Never)
+            .map_err(|e| format!("couldn't tokenize the note: {e}"))?
+            .len()
+    };
+    let final_tokens = final_output_tokens(notes_tokens, output_language);
+    if prompt_fits(&model, &request.full_prompt, final_tokens, context_tokens)? {
         return generate_validated(
             &backend,
             &model,
             &request.full_prompt,
-            FINAL_OUTPUT_TOKENS,
+            final_tokens,
             output_language,
             context_tokens,
             request.notes.trim().is_empty(),
+            Instant::now() + DIRECT_TIME_BUDGET,
         );
     }
 
     let language_rule = output_language.rule();
     let final_check = output_language.final_check();
+    let map_tokens = scaled_output_tokens(MAP_OUTPUT_TOKENS, output_language);
     let compacted_transcript = compact_transcript(&request.transcript);
     let chunks = transcript_chunks(
         &model,
@@ -121,10 +137,16 @@ fn run(request: Request) -> Result<String, String> {
         &compacted_transcript,
         language_rule,
         final_check,
+        map_tokens,
         context_tokens,
     )?;
+    let deadline = Instant::now() + map_reduce_time_budget(chunks.len());
+    // Each chunk plus the final reduction is one reported step, so the app
+    // can show real progress during a legitimately long run.
+    let total_steps = chunks.len() + 1;
     let mut evidence = Vec::with_capacity(chunks.len());
     for (index, chunk) in chunks.iter().enumerate() {
+        report_progress(index + 1, total_steps);
         let prompt = chunk_prompt(
             &request.title,
             &request.notes,
@@ -138,14 +160,16 @@ fn run(request: Request) -> Result<String, String> {
             &backend,
             &model,
             &prompt,
-            MAP_OUTPUT_TOKENS,
+            map_tokens,
             output_language,
             context_tokens,
             false,
+            deadline,
         )?;
         evidence.push(format!("### Part {}\n{}", index + 1, partial));
     }
 
+    report_progress(total_steps, total_steps);
     let reduced_transcript = evidence.join("\n\n");
     let final_prompt = build_summary_prompt(
         &request.title,
@@ -155,7 +179,7 @@ fn run(request: Request) -> Result<String, String> {
         final_check,
         request.propose_title,
     );
-    if !prompt_fits(&model, &final_prompt, FINAL_OUTPUT_TOKENS, context_tokens)? {
+    if !prompt_fits(&model, &final_prompt, final_tokens, context_tokens)? {
         return Err(
             "this call is too long for the local model; use a cloud provider for this summary"
                 .to_string(),
@@ -165,11 +189,41 @@ fn run(request: Request) -> Result<String, String> {
         &backend,
         &model,
         &final_prompt,
-        FINAL_OUTPUT_TOKENS,
+        final_tokens,
         output_language,
         context_tokens,
         request.notes.trim().is_empty(),
+        deadline,
     )
+}
+
+/// One machine-readable progress line on stderr per map/reduce step; the
+/// app relays it to the UI. Everything else on stderr stays error detail.
+fn report_progress(part: usize, total: usize) {
+    eprintln!("SIMSTIM_LOCAL_AI_PROGRESS {part}/{total}");
+}
+
+/// Qwen's tokenizer spends roughly twice the tokens per word on Cyrillic
+/// text, so caps tuned on English output used to cut Russian summaries off
+/// mid-thought. The caps are runaway guards, not targets: generation
+/// normally ends at an end-of-generation token well before them.
+fn scaled_output_tokens(base: usize, output_language: OutputLanguage) -> usize {
+    match output_language {
+        OutputLanguage::Cyrillic => base * 2,
+        OutputLanguage::Transcript => base,
+    }
+}
+
+/// The final summary rewrites the user's rough notes preserving every
+/// distinct point, so its budget must grow with the notes: a flat cap
+/// deterministically truncated notes-heavy calls.
+fn final_output_tokens(notes_tokens: usize, output_language: OutputLanguage) -> usize {
+    scaled_output_tokens(FINAL_OUTPUT_TOKENS + notes_tokens, output_language)
+        .min(MAX_FINAL_OUTPUT_TOKENS)
+}
+
+fn map_reduce_time_budget(chunks: usize) -> Duration {
+    (MAP_REDUCE_BASE_TIME_BUDGET + MAP_CHUNK_TIME_BUDGET * chunks as u32).min(MAX_TIME_BUDGET)
 }
 
 fn prompt_fits(
@@ -184,6 +238,7 @@ fn prompt_fits(
     Ok(tokens.len() + output_tokens + RETRY_PROMPT_RESERVE < context_tokens as usize)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn transcript_chunks(
     model: &LlamaModel,
     title: &str,
@@ -191,6 +246,7 @@ fn transcript_chunks(
     transcript: &str,
     language_rule: &str,
     final_check: &str,
+    map_output_tokens: usize,
     context_tokens: u32,
 ) -> Result<Vec<String>, String> {
     let empty_prompt = chunk_prompt(title, notes, "", 1, 1, language_rule, final_check);
@@ -198,7 +254,7 @@ fn transcript_chunks(
         .str_to_token(&chat_prompt(&empty_prompt), AddBos::Never)
         .map_err(|e| format!("couldn't tokenize the note: {e}"))?
         .len();
-    let budget = context_tokens as usize - MAP_OUTPUT_TOKENS - overhead - 128;
+    let budget = context_tokens as usize - map_output_tokens - overhead - 128;
 
     let mut chunks = Vec::new();
     let mut current = String::new();
@@ -391,6 +447,7 @@ fn build_summary_prompt(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn generate_validated(
     backend: &LlamaBackend,
     model: &LlamaModel,
@@ -399,17 +456,32 @@ fn generate_validated(
     output_language: OutputLanguage,
     context_tokens: u32,
     require_structure: bool,
+    deadline: Instant,
 ) -> Result<String, String> {
-    let first = generate_once(
+    // Running out of output tokens is a retryable defect exactly like a
+    // wrong language or a missing structure: one attempt at a different
+    // seed with an explicit brevity instruction regularly recovers, and the
+    // old abort-on-first-truncation killed whole map/reduce runs.
+    let mut truncated = false;
+    let validated = match generate_once(
         backend,
         model,
         prompt,
         max_output_tokens,
         42,
         context_tokens,
-    )?;
-    debug_candidate("first", &first);
-    match validate_output(first, output_language, require_structure) {
+        deadline,
+    )? {
+        Generation::Complete(first) => {
+            debug_candidate("first", &first);
+            validate_output(first, output_language, require_structure)
+        }
+        Generation::Truncated => {
+            truncated = true;
+            Err("the local summary ran past its length limit".to_string())
+        }
+    };
+    match validated {
         Ok(text) => Ok(text),
         Err(_) => {
             let structure_rule = if require_structure {
@@ -417,20 +489,33 @@ fn generate_validated(
             } else {
                 ""
             };
+            let brevity_rule = if truncated {
+                " Your previous answer was cut off for running too long. Stay strictly within the stated word limits and stop as soon as the note is covered."
+            } else {
+                ""
+            };
             let retry_prompt = format!(
-                "{prompt}\n\n{}{structure_rule}",
+                "{prompt}\n\n{}{structure_rule}{brevity_rule}",
                 output_language.retry_rule()
             );
-            let retry = generate_once(
+            match generate_once(
                 backend,
                 model,
                 &retry_prompt,
                 max_output_tokens,
                 1337,
                 context_tokens,
-            )?;
-            debug_candidate("retry", &retry);
-            validate_output(retry, output_language, require_structure)
+                deadline,
+            )? {
+                Generation::Complete(retry) => {
+                    debug_candidate("retry", &retry);
+                    validate_output(retry, output_language, require_structure)
+                }
+                Generation::Truncated => Err(
+                    "the local model kept running past the summary length limit; use a cloud provider for this call"
+                        .to_string(),
+                ),
+            }
         }
     }
 }
@@ -477,6 +562,14 @@ fn validate_output(
     Ok(text)
 }
 
+/// One generation attempt. `Truncated` means the model was still writing
+/// when it hit `max_output_tokens`; the caller decides whether to retry.
+enum Generation {
+    Complete(String),
+    Truncated,
+}
+
+#[allow(clippy::too_many_arguments)]
 fn generate_once(
     backend: &LlamaBackend,
     model: &LlamaModel,
@@ -484,8 +577,8 @@ fn generate_once(
     max_output_tokens: usize,
     seed: u32,
     context_tokens: u32,
-) -> Result<String, String> {
-    let deadline = Instant::now() + GENERATION_TIMEOUT;
+    deadline: Instant,
+) -> Result<Generation, String> {
     let threads = std::thread::available_parallelism()
         .map(|n| n.get().min(8) as i32)
         .unwrap_or(4);
@@ -555,14 +648,17 @@ fn generate_once(
             .map_err(|e| format!("local AI failed while writing the summary: {e}"))?;
     }
     if !reached_eog {
-        return Err("the local summary was too long and was stopped".to_string());
+        return Ok(Generation::Truncated);
     }
-    Ok(output)
+    Ok(Generation::Complete(output))
 }
 
 fn ensure_before_deadline(deadline: Instant) -> Result<(), String> {
     if Instant::now() >= deadline {
-        Err("local summary took longer than 5 minutes and was stopped".to_string())
+        Err(
+            "the local summary ran over its time budget and was stopped; use a cloud provider for this call"
+                .to_string(),
+        )
     } else {
         Ok(())
     }
@@ -740,6 +836,40 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.contains("wrong language"));
+    }
+
+    #[test]
+    fn cyrillic_output_gets_twice_the_token_room() {
+        assert_eq!(
+            scaled_output_tokens(MAP_OUTPUT_TOKENS, OutputLanguage::Transcript),
+            240
+        );
+        assert_eq!(
+            scaled_output_tokens(MAP_OUTPUT_TOKENS, OutputLanguage::Cyrillic),
+            480
+        );
+    }
+
+    #[test]
+    fn final_budget_grows_with_notes_and_stays_capped() {
+        // No notes: the flat base.
+        assert_eq!(final_output_tokens(0, OutputLanguage::Transcript), 560);
+        // Notes-heavy call: the rewrite must fit every point of the notes.
+        assert_eq!(final_output_tokens(400, OutputLanguage::Transcript), 960);
+        // Cyrillic doubles, but never past the hard cap.
+        assert_eq!(final_output_tokens(400, OutputLanguage::Cyrillic), 1920);
+        assert_eq!(
+            final_output_tokens(4000, OutputLanguage::Cyrillic),
+            MAX_FINAL_OUTPUT_TOKENS
+        );
+    }
+
+    #[test]
+    fn time_budget_scales_with_chunks_and_stays_capped() {
+        assert_eq!(map_reduce_time_budget(1), Duration::from_secs(720));
+        assert_eq!(map_reduce_time_budget(5), Duration::from_secs(1200));
+        // A pathological chunk count still respects the hard ceiling.
+        assert_eq!(map_reduce_time_budget(100), MAX_TIME_BUDGET);
     }
 
     #[test]

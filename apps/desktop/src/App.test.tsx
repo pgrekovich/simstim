@@ -1470,6 +1470,33 @@ describe("App: enhance progress (stage 0.11)", () => {
     await waitFor(() => expect(row.textContent).not.toContain("summarizing"));
   });
 
+  it("shows the local map/reduce step in the working chip and keeps it fresh", async () => {
+    vi.mocked(ipc.listSessions).mockResolvedValue(one);
+    vi.mocked(ipc.readSession).mockResolvedValue({
+      title: "Weekly sync", date: "", notes: "", transcript: "[00:00:01] Me: hi",
+      audio_path: null, summary: "", summary_model: null,
+    });
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /weekly sync/i }));
+    await waitFor(() => expect(document.body.textContent).toContain("hi"));
+
+    emit("enhance-progress", { path: "/tmp/sync.md", phase: "running", provider: "local", message: null });
+    const chip = await screen.findByTestId("enhance-working");
+    expect(chip.textContent).toContain("Summarizing...");
+
+    emit("enhance-progress", {
+      path: "/tmp/sync.md",
+      phase: "running",
+      provider: "local",
+      message: "Summarizing part 2 of 7...",
+    });
+    await waitFor(() => expect(chip.textContent).toContain("part 2 of 7"));
+
+    emit("enhance-progress", { path: "/tmp/sync.md", phase: "done", provider: "local", message: null });
+    await waitFor(() => expect(screen.queryByTestId("enhance-working")).not.toBeInTheDocument());
+  });
+
   it("offers Re-enhance in the overflow menu and runs it for the open note", async () => {
     vi.mocked(ipc.listSessions).mockResolvedValue(one);
     vi.mocked(ipc.readSession).mockResolvedValue({

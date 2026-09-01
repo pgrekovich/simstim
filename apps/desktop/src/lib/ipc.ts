@@ -445,8 +445,10 @@ export type EnhancePhase = "running" | "done" | "error";
  * Mirrors `enhance::EnhanceProgressPayload`, the `enhance-progress` event
  * payload: one enhance job's lifecycle, emitted for BOTH manual and
  * automatic runs. `running` fires once the job actually claims the
- * one-at-a-time slot; exactly one terminal `done`/`error` follows, including
- * for failures that never reach the slot (validation, a missing provider).
+ * one-at-a-time slot, then again per local map/reduce step with a progress
+ * `message` ("Summarizing part 2 of 7..."); exactly one terminal
+ * `done`/`error` follows, including for failures that never reach the slot
+ * (validation, a missing provider).
  */
 export interface EnhanceProgress {
   path: string;

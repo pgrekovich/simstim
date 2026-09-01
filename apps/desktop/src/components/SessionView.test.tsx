@@ -134,6 +134,57 @@ describe("SessionView: empty title normalization (Task 6 review fix)", () => {
   });
 });
 
+describe("SessionView: multiline title field", () => {
+  it("wraps in a textarea but collapses pasted newlines into single spaces", () => {
+    render(
+      <SessionView
+        path="/tmp/call.md"
+        isActive={false}
+        initialData={{ ...baseData, title: "Old title" }}
+        liveLines={[]}
+        interimMe=""
+        interimThem=""
+        retranscribingJob={null}
+      />
+    );
+
+    // The title stays one logical line (it is the file's H1): the textarea
+    // exists only so long titles wrap visually instead of clipping.
+    const title = screen.getByDisplayValue("Old title") as HTMLTextAreaElement;
+    expect(title.tagName).toBe("TEXTAREA");
+
+    fireEvent.change(title, { target: { value: "CDK migration status \nand S3 handler risks" } });
+    expect(title.value).toBe("CDK migration status and S3 handler risks");
+
+    fireEvent.blur(title);
+    expect(ipc.saveSession).toHaveBeenCalledWith(
+      "/tmp/call.md",
+      "CDK migration status and S3 handler risks",
+      "",
+    );
+  });
+
+  it("blurs on Enter instead of inserting a newline", () => {
+    render(
+      <SessionView
+        path="/tmp/call.md"
+        isActive={false}
+        initialData={{ ...baseData, title: "Old title" }}
+        liveLines={[]}
+        interimMe=""
+        interimThem=""
+        retranscribingJob={null}
+      />
+    );
+
+    const title = screen.getByDisplayValue("Old title") as HTMLTextAreaElement;
+    title.focus();
+    fireEvent.keyDown(title, { key: "Enter" });
+    expect(document.activeElement).not.toBe(title);
+    expect(title.value).toBe("Old title");
+  });
+});
+
 describe("SessionView: audio playback and re-transcribe (Task 4, stage-0.7)", () => {
   it("renders no audio element and no re-transcribe button when audio_path is null", () => {
     render(

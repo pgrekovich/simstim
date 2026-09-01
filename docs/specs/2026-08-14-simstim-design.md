@@ -361,6 +361,14 @@ native e2e after the integration polish cycle and authorized merge and release
 as v0.6.0. The approved deviations are recorded in the interface redesign
 spec.
 
+Fix (2026-09-01, owner e2e'd): the native traffic lights now share the 28 px
+toolbar centerline (two positioners disagreed: tao re-applies the declarative
+inset on redraws over the runtime fix; see `position_main_traffic_lights`).
+The transcript groups consecutive same-speaker lines into one visual turn:
+one ME/THEM badge, the turn's first timestamp, chunks flowing as a single
+paragraph. Display-only by design: the file keeps one timestamped line per
+chunk and every chunk remains its own click-to-seek fragment.
+
 ## Stage 3.1: built-in local summaries (implemented 2026-08-28)
 
 Qwen3.5 4B Q4_K_M is the single local provider and an explicit 2.74 GB download.

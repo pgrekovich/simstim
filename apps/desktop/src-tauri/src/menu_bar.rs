@@ -42,9 +42,9 @@ impl MenuBar {
     pub fn create(app: &AppHandle) -> tauri::Result<Self> {
         let toggle_item = MenuItem::with_id(app, TOGGLE_ID, "Start Recording", true, None::<&str>)?;
         let note_item = MenuItem::with_id(app, NOTE_ID, "New Note", true, None::<&str>)?;
-        let open_item = MenuItem::with_id(app, OPEN_ID, "Open simstim", true, None::<&str>)?;
+        let open_item = MenuItem::with_id(app, OPEN_ID, "Open Simstim", true, None::<&str>)?;
         let settings_item = MenuItem::with_id(app, SETTINGS_ID, "Settings...", true, None::<&str>)?;
-        let quit_item = MenuItem::with_id(app, QUIT_ID, "Quit simstim", true, None::<&str>)?;
+        let quit_item = MenuItem::with_id(app, QUIT_ID, "Quit Simstim", true, None::<&str>)?;
         let separator_one = PredefinedMenuItem::separator(app)?;
         let separator_two = PredefinedMenuItem::separator(app)?;
         let menu = Menu::with_items(
@@ -63,7 +63,7 @@ impl MenuBar {
         TrayIconBuilder::with_id(TRAY_ID)
             .icon(menu_icon(false))
             .icon_as_template(true)
-            .tooltip("simstim")
+            .tooltip("Simstim")
             .menu(&menu)
             .show_menu_on_left_click(true)
             .on_menu_event(|app, event| match event.id().as_ref() {
@@ -138,7 +138,7 @@ impl MenuBar {
             // some tray-icon/Tauri combinations. An explicit empty title is
             // the reliable way to remove the elapsed timer after Stop.
             let _ = tray.set_title(Some(""));
-            let _ = tray.set_tooltip(Some("simstim"));
+            let _ = tray.set_tooltip(Some("Simstim"));
         }
     }
 
@@ -152,7 +152,7 @@ impl MenuBar {
         if let Some(tray) = self.app.tray_by_id(TRAY_ID) {
             let _ = tray.set_icon_with_as_template(Some(menu_icon(true)), true);
             let _ = tray.set_title(Some("00:00"));
-            let _ = tray.set_tooltip(Some("simstim is recording"));
+            let _ = tray.set_tooltip(Some("Simstim is recording"));
         }
     }
 

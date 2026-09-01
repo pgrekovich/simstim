@@ -36,6 +36,8 @@ import {
   type ModelInfo,
 } from "@/lib/ipc";
 import { applyTheme } from "@/lib/theme";
+import { ENHANCE_MODEL_OPTIONS } from "@/lib/enhanceModels";
+import { downloadProgressPercent, mergeDownloadProgress } from "@/lib/modelProgress";
 
 const THEME_OPTIONS: { value: string; label: string }[] = [
   { value: "light", label: "Light" },
@@ -95,30 +97,6 @@ function totalDiskUsed(list: ModelInfo[]): number {
   return list.reduce((sum, model) => (model.downloaded ? sum + freedBytes(model) : sum), 0);
 }
 
-
-/**
- * Model choices offered per provider (cached 2026-08-23; sources: `claude
- * --help` aliases, learn.chatgpt.com/docs/models). The backend passes the
- * value through verbatim, so this list going stale only limits the menu,
- * never correctness; "" = the CLI's own default.
- */
-const ENHANCE_MODEL_OPTIONS: Record<string, { value: string; label: string }[]> = {
-  claude: [
-    { value: "", label: "Default" },
-    { value: "fable", label: "Fable" },
-    { value: "opus", label: "Opus" },
-    { value: "sonnet", label: "Sonnet" },
-    { value: "claude-haiku-4-5", label: "Haiku" },
-  ],
-  codex: [
-    { value: "", label: "Default" },
-    { value: "gpt-5.6-sol", label: "GPT-5.6 Sol" },
-    { value: "gpt-5.6-terra", label: "GPT-5.6 Terra" },
-    { value: "gpt-5.6-luna", label: "GPT-5.6 Luna" },
-    { value: "gpt-5.5", label: "GPT-5.5" },
-    { value: "gpt-5.3-codex-spark", label: "GPT-5.3 Codex Spark (Pro)" },
-  ],
-};
 
 /** The custom radio input every model/provider selection row uses. */
 const RADIO_CLASS =
@@ -187,7 +165,7 @@ interface SettingsDialogProps {
 }
 
 /**
- * Download/extract/error progress for one model row, shared between the
+ * Download/error progress for one model row, shared between the
  * Recording and Re-transcribe groups (stage 0.8 model manager). Only
  * rendered while the model isn't downloaded yet -- once `download_model`
  * finishes, `list_models` reports `downloaded: true` and this returns null,
@@ -199,18 +177,10 @@ function ModelProgress({ progress }: { progress: DownloadProgress | undefined })
   if (progress.phase === "download") {
     return (
       <div className="flex flex-col gap-1">
-        <Progress value={progress.total > 0 ? (progress.received / progress.total) * 100 : 0} />
+        <Progress value={downloadProgressPercent(progress)} />
         <span className="text-xs text-muted-foreground">
           {humanBytes(progress.received)} / {progress.total > 0 ? humanBytes(progress.total) : "?"}
         </span>
-      </div>
-    );
-  }
-  if (progress.phase === "extract") {
-    return (
-      <div className="flex flex-col gap-1">
-        <Progress value={100} className={cn("[&>*]:animate-pulse")} />
-        <span className="text-xs text-muted-foreground">extracting...</span>
       </div>
     );
   }
@@ -470,7 +440,10 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
   useEffect(() => {
     const unlisten = listen<DownloadProgress>("model-download-progress", (event) => {
       const payload = event.payload;
-      setProgress((prev) => ({ ...prev, [payload.id]: payload }));
+      setProgress((prev) => ({
+        ...prev,
+        [payload.id]: mergeDownloadProgress(prev[payload.id], payload),
+      }));
       if (payload.phase === "done") {
         // Refetch (and let the row flip to "Active"/"Use" via the fresh
         // `model.downloaded`) before dropping the progress entry: deleting
@@ -866,7 +839,7 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                     <Row
                       label="Show in Dock"
                       htmlFor="show-in-dock"
-                      description="Turn this off to keep simstim in the menu bar only."
+                      description="Turn this off to keep Simstim in the menu bar only."
                       error={showInDockError}
                     >
                       <Checkbox
@@ -1096,6 +1069,11 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                       <div className="flex items-center justify-between gap-3">
                         <div className="flex flex-col">
                           <span className="text-sm font-medium">{model.name}</span>
+                          {model.technical_name && (
+                            <span className="font-mono text-[10px] text-muted-foreground/55">
+                              {model.technical_name}
+                            </span>
+                          )}
                           <span className="text-xs text-muted-foreground">{humanSizeMb(model.size_mb)}</span>
                         </div>
                         {model.downloaded && model.active && (
@@ -1250,6 +1228,11 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                       <div className="flex items-center justify-between gap-3">
                         <div className="flex min-w-0 flex-col">
                           <span className="truncate text-sm font-medium">{name}</span>
+                          {model.technical_name && (
+                            <span className="font-mono text-[10px] text-muted-foreground/55">
+                              {model.technical_name}
+                            </span>
+                          )}
                           {model.tagline && (
                             <span className="text-xs text-muted-foreground">{model.tagline}</span>
                           )}

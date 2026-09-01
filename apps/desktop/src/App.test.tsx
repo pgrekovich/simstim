@@ -11,13 +11,14 @@ import { ask } from "@tauri-apps/plugin-dialog";
  * (also used by SessionView/SettingsDialog, so one mock covers all three
  * components), the raw `@tauri-apps/api/event` `listen` (App and
  * SettingsDialog both call it directly, not through ipc.ts), and
- * `@tauri-apps/plugin-dialog`'s `open` (SettingsDialog only, never invoked in
- * these tests since the folder picker is never clicked).
+ * `@tauri-apps/plugin-dialog`'s `open` (used by Settings and onboarding, but
+ * never invoked in these App-level tests).
  */
 vi.mock("@/lib/ipc", () => ({
   getConfig: vi.fn().mockResolvedValue({
     output_dir: "/tmp",
     active_model: "m1",
+    onboarding_complete: true,
     theme: "system",
     show_in_dock: true,
     keep_audio: true,
@@ -45,6 +46,11 @@ vi.mock("@/lib/ipc", () => ({
     .fn()
     .mockResolvedValue([{ id: "m1", name: "Test model", size_mb: 100, downloaded: true, active: true }]),
   downloadModel: vi.fn().mockResolvedValue(undefined),
+  checkAudioPermissions: vi.fn().mockResolvedValue({
+    microphone: { granted: true, error: null },
+    system_audio: { granted: true, error: null },
+  }),
+  completeOnboarding: vi.fn().mockResolvedValue(undefined),
   setActiveModel: vi.fn().mockResolvedValue(undefined),
   setOutputDir: vi.fn().mockResolvedValue(undefined),
   setTheme: vi.fn().mockResolvedValue(undefined),
@@ -64,6 +70,8 @@ vi.mock("@/lib/ipc", () => ({
   setEnhanceProvider: vi.fn().mockResolvedValue(undefined),
   setEnhanceModel: vi.fn().mockResolvedValue(undefined),
   setAutoEnhance: vi.fn().mockResolvedValue(undefined),
+  setEnhanceRenameTitle: vi.fn().mockResolvedValue(undefined),
+  setEnhanceUseCalendar: vi.fn().mockResolvedValue(undefined),
   listEnhanceProviders: vi.fn().mockResolvedValue([]),
   showMainWindow: vi.fn().mockResolvedValue(undefined),
 }));
@@ -125,6 +133,7 @@ beforeEach(() => {
   vi.mocked(ipc.getConfig).mockReset().mockResolvedValue({
     output_dir: "/tmp",
     active_model: "m1",
+    onboarding_complete: true,
     theme: "system",
     show_in_dock: true,
     keep_audio: true,
@@ -149,6 +158,34 @@ beforeEach(() => {
   vi.mocked(ipc.createSession).mockClear().mockResolvedValue("/tmp/new.md");
   vi.mocked(ipc.showMainWindow).mockClear();
   vi.mocked(listen).mockClear();
+});
+
+describe("App: guided first run", () => {
+  it("shows onboarding and keeps active-window shortcuts from bypassing it", async () => {
+    vi.mocked(ipc.getConfig).mockResolvedValue({
+      ...(await ipc.getConfig()),
+      onboarding_complete: false,
+    });
+    vi.mocked(ipc.listModels).mockResolvedValue([
+      {
+        id: "m1",
+        name: "Test model",
+        technical_name: null,
+        tagline: null,
+        size_mb: 100,
+        downloaded: true,
+        active: true,
+        role: "live",
+        size_on_disk_bytes: 100,
+        retired: false,
+      },
+    ]);
+
+    render(<App />);
+    expect(await screen.findByText("Your calls stay on this Mac.")).toBeVisible();
+    fireEvent.keyDown(window, { key: "n", metaKey: true });
+    expect(ipc.createSession).not.toHaveBeenCalled();
+  });
 });
 
 describe("App: call detection via the banner window (stage 1.1)", () => {
@@ -189,6 +226,7 @@ describe("App: call detection via the banner window (stage 1.1)", () => {
       {
         id: "m1",
         name: "Test model",
+        technical_name: null,
         tagline: null,
         size_mb: 100,
         downloaded: false,
@@ -211,6 +249,7 @@ describe("App: call detection via the banner window (stage 1.1)", () => {
       {
         id: "m1",
         name: "Test model",
+        technical_name: null,
         tagline: null,
         size_mb: 100,
         downloaded: false,
@@ -242,6 +281,7 @@ describe("App: call detection via the banner window (stage 1.1)", () => {
     vi.mocked(ipc.getConfig).mockResolvedValue({
       output_dir: "/tmp",
       active_model: "m1",
+      onboarding_complete: true,
       theme: "system",
       show_in_dock: true,
       keep_audio: true,
@@ -274,6 +314,7 @@ describe("App: call detection via the banner window (stage 1.1)", () => {
     vi.mocked(ipc.getConfig).mockResolvedValue({
       output_dir: "/tmp",
       active_model: "m1",
+      onboarding_complete: true,
       theme: "system",
       show_in_dock: true,
       keep_audio: true,
@@ -343,6 +384,7 @@ describe("App: menu-bar recording toggle (stage 3)", () => {
       {
         id: "m1",
         name: "Test model",
+        technical_name: null,
         tagline: null,
         size_mb: 100,
         downloaded: false,
@@ -1203,6 +1245,7 @@ describe("App: global search (stage 2.0)", () => {
     });
 
     render(<App />);
+    await screen.findByRole("button", { name: /^New Note⌘N$/ });
     fireEvent.keyDown(window, { key: "k", metaKey: true });
     fireEvent.change(screen.getByRole("searchbox", { name: /search all notes/i }), {
       target: { value: "budget" },

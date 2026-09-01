@@ -3,8 +3,8 @@
 <plist version="1.0">
 <dict>
   <key>NSMicrophoneUsageDescription</key>
-  <string>simstim transcribes your calls locally. It needs the microphone to hear you.</string>
+  <string>Simstim transcribes your calls locally. It needs the microphone to hear you.</string>
   <key>NSAudioCaptureUsageDescription</key>
-  <string>simstim transcribes your calls locally. It needs system audio to hear the other side.</string>
+  <string>Simstim transcribes your calls locally. It needs system audio to hear the other side.</string>
 </dict>
 </plist>

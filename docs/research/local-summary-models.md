@@ -1,11 +1,11 @@
-# Local summary model decision, 2026-08-28
+# Local summary model decision, 2026-08-28, revised 2026-08-31
 
 ## Decision
 
-Offer Qwen3.5 9B Q4_K_M through a bundled, short-lived llama.cpp helper with
-Metal enabled on Apple Silicon. It is an explicit download for Macs with at
-least 16 GB. Do not expose the tested 4B checkpoint as a second mode: its speed
-and smaller footprint do not justify its weaker factual accuracy. Do not
+Offer Qwen3.5 4B Q4_K_M through a bundled, short-lived llama.cpp helper with
+Metal enabled on Apple Silicon. It is one explicit 2.74 GB download, with no
+second local profile. The owner accepted its measured quality tradeoff because
+the previous 5.68 GB 9B model was too large for the default experience. Do not
 require Ollama, a local server, an account or a separate installer.
 
 The model is a text-only dependency. The Qwen vision projector is not
@@ -47,7 +47,7 @@ Primary sources checked 2026-08-28:
 
 ## Runtime contract
 
-- Model: `Qwen3.5-9B-Q4_K_M.gguf`, approximately 5.68 GB on disk.
+- Model: `Qwen3.5-4B-Q4_K_M.gguf`, approximately 2.74 GB on disk.
 - Backend: llama.cpp in a bundled helper executable, Metal on macOS. Whisper
   remains in the main process because both runtimes export incompatible GGML
   symbols when linked into one executable.
@@ -104,9 +104,12 @@ anecdote near the end.
 - A second self-review pass with 4B took about 32 seconds and repeated the same
   factual mistakes. It is rejected: it costs as much as 9B without the quality.
 
-The result supports 9B as the only local profile. The 4B checkpoint is useful
-research evidence but not an acceptable product default because it makes more
-factual errors, so it is absent from the model registry.
+The quality result favors 9B, but product fit favors 4B. On 2026-08-31 the
+owner explicitly chose the smaller single profile for broader hardware and a
+reasonable download. The known factual-risk controls remain mandatory:
+compaction, low-temperature decoding, language validation, structured-output
+validation and one retry. Local summaries are useful but are not treated as
+frontier-quality.
 
 ## What this does not decide
 

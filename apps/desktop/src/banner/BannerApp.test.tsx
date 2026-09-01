@@ -119,20 +119,20 @@ describe("BannerApp", () => {
   it("open simstim lives in the dropdown, focuses the main window, keeps the banner", async () => {
     await renderDetected();
     fireEvent.click(screen.getByRole("button", { name: /more options/i }));
-    fireEvent.click(screen.getByRole("button", { name: /open simstim/i }));
+    fireEvent.click(screen.getByRole("button", { name: "Open Simstim" }));
     expect(ipc.showMainWindow).toHaveBeenCalledTimes(1);
     expect(screen.getByText("Call detected")).toBeVisible();
     // The menu closed on selection.
-    expect(screen.queryByRole("button", { name: /open simstim/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Open Simstim" })).not.toBeInTheDocument();
   });
 
   it("closes the dropdown when a new state arrives", async () => {
     await renderDetected();
     fireEvent.click(screen.getByRole("button", { name: /more options/i }));
-    expect(screen.getByRole("button", { name: /open simstim/i })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Open Simstim" })).toBeVisible();
 
     emit("banner-state", { kind: "ended" });
-    expect(screen.queryByRole("button", { name: /open simstim/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Open Simstim" })).not.toBeInTheDocument();
   });
 
   it("auto-dismisses the detected state exactly once when the timer drains", async () => {

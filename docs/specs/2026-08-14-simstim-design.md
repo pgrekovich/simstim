@@ -238,14 +238,13 @@ Out of 0.7: meeting detection, tray, hotkeys, enhance, calendar.
   real-call benchmark improved from about 27 to 32 seconds to about 17 seconds
   on the owner's M1 Max. The 4B model still changed component scope and
   conditional actions on this difficult call. A Qwen3.5 9B comparison took
-  about 30 seconds and was materially more accurate. The owner chose the 9B
-  model as the only supported local profile rather than expose a speed versus
-  quality choice that still made factual errors. The owner's app quality
-  recheck found that 9B can also confuse some conditional actions on a noisy
-  technical call. Prompt paragraphs are bounded tightly and an unstructured
+  about 30 seconds and was materially more accurate, but its 5.68 GB download
+  was too large for the default experience. On 2026-08-31 the owner chose the
+  2.74 GB Qwen3.5 4B model as the only local profile and accepted the measured
+  quality tradeoff. Prompt paragraphs are bounded tightly and an unstructured
   one-paragraph result is rejected, but the model is not treated as
   frontier-quality. It never downloads automatically; Settings shows the
-  5.68 GB cost before the explicit download.
+  2.74 GB cost before the explicit download.
 
 ## Stage 1.0: call detection (approved 2026-08-16, owner: "the most important thing")
 
@@ -364,18 +363,17 @@ spec.
 
 ## Stage 3.1: built-in local summaries (implemented 2026-08-28)
 
-Qwen3.5 9B Q4_K_M is the single local provider and an explicit 5.68 GB download
-for Macs with at least 16 GB. It runs through a bundled, short-lived llama.cpp
-Metal helper, with no Ollama, account, background server or network port. The
-tested 4B profile is retired because its speed and smaller memory footprint did
-not justify a second user-facing choice with lower factual accuracy.
+Qwen3.5 4B Q4_K_M is the single local provider and an explicit 2.74 GB download.
+It runs through a bundled, short-lived llama.cpp Metal helper, with no Ollama,
+account, background server or network port. The larger 9B profile is not
+offered because its 5.68 GB download is too much for the default experience.
 Whisper stays in the main process because the two runtimes export conflicting
 GGML symbols when linked together. The inference request removes
 low-information acknowledgements and repeated ASR fragments without changing
 the transcript on disk. Short calls use one pass; long calls use local chunk
 extraction plus local synthesis without truncating meaningful transcript text.
 Generated text replaces only `## Summary` and is labeled
-`local/qwen3.5-9b-q4-k-m`. Existing explicit Claude Code and Codex selections
+`local/qwen3.5-4b-q4-k-m`. Existing explicit Claude Code and Codex selections
 remain unchanged and available as cloud alternatives.
 
 Status (2026-08-28): implemented on `codex/stage-3.1-local-ai`; all four gates
@@ -385,6 +383,9 @@ and a signed release bundle with the helper pass. See
 
 Status (2026-08-29): on main and shipped in v0.7.0 (the owner exercised local
 and cloud summaries during the stage 3.2 e2e loop and authorized the release).
+
+Status (2026-08-31): local model changed from 9B to 4B by explicit owner
+decision after reviewing the onboarding download cost.
 
 ## Stage 3.2: settings logic, enhance visibility, model titles (implemented 2026-08-29)
 
@@ -452,6 +453,22 @@ for the output directory, and writes remain atomic. A syntax error is reported
 to UI setters instead of letting one toggle overwrite the hand-edited file.
 Manual edits take full effect after restart; the README is the complete field
 and value reference.
+
+## Stage 4.0: guided first run (implemented 2026-08-31, awaiting owner e2e)
+
+A full-window first-run flow explains the local and explicit-capture contract,
+shows a selectable notes folder, and defaults a fresh config to
+`~/Documents/simstim`. Entering the next page automatically requests microphone
+and system-audio access through the production APIs, reports both permissions
+independently, and does not require speech or playback. Entering the next step
+automatically downloads the required transcription model under a product name.
+Its official ONNX files download directly with continuous progress and no
+archive extraction pause. An optional final page configures the existing local,
+Claude Code or Codex summary provider, cloud model override, automatic
+summaries, generated titles and calendar context; the local summary model uses the same download
+operation too. Ordinary Settings stays available throughout. Completion is the
+normal `onboarding_complete` TOML field, and recording plus call detection
+remain gated until it is true.
 
 ## Milestones after MVP-0
 

@@ -7,6 +7,7 @@ pub mod enhance;
 pub mod local_ai;
 pub mod models;
 pub mod menu_bar;
+pub mod onboarding;
 pub mod retranscribe;
 pub mod session;
 pub mod sessions;
@@ -199,7 +200,11 @@ fn start_recording(
     title: Option<String>,
     detected_bundle_id: Option<String>,
     state: State<AppState>,
+    onboarding: State<onboarding::OnboardingState>,
 ) -> Result<String, String> {
+    if onboarding.is_running() {
+        return Err("wait for the permission check to finish".into());
+    }
     let path = path.map(PathBuf::from);
     if path.is_some() && (title.is_some() || detected_bundle_id.is_some()) {
         return Err("a detected-call title can only be applied to a new session".into());
@@ -216,6 +221,9 @@ fn start_recording(
         return Err("already recording".into());
     }
     let cfg = Config::load();
+    if !cfg.onboarding_complete {
+        return Err("finish first-run setup before recording".into());
+    }
     if !models::model_ready(&cfg.active_model) {
         let name = models::find(&cfg.active_model)
             .map(|spec| spec.name)
@@ -442,6 +450,7 @@ fn set_output_dir_at<R: tauri::Runtime>(
         Config::default()
     };
     cfg.output_dir = PathBuf::from(path);
+    std::fs::create_dir_all(&cfg.output_dir).map_err(|e| e.to_string())?;
     cfg.save_to(config_path).map_err(|e| e.to_string())?;
     // Grants the new folder read access for playback immediately (Global
     // Constraints, security review finding): without this, switching the
@@ -585,6 +594,7 @@ pub fn run() {
     let builder = builder.plugin(tauri_nspanel::init());
     builder
         .manage(AppState::default())
+        .manage(onboarding::OnboardingState::default())
         .manage(DownloadState::default())
         .manage(retranscribe::RetranscribeState::default())
         .manage(enhance::EnhanceState::default())
@@ -598,6 +608,7 @@ pub fn run() {
             // rationale and `set_output_dir` for the runtime-switch case
             // this alone doesn't cover.
             let cfg = Config::load();
+            std::fs::create_dir_all(&cfg.output_dir)?;
             allow_output_dir_in_asset_scope(app, &cfg.output_dir)?;
             #[cfg(target_os = "macos")]
             app.handle().set_activation_policy(if cfg.show_in_dock {
@@ -614,7 +625,10 @@ pub fn run() {
             // time the first action can possibly fire.
             app.manage(banner::Banner::create(app.handle())?);
             app.manage(menu_bar::MenuBar::create(app.handle())?);
-            app.manage(detect::start(app.handle().clone(), cfg.detect_calls));
+            app.manage(detect::start(
+                app.handle().clone(),
+                cfg.detect_calls && cfg.onboarding_complete,
+            ));
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -631,6 +645,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             start_recording,
+            onboarding::check_audio_permissions,
+            onboarding::complete_onboarding,
             stop_recording,
             update_active_session,
             get_config,

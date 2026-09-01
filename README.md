@@ -45,8 +45,9 @@ manual edit so startup-only settings such as Dock presence and call detection
 are reapplied.
 
 ```toml
-output_dir = "~/Calls"
+output_dir = "~/Documents/simstim"
 active_model = "parakeet-tdt-0.6b-v3-int8"
+onboarding_complete = false
 theme = "system" # system, light, dark
 show_in_dock = true
 
@@ -70,9 +71,11 @@ auto_stop_after_call = false
 ```
 
 `retranscribe_model` may also be `whisper-large-v3`. Model selection in the
-file does not download a model; downloads stay explicit in Settings > Models.
+file does not download a model. The required transcription model downloads
+automatically during onboarding; optional models stay explicit in Settings > Models.
 `delete_audio_after_retranscribe = true` is irreversible after a successful
-pass.
+pass. `onboarding_complete` becomes true after the guided permissions, transcription
+model and optional summary setup; advanced users may also set it by hand.
 
 ## Why not Granola, Anarlog or Meetily
 

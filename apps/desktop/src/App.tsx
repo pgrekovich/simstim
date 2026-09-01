@@ -32,6 +32,7 @@ import {
 } from "@/components/SessionView";
 import { Sidebar } from "@/components/Sidebar";
 import { SettingsDialog } from "@/components/SettingsDialog";
+import { Onboarding } from "@/components/Onboarding";
 import {
   createSession,
   deleteSession,
@@ -123,6 +124,8 @@ function App() {
   const [interimThem, setInterimThem] = useState("");
   const [recordingStartedAt, setRecordingStartedAt] = useState<number | null>(null);
   const [modelReady, setModelReady] = useState(true);
+  const [appConfig, setAppConfig] = useState<AppConfig | null>(null);
+  const [models, setModels] = useState<ModelInfo[]>([]);
   const [busy, setBusy] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -141,6 +144,7 @@ function App() {
   const bannerStartRef = useRef<(payload: CallDetectedPayload) => void>(() => {});
   const menuBarToggleRef = useRef<() => void>(() => {});
   const menuBarNewNoteRef = useRef<() => void>(() => {});
+  const onboardingCompleteRef = useRef(false);
   // State alone cannot reject two stop events delivered in the same React
   // tick. This synchronous guard protects the one backend recording handle.
   const stopInFlightRef = useRef(false);
@@ -257,11 +261,17 @@ function App() {
     };
   }, [activePath, autoStopAfterCall]);
 
+  useEffect(() => {
+    onboardingCompleteRef.current = appConfig?.onboarding_complete === true;
+  }, [appConfig?.onboarding_complete]);
+
   // The settings dialog owns fetching config/models (on mount, on open, and
   // on download completion) and reports back through this callback, so the
   // "model not downloaded" gate here updates without an app restart.
   function handleModelsChanged(config: AppConfig, models: ModelInfo[]) {
     const active = models.find((m) => m.id === config.active_model);
+    setAppConfig(config);
+    setModels(models);
     setModelReady(Boolean(active?.downloaded));
     setAutoStopAfterCall(config.auto_stop_after_call);
   }
@@ -273,7 +283,10 @@ function App() {
   // override user is the only acceptable flash (per Global Constraints).
   useEffect(() => {
     getConfig()
-      .then((config) => initTheme(config.theme))
+      .then((config) => {
+        setAppConfig(config);
+        initTheme(config.theme);
+      })
       .catch(() => {
         // Defensive only: `get_config` doesn't actually reject on a missing
         // config file (`Config::load` falls back to `Config::default()`), so
@@ -296,7 +309,7 @@ function App() {
   // the permanent listener must see current busy/model/recording state.
   useEffect(() => {
     bannerStartRef.current = (payload: CallDetectedPayload) => {
-      if (busy || !modelReady || activePath !== null) {
+      if (!appConfig?.onboarding_complete || busy || !modelReady || activePath !== null) {
         // Cannot start right now (mid-operation, model missing, or already
         // recording): surface the app instead of silently doing nothing.
         void showMainWindow();
@@ -330,6 +343,10 @@ function App() {
   // application has focus.
   useEffect(() => {
     menuBarToggleRef.current = () => {
+      if (!appConfig?.onboarding_complete) {
+        void showMainWindow();
+        return;
+      }
       if (busy) {
         void showMainWindow();
         return;
@@ -357,6 +374,10 @@ function App() {
 
   useEffect(() => {
     const unlisten = listen("menu-bar-add-note", () => {
+      if (!onboardingCompleteRef.current) {
+        void showMainWindow();
+        return;
+      }
       void showMainWindow().then(() => {
         activeSessionViewRef.current?.focusNotes();
       });
@@ -368,6 +389,10 @@ function App() {
 
   useEffect(() => {
     menuBarNewNoteRef.current = () => {
+      if (!appConfig?.onboarding_complete) {
+        void showMainWindow();
+        return;
+      }
       void showMainWindow().then(() => handleNewSession());
     };
   });
@@ -865,17 +890,21 @@ function App() {
   });
   useEffect(() => {
     shortcutsRef.current = {
-      newNote: () => void handleNewSession(),
+      newNote: () => {
+        if (!appConfig?.onboarding_complete) return;
+        void handleNewSession();
+      },
       startRecording: () => {
         // Same gating as the Record button and the EmptyState row.
-        if (busy || sessionActive || !modelReady) return;
+        if (!appConfig?.onboarding_complete || busy || sessionActive || !modelReady) return;
         void handleStart();
       },
       openSettings: () => setSettingsOpen(true),
       openSearch: () => {
-        if (!settingsOpen) setSearchOpen(true);
+        if (appConfig?.onboarding_complete && !settingsOpen) setSearchOpen(true);
       },
       openTranscriptFind: () => {
+        if (!appConfig?.onboarding_complete) return;
         if (settingsOpen) return;
         if (selectedPath === null) {
           setSearchOpen(true);
@@ -959,7 +988,7 @@ function App() {
   }
 
   async function handleNewSession() {
-    if (busy) return;
+    if (!appConfig?.onboarding_complete || busy) return;
     setBusy(true);
     try {
       const path = await createSession();
@@ -1011,6 +1040,32 @@ function App() {
         : status.kind === "saved"
           ? "saved"
           : "";
+
+  if (appConfig === null) {
+    return (
+      <div data-tauri-drag-region className="flex h-screen items-center justify-center bg-background font-mono text-[11px] text-muted-foreground">
+        loading...
+      </div>
+    );
+  }
+
+  if (!appConfig.onboarding_complete) {
+    return (
+      <div className="h-screen bg-background text-foreground">
+        <Onboarding
+          config={appConfig}
+          models={models}
+          onOpenSettings={() => setSettingsOpen(true)}
+          onComplete={handleModelsChanged}
+        />
+        <SettingsDialog
+          open={settingsOpen}
+          onOpenChange={setSettingsOpen}
+          onModelsChanged={handleModelsChanged}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-screen bg-background text-foreground">

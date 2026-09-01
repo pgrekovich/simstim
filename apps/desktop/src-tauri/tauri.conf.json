@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "simstim",
+  "productName": "Simstim",
   "mainBinaryName": "simstim",
   "version": "0.1.0",
   "identifier": "com.simstim.desktop",
@@ -14,7 +14,7 @@
     "macOSPrivateApi": true,
     "windows": [
       {
-        "title": "simstim",
+        "title": "Simstim",
         "width": 800,
         "height": 600,
         "titleBarStyle": "Overlay",

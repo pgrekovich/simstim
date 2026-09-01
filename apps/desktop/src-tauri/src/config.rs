@@ -3,8 +3,8 @@ use serde::{Deserialize, Serialize};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
-const CONFIG_PREAMBLE: &str = "# simstim configuration\n\
-# Every value may be edited by hand. Restart simstim after manual changes.\n\
+const CONFIG_PREAMBLE: &str = "# Simstim configuration\n\
+# Every value may be edited by hand. Restart Simstim after manual changes.\n\
 # Reference: https://github.com/pgrekovich/simstim#configuration\n\n";
 
 /// Default active model id, matching the single entry in `models::REGISTRY`.
@@ -92,6 +92,9 @@ fn default_auto_stop_after_call() -> bool {
 pub struct Config {
     pub output_dir: PathBuf,
     pub active_model: String,
+    /// Whether the guided first run has verified both capture permissions and
+    /// the required live model. May also be set by hand in the TOML file.
+    pub onboarding_complete: bool,
     /// `"system" | "light" | "dark"`.
     pub theme: String,
     /// Whether macOS shows simstim as a regular Dock application.
@@ -157,8 +160,12 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            output_dir: dirs::home_dir().expect("no home dir").join("Desktop"),
+            output_dir: dirs::home_dir()
+                .expect("no home dir")
+                .join("Documents")
+                .join("simstim"),
             active_model: KNOWN_MODEL_ID.to_string(),
+            onboarding_complete: false,
             theme: default_theme(),
             show_in_dock: default_show_in_dock(),
             keep_audio: default_keep_audio(),
@@ -498,6 +505,7 @@ mod tests {
         let cfg = Config {
             output_dir: PathBuf::from("/tmp/some-output"),
             active_model: "custom-model-id".to_string(),
+            onboarding_complete: true,
             theme: "dark".to_string(),
             show_in_dock: false,
             keep_audio: false,
@@ -521,6 +529,17 @@ mod tests {
     #[test]
     fn theme_defaults_to_system() {
         assert_eq!(Config::default().theme, "system");
+    }
+
+    #[test]
+    fn guided_first_run_defaults_to_required() {
+        assert!(!Config::default().onboarding_complete);
+    }
+
+    #[test]
+    fn notes_default_to_documents_simstim() {
+        let output_dir = Config::default().output_dir;
+        assert!(output_dir.ends_with(Path::new("Documents/simstim")));
     }
 
     #[test]
@@ -709,10 +728,11 @@ mod tests {
         Config::default().save_to(&path).unwrap();
         let source = std::fs::read_to_string(path).unwrap();
 
-        assert!(source.starts_with("# simstim configuration\n"));
+        assert!(source.starts_with("# Simstim configuration\n"));
         for key in [
             "output_dir",
             "active_model",
+            "onboarding_complete",
             "theme",
             "show_in_dock",
             "keep_audio",

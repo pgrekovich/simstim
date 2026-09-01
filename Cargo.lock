@@ -1001,7 +1001,6 @@ name = "desktop"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "bzip2",
  "chrono",
  "cidre",
  "claxon",
@@ -1017,7 +1016,6 @@ dependencies = [
  "simstim-capture",
  "simstim-engine",
  "simstim-transcript",
- "tar",
  "tauri",
  "tauri-build",
  "tauri-nspanel",

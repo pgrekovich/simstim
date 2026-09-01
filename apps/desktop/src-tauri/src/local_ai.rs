@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-pub const MODEL_ID: &str = "qwen3.5-9b-q4-k-m";
+pub const MODEL_ID: &str = "qwen3.5-4b-q4-k-m";
 const WORKER_TIMEOUT: Duration = Duration::from_secs(300);
 
 #[derive(Serialize)]
@@ -127,7 +127,7 @@ pub fn summarize(
 
 fn worker_path() -> Result<PathBuf, String> {
     let current = std::env::current_exe()
-        .map_err(|e| format!("couldn't locate the simstim application: {e}"))?;
+        .map_err(|e| format!("couldn't locate the Simstim application: {e}"))?;
     let sibling = current.with_file_name("simstim-local-ai");
     if sibling.is_file() {
         return Ok(sibling);
@@ -146,7 +146,7 @@ fn worker_path() -> Result<PathBuf, String> {
     if dev_sidecar.is_file() {
         return Ok(dev_sidecar);
     }
-    Err("the bundled local AI helper is missing; reinstall simstim".to_string())
+    Err("the bundled local AI helper is missing; reinstall Simstim".to_string())
 }
 
 #[cfg(test)]
@@ -155,6 +155,6 @@ mod tests {
 
     #[test]
     fn local_model_id_is_stable() {
-        assert_eq!(MODEL_ID, "qwen3.5-9b-q4-k-m");
+        assert_eq!(MODEL_ID, "qwen3.5-4b-q4-k-m");
     }
 }

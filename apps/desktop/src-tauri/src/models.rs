@@ -15,20 +15,15 @@ use crate::enhance::EnhanceState;
 use crate::retranscribe::RetranscribeState;
 
 /// Where a model's primary payload comes from and how it lives on disk once
-/// downloaded. Stage 0.5 only ever needed `Archive` (a tar.bz2 that extracts
-/// to a directory of files); stage 0.7 adds `File` for a GGUF model that is
-/// just one file dropped straight into `models_dir`, no archive or
-/// subdirectory involved.
+/// downloaded.
 #[derive(Debug)]
 pub enum ModelLayout {
-    /// A `.tar.bz2` archive that extracts to `archive_dir_name`, then gets
-    /// renamed to `dir_name`. `REQUIRED_MODEL_FILES` lists the files expected
-    /// inside `dir_name` once that's done (this list is Parakeet-shaped;
-    /// revisit if a future archive-based model has a different file set).
-    Archive {
-        archive_url: &'static str,
-        archive_dir_name: &'static str,
+    /// A set of files downloaded into one model-specific directory. Each
+    /// tuple is `(url, file_name, expected_bytes)`; expected sizes let the UI
+    /// show one continuous progress bar across every file.
+    Directory {
         dir_name: &'static str,
+        files: &'static [(&'static str, &'static str, u64)],
     },
     /// A single file downloaded directly into `models_dir` under `file_name`.
     File {
@@ -74,10 +69,14 @@ impl ModelRole {
 pub struct ModelSpec {
     pub id: &'static str,
     pub name: &'static str,
+    /// Exact upstream model name. The UI renders it as quiet secondary
+    /// metadata so most people can ignore implementation details without
+    /// hiding them from people who care.
+    pub technical_name: Option<&'static str>,
     /// Short descriptive subtitle shown under `name` in the Settings model
     /// manager (stage 0.8.x curation), `None` when there's nothing worth
-    /// saying beyond the name itself (Parakeet, and every retired entry --
-    /// retired rows don't render a tagline at all, see `SettingsDialog`).
+    /// saying beyond the name itself. Retired rows don't render a tagline at
+    /// all, see `SettingsDialog`.
     /// Deliberately plain, no quantization jargon: written for Pavel, not for
     /// someone comparing GGUF variants.
     pub tagline: Option<&'static str>,
@@ -105,13 +104,34 @@ pub struct ModelSpec {
 pub static REGISTRY: &[ModelSpec] = &[
     ModelSpec {
         id: "parakeet-tdt-0.6b-v3-int8",
-        name: "Parakeet TDT 0.6B v3 (int8)",
-        tagline: None,
-        size_mb: 487,
-        layout: ModelLayout::Archive {
-            archive_url: "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2",
-            archive_dir_name: "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8",
+        name: "Transcription model",
+        technical_name: Some("Parakeet TDT 0.6B v3 (int8)"),
+        tagline: Some("required for recording"),
+        size_mb: 671,
+        layout: ModelLayout::Directory {
             dir_name: "parakeet-tdt-0.6b-v3-int8",
+            files: &[
+                (
+                    "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/resolve/main/encoder.int8.onnx",
+                    "encoder.int8.onnx",
+                    652_184_281,
+                ),
+                (
+                    "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/resolve/main/decoder.int8.onnx",
+                    "decoder.int8.onnx",
+                    11_845_275,
+                ),
+                (
+                    "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/resolve/main/joiner.int8.onnx",
+                    "joiner.int8.onnx",
+                    6_355_277,
+                ),
+                (
+                    "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/resolve/main/tokens.txt",
+                    "tokens.txt",
+                    93_939,
+                ),
+            ],
         },
         extra_files: &[(
             "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx",
@@ -130,6 +150,7 @@ pub static REGISTRY: &[ModelSpec] = &[
         // ever being downloaded or selected again.
         id: "whisper-large-v3-turbo-q5",
         name: "Whisper turbo (older version)",
+        technical_name: None,
         tagline: None,
         size_mb: 574,
         layout: ModelLayout::File {
@@ -147,6 +168,7 @@ pub static REGISTRY: &[ModelSpec] = &[
         // would be asked to re-download it.
         id: "whisper-large-v3-turbo-q8",
         name: "Whisper turbo",
+        technical_name: None,
         tagline: Some("faster, slightly weaker on non-English"),
         size_mb: 874,
         layout: ModelLayout::File {
@@ -167,6 +189,7 @@ pub static REGISTRY: &[ModelSpec] = &[
         // downloaded or selected again.
         id: "whisper-large-v3-q5",
         name: "Whisper large-v3 (older version)",
+        technical_name: None,
         tagline: None,
         size_mb: 1081,
         layout: ModelLayout::File {
@@ -183,6 +206,7 @@ pub static REGISTRY: &[ModelSpec] = &[
         // strongest of the two on non-English audio.
         id: "whisper-large-v3",
         name: "Whisper large-v3",
+        technical_name: None,
         tagline: Some("best quality, slower"),
         size_mb: 3095,
         layout: ModelLayout::File {
@@ -194,13 +218,14 @@ pub static REGISTRY: &[ModelSpec] = &[
         retired: false,
     },
     ModelSpec {
-        id: "qwen3.5-9b-q4-k-m",
-        name: "Qwen3.5 9B",
-        tagline: Some("private summaries, needs 16 GB"),
-        size_mb: 5680,
+        id: "qwen3.5-4b-q4-k-m",
+        name: "Local summary model",
+        technical_name: Some("Qwen3.5 4B (Q4_K_M)"),
+        tagline: Some("private summaries on this Mac"),
+        size_mb: 2740,
         layout: ModelLayout::File {
-            url: "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q4_K_M.gguf",
-            file_name: "Qwen3.5-9B-Q4_K_M.gguf",
+            url: "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf",
+            file_name: "Qwen3.5-4B-Q4_K_M.gguf",
         },
         extra_files: &[],
         role: ModelRole::Summary,
@@ -213,27 +238,16 @@ pub fn find(id: &str) -> Option<&'static ModelSpec> {
     REGISTRY.iter().find(|m| m.id == id)
 }
 
-/// Files `Engine::new` (crates/engine/src/lib.rs) requires inside a Parakeet
-/// model's extracted directory: the vocabulary plus all three transducer
-/// weights. Only applies to `ModelLayout::Archive` entries.
-const REQUIRED_MODEL_FILES: &[&str] = &[
-    "tokens.txt",
-    "encoder.int8.onnx",
-    "decoder.int8.onnx",
-    "joiner.int8.onnx",
-];
-
 /// Whether every file a model needs is present under `models_dir`: for
-/// `Archive` layouts, the extracted directory with all of
-/// `REQUIRED_MODEL_FILES`; for `File` layouts, just the one file. Either way,
-/// plus each of `extra_files`.
+/// `Directory` layouts, every listed file; for `File` layouts, just the one
+/// file. Either way, plus each of `extra_files`.
 pub fn is_downloaded(spec: &ModelSpec, models_dir: &Path) -> bool {
     let primary_present = match &spec.layout {
-        ModelLayout::Archive { dir_name, .. } => {
+        ModelLayout::Directory { dir_name, files } => {
             let dir = models_dir.join(dir_name);
-            REQUIRED_MODEL_FILES
+            files
                 .iter()
-                .all(|filename| dir.join(filename).is_file())
+                .all(|(_, filename, _)| dir.join(filename).is_file())
         }
         ModelLayout::File { file_name, .. } => models_dir.join(file_name).is_file(),
     };
@@ -263,7 +277,7 @@ pub fn model_file_path(id: &str) -> Result<PathBuf, String> {
     }
     match spec.layout {
         ModelLayout::File { file_name, .. } => Ok(models_dir.join(file_name)),
-        ModelLayout::Archive { .. } => Err(format!("{} is not a single-file model", spec.name)),
+        ModelLayout::Directory { .. } => Err(format!("{} is not a single-file model", spec.name)),
     }
 }
 
@@ -292,16 +306,15 @@ fn dir_size(dir: &Path) -> u64 {
 /// Real on-disk size of `spec`'s files under `models_dir`, in bytes, or
 /// `None` if it isn't fully downloaded (stage 0.8: `list_models`'
 /// `size_on_disk_bytes`, so the UI can show actual usage rather than the
-/// advertised `size_mb`). For `Archive` layouts this sums every file in the
-/// extracted directory recursively (real usage can differ slightly from the
-/// advertised total), plus any `extra_files`; for `File` layouts, just the
-/// one file's size plus `extra_files`.
+/// advertised `size_mb`). For `Directory` layouts this sums every file in the
+/// model directory recursively, plus any `extra_files`; for `File` layouts,
+/// just the one file's size plus `extra_files`.
 pub fn size_on_disk(spec: &ModelSpec, models_dir: &Path) -> Option<u64> {
     if !is_downloaded(spec, models_dir) {
         return None;
     }
     let primary = match &spec.layout {
-        ModelLayout::Archive { dir_name, .. } => dir_size(&models_dir.join(dir_name)),
+        ModelLayout::Directory { dir_name, .. } => dir_size(&models_dir.join(dir_name)),
         ModelLayout::File { file_name, .. } => std::fs::metadata(models_dir.join(file_name))
             .map(|m| m.len())
             .unwrap_or(0),
@@ -323,6 +336,8 @@ pub fn size_on_disk(spec: &ModelSpec, models_dir: &Path) -> Option<u64> {
 pub struct ModelInfo {
     pub id: String,
     pub name: String,
+    /// Mirrors `ModelSpec::technical_name`; quiet expert-facing metadata.
+    pub technical_name: Option<String>,
     /// Mirrors `ModelSpec::tagline`; `None`/`null` when there's no subtitle
     /// to show.
     pub tagline: Option<String>,
@@ -337,8 +352,8 @@ pub struct ModelInfo {
     pub role: String,
     /// Real bytes on disk for this model's downloaded files (`None`/`null`
     /// when not downloaded), stage 0.8: lets the UI show actual disk usage
-    /// rather than the advertised `size_mb`, which can differ from what a
-    /// real extracted archive occupies.
+    /// rather than the advertised `size_mb`, which can differ from what the
+    /// real downloaded files occupy.
     pub size_on_disk_bytes: Option<u64>,
     /// Mirrors `ModelSpec::retired` (stage 0.8.x curation): the Settings UI
     /// renders a retired row as size + delete only, no radio/Download, since
@@ -415,6 +430,7 @@ fn list_models_at(models_dir: &Path, cfg: &Config) -> Vec<ModelInfo> {
         .map(|spec| ModelInfo {
             id: spec.id.to_string(),
             name: spec.name.to_string(),
+            technical_name: spec.technical_name.map(|name| name.to_string()),
             tagline: spec.tagline.map(|t| t.to_string()),
             size_mb: spec.size_mb,
             downloaded: is_downloaded(spec, models_dir),
@@ -468,8 +484,8 @@ pub async fn download_model(
 }
 
 /// Removes `spec`'s downloaded files from `models_dir` (stage 0.8, for
-/// reclaiming disk): the one file for a `File` layout, or the extracted
-/// directory for an `Archive` layout. A no-op (not an error) if the files
+/// reclaiming disk): the one file for a `File` layout, or the model directory
+/// for a `Directory` layout. A no-op (not an error) if the files
 /// are already gone, so a stale UI row or a double-click can't turn into a
 /// spurious failure. Split from `validate_delete`'s rejection checks so the
 /// filesystem removal itself is testable against tempdir fixtures directly
@@ -483,7 +499,7 @@ fn remove_model_files(spec: &ModelSpec, models_dir: &Path) -> Result<(), String>
                 std::fs::remove_file(&path).map_err(|e| e.to_string())?;
             }
         }
-        ModelLayout::Archive { dir_name, .. } => {
+        ModelLayout::Directory { dir_name, .. } => {
             let dir = models_dir.join(dir_name);
             if dir.is_dir() {
                 std::fs::remove_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -541,20 +557,12 @@ fn validate_delete(
     Ok(spec)
 }
 
-/// Removes `id`'s own interrupted-download tmp file (`.download-{id}.tmp`,
-/// up to ~3 GB for the largest whisper entry) from `models_dir`, if any. A
-/// no-op if it's already gone. Only ever called once `validate_delete` has
-/// confirmed no download of this id is currently in flight, so there's no
-/// race with `run_download` writing to the same path -- a live download's
-/// tmp file is never touched, only one left behind by a download that was
-/// interrupted (app quit, crash, network error) before `run_download`
-/// renamed/removed it.
+/// Removes `id`'s own interrupted-download staging path
+/// (`.download-{id}.tmp`) from `models_dir`, if any. Single-file models use a
+/// file and directory models use a directory. A no-op if it is already gone.
 fn remove_tmp_download_file(id: &str, models_dir: &Path) -> Result<(), String> {
     let tmp_path = models_dir.join(format!(".download-{id}.tmp"));
-    if tmp_path.is_file() {
-        std::fs::remove_file(&tmp_path).map_err(|e| e.to_string())?;
-    }
-    Ok(())
+    remove_tmp_download_path(&tmp_path)
 }
 
 /// `delete_model`'s actual logic (stage 0.8, for reclaiming disk):
@@ -612,16 +620,18 @@ pub fn delete_model(
 }
 
 /// Streams `url` to `dest` with periodic `"download"` progress events,
-/// flushing and closing the file before returning. Shared by both the
-/// archive path (downloads to a tmp file, then extracted) and the plain-file
-/// path (downloads to a tmp file, then renamed into place).
+/// flushing and closing the file before returning. `progress_offset` and
+/// `progress_total` combine a directory model's files into one continuous
+/// progress bar. A zero total uses the response's own content length.
 async fn download_to_path(
     client: &reqwest::Client,
     app: &AppHandle,
     id: &str,
     url: &str,
     dest: &Path,
-) -> Result<(), String> {
+    progress_offset: u64,
+    progress_total: u64,
+) -> Result<u64, String> {
     use futures_util::StreamExt;
     use tokio::io::AsyncWriteExt;
 
@@ -632,7 +642,12 @@ async fn download_to_path(
         .map_err(|e| e.to_string())?
         .error_for_status()
         .map_err(|e| e.to_string())?;
-    let total = resp.content_length().unwrap_or(0);
+    let response_total = resp.content_length().unwrap_or(0);
+    let total = if progress_total == 0 {
+        response_total
+    } else {
+        progress_total
+    };
 
     let mut file = tokio::fs::File::create(dest).await.map_err(|e| e.to_string())?;
     let mut received: u64 = 0;
@@ -645,14 +660,28 @@ async fn download_to_path(
         file.write_all(&chunk).await.map_err(|e| e.to_string())?;
         received += chunk.len() as u64;
         if received - last_emitted >= EMIT_EVERY {
-            emit_progress(app, id, "download", received, total, None);
+            emit_progress(
+                app,
+                id,
+                "download",
+                progress_offset + received,
+                total,
+                None,
+            );
             last_emitted = received;
         }
     }
     file.flush().await.map_err(|e| e.to_string())?;
     drop(file);
-    emit_progress(app, id, "download", received, total, None);
-    Ok(())
+    emit_progress(
+        app,
+        id,
+        "download",
+        progress_offset + received,
+        total,
+        None,
+    );
+    Ok(received)
 }
 
 async fn run_download(app: &AppHandle, spec: &ModelSpec) -> Result<(), String> {
@@ -661,35 +690,38 @@ async fn run_download(app: &AppHandle, spec: &ModelSpec) -> Result<(), String> {
     // Id-scoped so a second registry entry can download in parallel without
     // colliding on the same tmp path.
     let tmp_path = models_dir.join(format!(".download-{}.tmp", spec.id));
+    remove_tmp_download_path(&tmp_path)?;
     let client = reqwest::Client::new();
 
     match &spec.layout {
-        ModelLayout::Archive {
-            archive_url,
-            archive_dir_name,
-            dir_name,
-        } => {
-            download_to_path(&client, app, spec.id, archive_url, &tmp_path).await?;
-
-            // --- phase: extract (blocking IO, off the async runtime) ---
-            emit_progress(app, spec.id, "extract", 0, 0, None);
-            let tmp_path_for_blocking = tmp_path.clone();
-            let models_dir_for_blocking = models_dir.clone();
-            let archive_dir_name = archive_dir_name.to_string();
-            let dir_name = dir_name.to_string();
-            tauri::async_runtime::spawn_blocking(move || {
-                extract_archive(
-                    &tmp_path_for_blocking,
-                    &models_dir_for_blocking,
-                    &archive_dir_name,
-                    &dir_name,
+        ModelLayout::Directory { dir_name, files } => {
+            tokio::fs::create_dir_all(&tmp_path)
+                .await
+                .map_err(|e| e.to_string())?;
+            let total: u64 = files.iter().map(|(_, _, bytes)| bytes).sum();
+            let mut received = 0;
+            for (url, filename, _) in *files {
+                received += download_to_path(
+                    &client,
+                    app,
+                    spec.id,
+                    url,
+                    &tmp_path.join(filename),
+                    received,
+                    total,
                 )
-            })
-            .await
-            .map_err(|e| e.to_string())??;
+                .await?;
+            }
+            let target = models_dir.join(dir_name);
+            if target.exists() {
+                std::fs::remove_dir_all(&target).map_err(|e| e.to_string())?;
+            }
+            tokio::fs::rename(&tmp_path, target)
+                .await
+                .map_err(|e| e.to_string())?;
         }
         ModelLayout::File { url, file_name } => {
-            download_to_path(&client, app, spec.id, url, &tmp_path).await?;
+            download_to_path(&client, app, spec.id, url, &tmp_path, 0, 0).await?;
             tokio::fs::rename(&tmp_path, models_dir.join(file_name))
                 .await
                 .map_err(|e| e.to_string())?;
@@ -717,27 +749,12 @@ async fn run_download(app: &AppHandle, spec: &ModelSpec) -> Result<(), String> {
     Ok(())
 }
 
-/// Extracts the bzip2+tar archive at `tmp_path` into `models_dir`, renames
-/// the extracted `archive_dir_name` to `dir_name`, and removes the tmp file.
-/// Runs synchronously; callers should invoke it via `spawn_blocking`.
-fn extract_archive(
-    tmp_path: &Path,
-    models_dir: &Path,
-    archive_dir_name: &str,
-    dir_name: &str,
-) -> Result<(), String> {
-    let file = std::fs::File::open(tmp_path).map_err(|e| e.to_string())?;
-    let decompressed = bzip2::read::BzDecoder::new(file);
-    let mut archive = tar::Archive::new(decompressed);
-    archive.unpack(models_dir).map_err(|e| e.to_string())?;
-    std::fs::remove_file(tmp_path).map_err(|e| e.to_string())?;
-
-    let extracted = models_dir.join(archive_dir_name);
-    let target = models_dir.join(dir_name);
-    if target.exists() {
-        std::fs::remove_dir_all(&target).map_err(|e| e.to_string())?;
+fn remove_tmp_download_path(path: &Path) -> Result<(), String> {
+    if path.is_dir() {
+        std::fs::remove_dir_all(path).map_err(|e| e.to_string())?;
+    } else if path.is_file() {
+        std::fs::remove_file(path).map_err(|e| e.to_string())?;
     }
-    std::fs::rename(&extracted, &target).map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -749,12 +766,29 @@ mod tests {
         ModelSpec {
             id: "test-model",
             name: "Test Model",
+            technical_name: None,
             tagline: None,
             size_mb: 1,
-            layout: ModelLayout::Archive {
-                archive_url: "https://example.invalid/archive.tar.bz2",
-                archive_dir_name: "test-model-archive",
+            layout: ModelLayout::Directory {
                 dir_name: "test-model",
+                files: &[
+                    ("https://example.invalid/tokens.txt", "tokens.txt", 10),
+                    (
+                        "https://example.invalid/encoder.int8.onnx",
+                        "encoder.int8.onnx",
+                        20,
+                    ),
+                    (
+                        "https://example.invalid/decoder.int8.onnx",
+                        "decoder.int8.onnx",
+                        30,
+                    ),
+                    (
+                        "https://example.invalid/joiner.int8.onnx",
+                        "joiner.int8.onnx",
+                        40,
+                    ),
+                ],
             },
             extra_files: &[("https://example.invalid/extra.onnx", "extra.onnx")],
             role: ModelRole::Live,
@@ -766,6 +800,7 @@ mod tests {
         ModelSpec {
             id: "test-file-model",
             name: "Test File Model",
+            technical_name: None,
             tagline: None,
             size_mb: 1,
             layout: ModelLayout::File {
@@ -833,7 +868,7 @@ mod tests {
         assert!(validate_not_retired(find("whisper-large-v3-turbo-q8").unwrap()).is_ok());
         assert!(validate_not_retired(find("whisper-large-v3").unwrap()).is_ok());
         assert!(validate_not_retired(find("parakeet-tdt-0.6b-v3-int8").unwrap()).is_ok());
-        assert!(validate_not_retired(find("qwen3.5-9b-q4-k-m").unwrap()).is_ok());
+        assert!(validate_not_retired(find("qwen3.5-4b-q4-k-m").unwrap()).is_ok());
     }
 
     #[test]
@@ -900,12 +935,33 @@ mod tests {
                 "parakeet-tdt-0.6b-v3-int8",
                 "whisper-large-v3-turbo-q8",
                 "whisper-large-v3",
-                "qwen3.5-9b-q4-k-m",
+                "qwen3.5-4b-q4-k-m",
             ] {
                 let m = models.iter().find(|m| m.id == id).expect(id);
                 assert!(!m.retired, "{id}");
                 assert!(!m.downloaded, "{id}");
             }
+        }
+
+        #[test]
+        fn exposes_quiet_technical_names_for_product_named_models() {
+            let dir = tempfile::tempdir().unwrap();
+            let models = list_models_at(dir.path(), &Config::default());
+
+            let parakeet = models
+                .iter()
+                .find(|model| model.id == "parakeet-tdt-0.6b-v3-int8")
+                .unwrap();
+            assert_eq!(
+                parakeet.technical_name.as_deref(),
+                Some("Parakeet TDT 0.6B v3 (int8)")
+            );
+
+            let qwen = models
+                .iter()
+                .find(|model| model.id == "qwen3.5-4b-q4-k-m")
+                .unwrap();
+            assert_eq!(qwen.technical_name.as_deref(), Some("Qwen3.5 4B (Q4_K_M)"));
         }
     }
 
@@ -944,7 +1000,7 @@ mod tests {
     }
 
     #[test]
-    fn each_whisper_entry_is_a_file_layout_with_no_archive() {
+    fn each_whisper_entry_is_a_file_layout() {
         for id in [
             "whisper-large-v3-turbo-q5",
             "whisper-large-v3-turbo-q8",
@@ -953,7 +1009,7 @@ mod tests {
         ] {
             match &find(id).unwrap().layout {
                 ModelLayout::File { .. } => {}
-                ModelLayout::Archive { .. } => panic!("{id} should be a File layout"),
+                ModelLayout::Directory { .. } => panic!("{id} should be a File layout"),
             }
         }
     }
@@ -969,7 +1025,7 @@ mod tests {
             ModelLayout::File { file_name, .. } => {
                 assert_eq!(*file_name, "ggml-large-v3-turbo-q8_0.bin")
             }
-            ModelLayout::Archive { .. } => panic!("whisper entry should be a File layout"),
+            ModelLayout::Directory { .. } => panic!("whisper entry should be a File layout"),
         }
     }
 
@@ -979,28 +1035,41 @@ mod tests {
     }
 
     #[test]
-    fn registry_dir_name_matches_engine_hardcoded_model_dir() {
+    fn transcription_model_directory_matches_engine_and_has_continuous_progress_sizes() {
         // Engine::new (crates/engine/src/lib.rs) hardcodes the model
         // directory name "parakeet-tdt-0.6b-v3-int8" rather than reading it
         // from the registry. This test guards against the registry's
         // dir_name drifting out of sync with that hardcoded value.
         let parakeet = find("parakeet-tdt-0.6b-v3-int8").unwrap();
         match &parakeet.layout {
-            ModelLayout::Archive { dir_name, .. } => {
-                assert_eq!(*dir_name, "parakeet-tdt-0.6b-v3-int8")
+            ModelLayout::Directory { dir_name, files } => {
+                assert_eq!(*dir_name, "parakeet-tdt-0.6b-v3-int8");
+                assert_eq!(
+                    files.iter().map(|(_, name, _)| *name).collect::<Vec<_>>(),
+                    vec![
+                        "encoder.int8.onnx",
+                        "decoder.int8.onnx",
+                        "joiner.int8.onnx",
+                        "tokens.txt",
+                    ]
+                );
+                assert_eq!(
+                    files.iter().map(|(_, _, bytes)| bytes).sum::<u64>(),
+                    670_478_772
+                );
             }
-            ModelLayout::File { .. } => panic!("parakeet entry should be an Archive layout"),
+            ModelLayout::File { .. } => panic!("parakeet entry should be a Directory layout"),
         }
     }
 
     #[test]
-    fn whisper_registry_entry_is_a_file_layout_with_no_archive() {
+    fn whisper_registry_entry_is_a_file_layout() {
         let whisper = find("whisper-large-v3-turbo-q8").unwrap();
         match &whisper.layout {
             ModelLayout::File { file_name, .. } => {
                 assert_eq!(*file_name, "ggml-large-v3-turbo-q8_0.bin")
             }
-            ModelLayout::Archive { .. } => panic!("whisper entry should be a File layout"),
+            ModelLayout::Directory { .. } => panic!("whisper entry should be a File layout"),
         }
     }
 
@@ -1021,7 +1090,7 @@ mod tests {
     #[test]
     fn qwen_registry_entry_has_the_summary_role() {
         assert_eq!(
-            find("qwen3.5-9b-q4-k-m").unwrap().role,
+            find("qwen3.5-4b-q4-k-m").unwrap().role,
             ModelRole::Summary
         );
     }
@@ -1043,7 +1112,7 @@ mod tests {
 
         let qwen = models
             .iter()
-            .find(|m| m.id == "qwen3.5-9b-q4-k-m")
+            .find(|m| m.id == "qwen3.5-4b-q4-k-m")
             .unwrap();
         assert_eq!(qwen.role, "summary");
     }
@@ -1161,7 +1230,7 @@ mod tests {
         }
 
         #[test]
-        fn real_bytes_for_a_downloaded_archive_layout_model_sums_every_file() {
+        fn real_bytes_for_a_downloaded_directory_model_sums_every_file() {
             let dir = tempfile::tempdir().unwrap();
             let model_dir = dir.path().join("test-model");
             std::fs::create_dir_all(&model_dir).unwrap();
@@ -1170,7 +1239,7 @@ mod tests {
             std::fs::write(model_dir.join("decoder.int8.onnx"), vec![0u8; 30]).unwrap();
             std::fs::write(model_dir.join("joiner.int8.onnx"), vec![0u8; 40]).unwrap();
             std::fs::write(dir.path().join("extra.onnx"), vec![0u8; 5]).unwrap();
-            // 10 + 20 + 30 + 40 (extracted dir) + 5 (extra_files) = 105
+            // 10 + 20 + 30 + 40 (model dir) + 5 (extra_files) = 105
             assert_eq!(size_on_disk(&test_spec(), dir.path()), Some(105));
         }
     }
@@ -1187,7 +1256,7 @@ mod tests {
         }
 
         #[test]
-        fn remove_model_files_deletes_an_archive_layout_models_extracted_dir() {
+        fn remove_model_files_deletes_a_directory_layout_model() {
             let dir = tempfile::tempdir().unwrap();
             let model_dir = dir.path().join("test-model");
             std::fs::create_dir_all(&model_dir).unwrap();
@@ -1239,7 +1308,7 @@ mod tests {
         #[test]
         fn validate_delete_refuses_the_summary_model_while_enhancing() {
             let err =
-                validate_delete("qwen3.5-9b-q4-k-m", false, false, true).unwrap_err();
+                validate_delete("qwen3.5-4b-q4-k-m", false, false, true).unwrap_err();
             assert!(err.contains("summary"), "{err}");
         }
 
@@ -1311,6 +1380,18 @@ mod tests {
         }
 
         #[test]
+        fn delete_model_at_removes_its_own_stale_download_tmp_directory() {
+            let dir = tempfile::tempdir().unwrap();
+            let tmp_path = dir.path().join(".download-qwen3.5-4b-q4-k-m.tmp");
+            std::fs::create_dir_all(&tmp_path).unwrap();
+            std::fs::write(tmp_path.join("partial.gguf"), b"partial").unwrap();
+
+            delete_model_at("qwen3.5-4b-q4-k-m", dir.path(), false, false, false).unwrap();
+
+            assert!(!tmp_path.exists(), "the stale tmp directory must be removed");
+        }
+
+        #[test]
         fn delete_model_at_leaves_a_different_ids_tmp_file_untouched() {
             let dir = tempfile::tempdir().unwrap();
             let file_path = dir.path().join("ggml-large-v3-turbo-q8_0.bin");
@@ -1327,76 +1408,4 @@ mod tests {
         }
     }
 
-    #[test]
-    fn extract_archive_unpacks_renames_and_cleans_up_tmp() {
-        let dir = tempfile::tempdir().unwrap();
-        let models_dir = dir.path();
-        let tmp_path = models_dir.join(".download.tmp");
-
-        // Build a real bzip2+tar archive containing one file under
-        // "archive-name/payload.txt", matching what a real model tarball
-        // looks like before the rename.
-        let tar_bytes = {
-            let mut builder = tar::Builder::new(Vec::new());
-            let data = b"hello";
-            let mut header = tar::Header::new_gnu();
-            header.set_size(data.len() as u64);
-            header.set_mode(0o644);
-            header.set_cksum();
-            builder
-                .append_data(&mut header, "archive-name/payload.txt", &data[..])
-                .unwrap();
-            builder.into_inner().unwrap()
-        };
-        let bz_bytes = {
-            use std::io::Write;
-            let mut encoder = bzip2::write::BzEncoder::new(Vec::new(), bzip2::Compression::fast());
-            encoder.write_all(&tar_bytes).unwrap();
-            encoder.finish().unwrap()
-        };
-        std::fs::write(&tmp_path, bz_bytes).unwrap();
-
-        extract_archive(&tmp_path, models_dir, "archive-name", "final-name").unwrap();
-
-        assert!(!tmp_path.exists());
-        assert!(models_dir.join("final-name/payload.txt").is_file());
-        assert!(!models_dir.join("archive-name").exists());
-    }
-
-    #[test]
-    fn extract_archive_replaces_existing_target_dir() {
-        let dir = tempfile::tempdir().unwrap();
-        let models_dir = dir.path();
-        let tmp_path = models_dir.join(".download.tmp");
-
-        // Pre-existing target dir with stale content that must be replaced.
-        let stale_target = models_dir.join("final-name");
-        std::fs::create_dir_all(&stale_target).unwrap();
-        std::fs::write(stale_target.join("stale.txt"), b"old").unwrap();
-
-        let tar_bytes = {
-            let mut builder = tar::Builder::new(Vec::new());
-            let data = b"fresh";
-            let mut header = tar::Header::new_gnu();
-            header.set_size(data.len() as u64);
-            header.set_mode(0o644);
-            header.set_cksum();
-            builder
-                .append_data(&mut header, "archive-name/fresh.txt", &data[..])
-                .unwrap();
-            builder.into_inner().unwrap()
-        };
-        let bz_bytes = {
-            use std::io::Write;
-            let mut encoder = bzip2::write::BzEncoder::new(Vec::new(), bzip2::Compression::fast());
-            encoder.write_all(&tar_bytes).unwrap();
-            encoder.finish().unwrap()
-        };
-        std::fs::write(&tmp_path, bz_bytes).unwrap();
-
-        extract_archive(&tmp_path, models_dir, "archive-name", "final-name").unwrap();
-
-        assert!(models_dir.join("final-name/fresh.txt").is_file());
-        assert!(!models_dir.join("final-name/stale.txt").exists());
-    }
 }

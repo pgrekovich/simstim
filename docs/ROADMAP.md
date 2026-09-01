@@ -21,19 +21,22 @@ and `docs/plans/`.
 There are no global shortcuts. Keyboard shortcuts work only while a simstim
 window is active, so browser and system shortcuts remain untouched.
 
+## Active stage
+
+**Stage 4.0: guided first run.** Choose the notes folder, request microphone
+and system-audio permissions, and guide the first required model download plus
+optional summary setup without hiding the ordinary Settings path.
+
 ## Ranked backlog
 
-1. **Guided first run.** Explain microphone and system-audio permissions,
-   verify both channels, and guide the first required model download without
-   hiding the ordinary Settings path.
-2. **Calendar metadata.** EventKit first for local event names and attendees.
+1. **Calendar metadata.** EventKit first for local event names and attendees.
    Full Google OAuth only if EventKit proves insufficient. Cloud connector
    context for summaries already exists and remains an explicit opt-in.
-3. **Richer transcript structure.** Consider generated chapters only after a
+2. **Richer transcript structure.** Consider generated chapters only after a
    clear product contract and reliable round-trip behavior exist.
-4. **Windows, then Linux.** WASAPI loopback and session notifications first,
+3. **Windows, then Linux.** WASAPI loopback and session notifications first,
    then PipeWire. Capture and detection stay behind the existing boundaries.
-5. **Public release polish.** Broader onboarding, updater and public launch
+4. **Public release polish.** Updater and public launch
    once the owner is comfortable handing the app to someone else.
 
 ## Smaller known items

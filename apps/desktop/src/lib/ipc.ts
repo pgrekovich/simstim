@@ -12,6 +12,8 @@ import { invoke } from "@tauri-apps/api/core";
 export interface AppConfig {
   output_dir: string;
   active_model: string;
+  /** Whether the guided permission and recording-model setup has completed. */
+  onboarding_complete: boolean;
   /** `"system" | "light" | "dark"`. */
   theme: string;
   /** Whether simstim appears in the macOS Dock. Defaults to `true`. */
@@ -186,10 +188,12 @@ export interface EnhanceProviderInfo {
 export interface ModelInfo {
   id: string;
   name: string;
+  /** Exact upstream name, rendered as quiet expert-facing metadata. */
+  technical_name: string | null;
   /**
    * Short descriptive subtitle shown under `name` (stage 0.8.x curation),
-   * `null` when there's nothing worth saying beyond the name itself
-   * (Parakeet, and every retired entry). Mirrors `ModelSpec::tagline`.
+   * `null` when there's nothing worth saying beyond the name itself.
+   * Mirrors `ModelSpec::tagline`.
    */
   tagline: string | null;
   size_mb: number;
@@ -206,7 +210,7 @@ export interface ModelInfo {
   /**
    * Real bytes on disk for this model's downloaded files, `null` when not
    * downloaded (stage 0.8): actual usage rather than the advertised
-   * `size_mb`, which can differ from what a real extracted archive occupies.
+   * `size_mb`, which can differ from what the real downloaded files occupy.
    */
   size_on_disk_bytes: number | null;
   /**
@@ -236,7 +240,7 @@ export interface TranscriptInterimPayload {
   text: string;
 }
 
-export type DownloadPhase = "download" | "extract" | "done" | "error";
+export type DownloadPhase = "download" | "done" | "error";
 
 export type RetranscribePhase = "loading-model" | "transcribing" | "writing" | "done" | "error";
 
@@ -266,8 +270,28 @@ export interface DownloadProgress {
   message?: string;
 }
 
+export interface PermissionCheck {
+  granted: boolean;
+  error: string | null;
+}
+
+export interface PermissionCheckResult {
+  microphone: PermissionCheck;
+  system_audio: PermissionCheck;
+}
+
 export function getConfig(): Promise<AppConfig> {
   return invoke("get_config");
+}
+
+/** Requests and verifies both macOS audio permissions without saving audio. */
+export function checkAudioPermissions(): Promise<PermissionCheckResult> {
+  return invoke("check_audio_permissions");
+}
+
+/** Persists first-run completion after backend verification of permissions and model. */
+export function completeOnboarding(): Promise<void> {
+  return invoke("complete_onboarding");
 }
 
 export function setOutputDir(path: string): Promise<void> {

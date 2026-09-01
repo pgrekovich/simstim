@@ -58,7 +58,7 @@ struct ProviderSpec {
 const PROVIDERS: &[ProviderSpec] = &[
     ProviderSpec {
         id: "local",
-        name: "Local · Qwen3.5 9B",
+        name: "On this Mac",
         kind: ProviderKind::Local {
             model_id: crate::local_ai::MODEL_ID,
         },
@@ -1475,7 +1475,7 @@ mod tests {
     #[test]
     fn local_summary_label_records_the_exact_model() {
         let spec = PROVIDERS.iter().find(|spec| spec.id == "local").unwrap();
-        assert_eq!(summary_label(spec, None), "local/qwen3.5-9b-q4-k-m");
+        assert_eq!(summary_label(spec, None), "local/qwen3.5-4b-q4-k-m");
     }
 
     /// Manual e2e: runs the REAL configured provider CLI over a tiny fake

@@ -5,6 +5,37 @@ use anyhow::{Result, anyhow};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::sync::mpsc::{Sender, channel};
 
+/// Returns whether macOS has granted microphone access, requesting it when
+/// the user has not made a choice yet. This checks authorization itself and
+/// does not require the microphone to produce a signal.
+#[cfg(target_os = "macos")]
+pub fn request_permission() -> Result<bool> {
+    use cidre::{av, blocks};
+
+    let media_type = av::MediaType::audio();
+    let status = av::CaptureDevice::authorization_status_for_media_type(media_type)
+        .map_err(|error| anyhow!("could not read microphone permission: {error:?}"))?;
+    match status {
+        av::AuthorizationStatus::Authorized => Ok(true),
+        av::AuthorizationStatus::Denied | av::AuthorizationStatus::Restricted => Ok(false),
+        av::AuthorizationStatus::NotDetermined => {
+            let (tx, rx) = channel();
+            let mut completion = blocks::SendBlock::new1(move |granted: bool| {
+                let _ = tx.send(granted);
+            });
+            av::CaptureDevice::request_access_for_media_type_ch(media_type, &mut completion)
+                .map_err(|error| anyhow!("could not request microphone permission: {error:?}"))?;
+            rx.recv()
+                .map_err(|error| anyhow!("microphone permission request was cancelled: {error}"))
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn request_permission() -> Result<bool> {
+    Ok(true)
+}
+
 /// Starts capturing from the default input device and sends resampled 16 kHz
 /// mono [`Chunk`]s (tagged [`Channel::Me`]) to `tx`.
 ///

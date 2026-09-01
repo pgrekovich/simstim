@@ -8,4 +8,4 @@ cpal = "0.17"
 anyhow = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-cidre = { version = "0.15", features = ["av"] }
+cidre = { version = "0.15", features = ["av", "blocks"] }

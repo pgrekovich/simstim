@@ -25,7 +25,7 @@ vi.mock("@/lib/ipc", () => ({
   setEnhanceRenameTitle: vi.fn().mockResolvedValue(undefined),
   setEnhanceUseCalendar: vi.fn().mockResolvedValue(undefined),
   listEnhanceProviders: vi.fn().mockResolvedValue([
-    { id: "local", name: "Local · Qwen3.5 9B", available: false, version: null },
+    { id: "local", name: "On this Mac", available: false, version: null },
     { id: "claude", name: "Claude Code", available: true, version: "2.0.0 (Claude Code)" },
     { id: "codex", name: "Codex", available: false, version: null },
   ]),
@@ -43,6 +43,7 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
 const baseConfig: AppConfig = {
   output_dir: "/tmp/calls",
   active_model: "parakeet-tdt-0.6b-v3-int8",
+  onboarding_complete: true,
   theme: "system",
   show_in_dock: true,
   keep_audio: true,
@@ -73,7 +74,7 @@ beforeEach(() => {
   vi.mocked(ipc.setRetranscribeModel).mockClear().mockResolvedValue(undefined);
   vi.mocked(ipc.deleteModel).mockClear().mockResolvedValue(undefined);
   vi.mocked(ipc.listEnhanceProviders).mockClear().mockResolvedValue([
-    { id: "local", name: "Local · Qwen3.5 9B", available: false, version: null },
+    { id: "local", name: "On this Mac", available: false, version: null },
     { id: "claude", name: "Claude Code", available: true, version: "2.0.0 (Claude Code)" },
     { id: "codex", name: "Codex", available: false, version: null },
   ]);
@@ -354,9 +355,10 @@ describe("SettingsDialog: whisper model row (stage 0.7 Task 5)", () => {
   const models: ModelInfo[] = [
     {
       id: "parakeet-tdt-0.6b-v3-int8",
-      name: "Parakeet TDT 0.6B v3 (int8)",
-      tagline: null,
-      size_mb: 487,
+      name: "Transcription model",
+      technical_name: "Parakeet TDT 0.6B v3 (int8)",
+      tagline: "required for recording",
+      size_mb: 671,
       downloaded: true,
       active: true,
       role: "live",
@@ -366,6 +368,7 @@ describe("SettingsDialog: whisper model row (stage 0.7 Task 5)", () => {
     {
       id: "whisper-large-v3-turbo-q8",
       name: "Whisper turbo",
+      technical_name: null,
       tagline: "faster, slightly weaker on non-English",
       size_mb: 874,
       downloaded: true,
@@ -385,7 +388,7 @@ describe("SettingsDialog: whisper model row (stage 0.7 Task 5)", () => {
     await screen.findByText("874 MB");
 
     // The live-engine row still gets its normal Active affordance.
-    const parakeetRow = screen.getByText("Parakeet TDT 0.6B v3 (int8)").closest("li")!;
+    const parakeetRow = screen.getByText("Transcription model").closest("li")!;
     expect(within(parakeetRow).getByText(/active/i)).toBeInTheDocument();
 
     // Whisper is downloaded but must never show Use or Active: it can't
@@ -413,9 +416,10 @@ describe("SettingsDialog: whisper model row (stage 0.7 Task 5)", () => {
 describe("SettingsDialog: model manager (stage 0.8 Task 2)", () => {
   const parakeet: ModelInfo = {
     id: "parakeet-tdt-0.6b-v3-int8",
-    name: "Parakeet TDT 0.6B v3 (int8)",
-    tagline: null,
-    size_mb: 487,
+    name: "Transcription model",
+    technical_name: "Parakeet TDT 0.6B v3 (int8)",
+    tagline: "required for recording",
+    size_mb: 671,
     downloaded: true,
     active: true,
     role: "live",
@@ -426,6 +430,7 @@ describe("SettingsDialog: model manager (stage 0.8 Task 2)", () => {
   const whisperQ8: ModelInfo = {
     id: "whisper-large-v3-turbo-q8",
     name: "Whisper turbo",
+    technical_name: null,
     tagline: "faster, slightly weaker on non-English",
     size_mb: 874,
     downloaded: true,
@@ -438,6 +443,7 @@ describe("SettingsDialog: model manager (stage 0.8 Task 2)", () => {
   const whisperLargeV3: ModelInfo = {
     id: "whisper-large-v3",
     name: "Whisper large-v3",
+    technical_name: null,
     tagline: "best quality, slower",
     size_mb: 3095,
     downloaded: true,
@@ -461,6 +467,7 @@ describe("SettingsDialog: model manager (stage 0.8 Task 2)", () => {
   const whisperLargeQ5Retired: ModelInfo = {
     id: "whisper-large-v3-q5",
     name: "Whisper large-v3 (older version)",
+    technical_name: null,
     tagline: null,
     size_mb: 1081,
     downloaded: true,
@@ -679,13 +686,14 @@ describe("SettingsDialog: model manager (stage 0.8 Task 2)", () => {
 
 describe("SettingsDialog: AI enhance provider (stage 0.11)", () => {
   // The summary provider rows live on the merged Models page now: the local
-  // row is Qwen's own model-manager row (download/progress/delete inline)
+  // row is the local model-manager row (download/progress/delete inline)
   // with its selection radio, so picking and downloading never span tabs.
   const qwen: ModelInfo = {
-    id: "qwen3.5-9b-q4-k-m",
-    name: "Qwen3.5 9B",
-    tagline: "private summaries, needs 16 GB",
-    size_mb: 5680,
+    id: "qwen3.5-4b-q4-k-m",
+    name: "Local summary model",
+    technical_name: "Qwen3.5 4B (Q4_K_M)",
+    tagline: "private summaries on this Mac",
+    size_mb: 2740,
     downloaded: false,
     active: false,
     role: "summary",
@@ -695,7 +703,7 @@ describe("SettingsDialog: AI enhance provider (stage 0.11)", () => {
   const qwenDownloaded: ModelInfo = {
     ...qwen,
     downloaded: true,
-    size_on_disk_bytes: 5_680_000_000,
+    size_on_disk_bytes: 2_740_000_000,
   };
 
   async function openModelsSection() {
@@ -722,31 +730,33 @@ describe("SettingsDialog: AI enhance provider (stage 0.11)", () => {
 
     // Not downloaded: the row offers Download right here (no pointer to a
     // different tab) and its selection radio is disabled until it is ready.
-    const row = (await screen.findByText("Local · Qwen3.5 9B")).closest("li")!;
+    const row = (await screen.findByText("On this Mac")).closest("li")!;
     expect(within(row).getByRole("button", { name: /download/i })).toBeInTheDocument();
-    expect(within(row).getByRole("radio", { name: "Local · Qwen3.5 9B" })).toBeDisabled();
-    expect(within(row).getByText("5.68 GB")).toBeInTheDocument();
+    expect(within(row).getByRole("radio", { name: "On this Mac" })).toBeDisabled();
+    const technicalName = within(row).getByText("Qwen3.5 4B (Q4_K_M)");
+    expect(technicalName).toHaveClass("text-[10px]", "text-muted-foreground/55");
+    expect(within(row).getByText("2.74 GB")).toBeInTheDocument();
   });
 
   it("offers delete and an enabled radio once the local model is downloaded", async () => {
     vi.mocked(ipc.listModels).mockResolvedValue([qwenDownloaded]);
     vi.mocked(ipc.listEnhanceProviders).mockResolvedValue([
-      { id: "local", name: "Local · Qwen3.5 9B", available: true, version: "on-device · Metal" },
+      { id: "local", name: "On this Mac", available: true, version: "on-device · Metal" },
       { id: "claude", name: "Claude Code", available: true, version: "2.0.0" },
       { id: "codex", name: "Codex", available: false, version: null },
     ]);
     await openModelsSection();
 
-    const row = (await screen.findByText("Local · Qwen3.5 9B")).closest("li")!;
+    const row = (await screen.findByText("On this Mac")).closest("li")!;
     expect(within(row).queryByRole("button", { name: /download/i })).not.toBeInTheDocument();
-    expect(within(row).getByRole("button", { name: /delete qwen3.5 9b/i })).toBeInTheDocument();
-    expect(within(row).getByRole("radio", { name: "Local · Qwen3.5 9B" })).not.toBeDisabled();
+    expect(within(row).getByRole("button", { name: /delete local summary model/i })).toBeInTheDocument();
+    expect(within(row).getByRole("radio", { name: "On this Mac" })).not.toBeDisabled();
   });
 
   it("persists a provider switch", async () => {
     vi.mocked(ipc.listModels).mockResolvedValue([qwenDownloaded]);
     vi.mocked(ipc.listEnhanceProviders).mockResolvedValue([
-      { id: "local", name: "Local · Qwen3.5 9B", available: true, version: "on-device · Metal" },
+      { id: "local", name: "On this Mac", available: true, version: "on-device · Metal" },
       { id: "claude", name: "Claude Code", available: true, version: "2.0.0" },
       { id: "codex", name: "Codex", available: true, version: "codex-cli 0.149.0" },
     ]);
@@ -764,12 +774,12 @@ describe("SettingsDialog: AI enhance provider (stage 0.11)", () => {
     vi.mocked(ipc.getConfig).mockResolvedValue({ ...baseConfig, enhance_provider: "local" });
     vi.mocked(ipc.listModels).mockResolvedValue([qwenDownloaded]);
     vi.mocked(ipc.listEnhanceProviders).mockResolvedValue([
-      { id: "local", name: "Local · Qwen3.5 9B", available: true, version: "on-device · Metal" },
+      { id: "local", name: "On this Mac", available: true, version: "on-device · Metal" },
       { id: "claude", name: "Claude Code", available: true, version: "2.0.0" },
     ]);
     await openModelsSection();
 
-    expect(await screen.findByRole("radio", { name: "Local · Qwen3.5 9B" })).toBeChecked();
+    expect(await screen.findByRole("radio", { name: "On this Mac" })).toBeChecked();
     expect(screen.queryByRole("combobox", { name: /local.*model/i })).not.toBeInTheDocument();
   });
 });

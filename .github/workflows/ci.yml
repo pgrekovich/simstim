@@ -23,6 +23,14 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      # A fallback Rust cache can contain sherpa's build-script output without
+      # every static archive in its custom target directory. Refresh this small
+      # native bundle so dependency changes cannot leave a partial cache.
+      - name: Refresh sherpa-onnx native libraries
+        run: |
+          cargo clean -p sherpa-onnx-sys
+          rm -rf target/sherpa-onnx-prebuilt
+
       - uses: pnpm/action-setup@v4
         with:
           version: 11

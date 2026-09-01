@@ -127,6 +127,6 @@ section replaced.
 
 ## Current state
 
-Stages MVP-0 through 0.9 are shipped and merged. Read the status lines and
+Stages MVP-0 through 4.0 are shipped and merged. Read the status lines and
 Known issues in the spec for exactly where things stand and what is
 deliberately unfixed.

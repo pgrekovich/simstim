@@ -454,7 +454,7 @@ to UI setters instead of letting one toggle overwrite the hand-edited file.
 Manual edits take full effect after restart; the README is the complete field
 and value reference.
 
-## Stage 4.0: guided first run (implemented 2026-08-31, awaiting owner e2e)
+## Stage 4.0: guided first run (shipped 2026-09-01)
 
 A full-window first-run flow explains the local and explicit-capture contract,
 shows a selectable notes folder, and defaults a fresh config to
@@ -469,6 +469,12 @@ summaries, generated titles and calendar context; the local summary model uses t
 operation too. Ordinary Settings stays available throughout. Completion is the
 normal `onboarding_complete` TOML field, and recording plus call detection
 remain gated until it is true.
+
+Status (2026-09-01): the owner completed fresh-state e2e, including permission
+reset, model cleanup, folder selection, automatic permission checks, direct
+model download and summary setup. The iteration also replaced engine-first
+model copy with product language, retained the technical model name quietly,
+and made download progress monotonic. Approved and shipped in v0.9.0.
 
 ## Milestones after MVP-0
 

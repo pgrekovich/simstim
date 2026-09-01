@@ -1,10 +1,10 @@
 # Roadmap
 
-Owner-ordered priorities as of 2026-08-31. Items are a ranked backlog that may
+Owner-ordered priorities as of 2026-09-01. Items are a ranked backlog that may
 move after real usage. Detailed history lives in the main spec's status lines
 and `docs/plans/`.
 
-## Shipped through stage 3.3
+## Shipped through stage 4.0
 
 - Local live transcription with exact `Me` and `Them` channel separation,
   plain Markdown storage, crash-safe audio, notes, titles and continuation.
@@ -17,15 +17,12 @@ and `docs/plans/`.
 - Local Qwen summaries plus optional Claude Code and Codex providers, generated
   titles and calendar connector context. User notes remain separate and sacred.
 - One Linux-style TOML configuration file shared with the Settings UI.
+- A guided first run for choosing the notes folder, granting both audio
+  permissions, downloading the required transcription model and optionally
+  configuring summaries.
 
 There are no global shortcuts. Keyboard shortcuts work only while a simstim
 window is active, so browser and system shortcuts remain untouched.
-
-## Active stage
-
-**Stage 4.0: guided first run.** Choose the notes folder, request microphone
-and system-audio permissions, and guide the first required model download plus
-optional summary setup without hiding the ordinary Settings path.
 
 ## Ranked backlog
 

@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { Fragment, useEffect, useRef, type ReactNode } from "react";
 import { Card } from "@/components/ui/card";
 
 /** Matches the `[hh:mm:ss] Who: text` format `session::format_line` emits. */
@@ -83,6 +83,44 @@ function timestampToSeconds(timestamp: string): number {
   return hours * 3600 + minutes * 60 + seconds;
 }
 
+interface TurnItem {
+  /** Index into the original `lines` array: keys find-match highlighting and refs. */
+  index: number;
+  timestamp: string;
+  text: string;
+}
+
+type Block =
+  | { kind: "raw"; index: number; raw: string }
+  | { kind: "turn"; speaker: "Me" | "Them"; items: TurnItem[] };
+
+/**
+ * Groups consecutive lines from one speaker into a single visual turn
+ * (owner request, 2026-09-01): the transcript shows one ME/THEM label per
+ * turn instead of one per ASR chunk, with the turn's first timestamp. This
+ * is display-only -- the file keeps one timestamped line per chunk, and
+ * each chunk stays its own seekable fragment inside the turn. A line the
+ * pattern can't parse renders as-is and breaks the grouping around it.
+ */
+function groupIntoBlocks(lines: string[]): Block[] {
+  const blocks: Block[] = [];
+  lines.forEach((raw, index) => {
+    const parsed = parseLine(raw);
+    if (!parsed.timestamp || !parsed.speaker) {
+      blocks.push({ kind: "raw", index, raw });
+      return;
+    }
+    const item: TurnItem = { index, timestamp: parsed.timestamp, text: parsed.text ?? "" };
+    const last = blocks[blocks.length - 1];
+    if (last && last.kind === "turn" && last.speaker === parsed.speaker) {
+      last.items.push(item);
+    } else {
+      blocks.push({ kind: "turn", speaker: parsed.speaker, items: [item] });
+    }
+  });
+  return blocks;
+}
+
 interface TranscriptViewProps {
   lines: string[];
   /**
@@ -158,62 +196,64 @@ export function TranscriptView({
           </p>
         ) : (
           <div className="flex flex-col gap-[14px]">
-            {lines.map((raw, i) => {
-              const parsed = parseLine(raw);
-              if (!parsed.timestamp) {
+            {groupIntoBlocks(lines).map((block) => {
+              if (block.kind === "raw") {
                 return (
                   <p
-                    key={i}
-                    ref={(element) => { lineRefs.current[i] = element; }}
+                    key={block.index}
+                    ref={(element) => { lineRefs.current[block.index] = element; }}
                     className="whitespace-pre-wrap font-serif text-[15px] leading-[1.6] text-card-foreground"
                   >
-                    {highlightedText(raw, i, matches, activeMatchIndex)}
+                    {highlightedText(block.raw, block.index, matches, activeMatchIndex)}
                   </p>
                 );
               }
-              const content = (
-                <>
+              return (
+                <div key={block.items[0].index} className="flex flex-col gap-[3px]">
                   <span className="flex items-baseline gap-[9px]">
                     <span
                       className={
-                        parsed.speaker === "Them"
+                        block.speaker === "Them"
                           ? "inline-flex h-[17px] items-center rounded-[4px] border border-[var(--voice-remote)] px-[7px] font-mono text-[9.5px] font-semibold uppercase tracking-[0.08em] text-[var(--voice-remote-foreground)]"
                           : "inline-flex h-[17px] items-center rounded-[4px] border border-foreground bg-foreground px-[7px] font-mono text-[9.5px] font-semibold uppercase tracking-[0.08em] text-background"
                       }
                     >
-                      {parsed.speaker}
+                      {block.speaker}
                     </span>
                     <span className="font-mono text-[10px] text-muted-foreground">
-                      {parsed.timestamp}
+                      {block.items[0].timestamp}
                     </span>
                   </span>
-                  <span className="block whitespace-pre-wrap font-serif text-[15px] leading-[1.6] text-card-foreground">
-                    {highlightedText(parsed.text ?? "", i, matches, activeMatchIndex)}
-                  </span>
-                </>
-              );
-              if (!onSeek) {
-                return (
-                  <div
-                    key={i}
-                    ref={(element) => { lineRefs.current[i] = element; }}
-                    className="flex flex-col gap-[3px]"
-                  >
-                    {content}
-                  </div>
-                );
-              }
-              const offsetSecs = timestampToSeconds(parsed.timestamp);
-              return (
-                <button
-                  key={i}
-                  ref={(element) => { lineRefs.current[i] = element; }}
-                  type="button"
-                  onClick={() => onSeek(offsetSecs)}
-                  className="-mx-2 flex w-[calc(100%+1rem)] flex-col gap-[3px] rounded-[7px] px-2 text-left transition-colors hover:bg-foreground/[0.05] focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
-                >
-                  {content}
-                </button>
+                  {/* One flowing paragraph per turn; every ASR chunk inside
+                      stays its own seekable fragment (its timestamp is on
+                      the hover title, since only the turn's first one is
+                      printed). */}
+                  <p className="whitespace-pre-wrap font-serif text-[15px] leading-[1.6] text-card-foreground">
+                    {block.items.map((item, j) => {
+                      const body = highlightedText(item.text, item.index, matches, activeMatchIndex);
+                      return (
+                        <Fragment key={item.index}>
+                          {j > 0 && " "}
+                          {onSeek ? (
+                            <button
+                              ref={(element) => { lineRefs.current[item.index] = element; }}
+                              type="button"
+                              title={item.timestamp}
+                              onClick={() => onSeek(timestampToSeconds(item.timestamp))}
+                              className="-mx-0.5 inline rounded-[5px] px-0.5 text-left align-baseline transition-colors [box-decoration-break:clone] hover:bg-foreground/[0.05] focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                            >
+                              {body}
+                            </button>
+                          ) : (
+                            <span ref={(element) => { lineRefs.current[item.index] = element; }}>
+                              {body}
+                            </span>
+                          )}
+                        </Fragment>
+                      );
+                    })}
+                  </p>
+                </div>
               );
             })}
             {interimMe && (

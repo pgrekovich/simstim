@@ -525,8 +525,15 @@ fn set_retranscribe_model(id: String) -> Result<(), String> {
 }
 
 /// Tauri's declarative traffic-light inset is not reliably applied to the
-/// config-created main webview on macOS. Reapply the same geometry after the
+/// config-created main webview on macOS. Reapply the geometry after the
 /// window exists so the native controls share the 28 px toolbar centerline.
+///
+/// CAREFUL: this is not the only positioner. tao re-applies the config's
+/// `trafficLightPosition` on redraws with AppKit's default in-container
+/// button offset, so whatever this function sets is later replaced by that
+/// steady state. The owner-measured mapping there is `center = y - 2.2`,
+/// hence y: 30 in `tauri.conf.json` for the 28 px centerline; this function
+/// must target the same centerline or the buttons visibly jump.
 #[cfg(target_os = "macos")]
 #[allow(deprecated, unexpected_cfgs)]
 fn position_main_traffic_lights(window: &tauri::WebviewWindow) -> tauri::Result<()> {
@@ -537,7 +544,10 @@ fn position_main_traffic_lights(window: &tauri::WebviewWindow) -> tauri::Result<
     };
 
     const LEFT_INSET: f64 = 14.0;
-    const TOP_INSET: f64 = 21.0;
+    /// Must match `trafficLightPosition.y` in `tauri.conf.json`.
+    const TOP_INSET: f64 = 30.0;
+    /// Vertical center of the h-14 (56 px / 28 pt) DOM toolbar row.
+    const TOOLBAR_CENTERLINE: f64 = 28.0;
 
     let ns_window = window.ns_window()? as id;
     unsafe {
@@ -573,11 +583,13 @@ fn position_main_traffic_lights(window: &tauri::WebviewWindow) -> tauri::Result<
         {
             let mut origin = NSView::frame(button).origin;
             origin.x = LEFT_INSET + index as f64 * button_spacing;
-            // AppKit preserves the buttons' global Y while resizing their
-            // container, leaving them at the default 12 px top inset. In a
-            // 35 px titlebar (14 px button + 21 px top inset), the intended
-            // position is the container's bottom edge exactly.
-            origin.y = 0.0;
+            // The container is anchored to the window top and its
+            // coordinates are bottom-up, so place the button's center on
+            // the toolbar centerline measured from the window top. This
+            // must agree with the tao steady state (see the fn comment),
+            // which re-lands the buttons at AppKit's default in-container
+            // offset after any redraw.
+            origin.y = titlebar_height - TOOLBAR_CENTERLINE - close_frame.size.height / 2.0;
             NSView::setFrameOrigin(button, origin);
         }
     }

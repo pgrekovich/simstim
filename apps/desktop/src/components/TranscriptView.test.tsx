@@ -33,6 +33,72 @@ describe("TranscriptView: transcript find (stage 2.1)", () => {
   });
 });
 
+describe("TranscriptView: consecutive same-speaker lines group into one turn", () => {
+  it("shows one speaker label per turn, with the turn's first timestamp", () => {
+    render(
+      <TranscriptView
+        lines={[
+          "[00:00:02] Me: No, it's not a background.",
+          "[00:00:06] Me: Yeah.",
+          "[00:00:10] Me: Yeah.",
+          "[00:00:15] Them: Okay.",
+        ]}
+      />,
+    );
+
+    expect(screen.getAllByText("Me")).toHaveLength(1);
+    expect(screen.getAllByText("Them")).toHaveLength(1);
+    expect(screen.getByText("00:00:02")).toBeInTheDocument();
+    // The grouped lines' own timestamps are not printed as headers.
+    expect(screen.queryByText("00:00:06")).toBeNull();
+    expect(screen.queryByText("00:00:10")).toBeNull();
+    expect(screen.getByText("00:00:15")).toBeInTheDocument();
+  });
+
+  it("keeps every grouped chunk individually seekable at its own offset", () => {
+    const onSeek = vi.fn();
+    render(
+      <TranscriptView
+        lines={["[00:00:02] Me: first chunk", "[00:01:10] Me: second chunk"]}
+        onSeek={onSeek}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /second chunk/i }));
+    expect(onSeek).toHaveBeenCalledWith(70);
+    fireEvent.click(screen.getByRole("button", { name: /first chunk/i }));
+    expect(onSeek).toHaveBeenCalledWith(2);
+  });
+
+  it("breaks the grouping around a line the pattern cannot parse", () => {
+    render(
+      <TranscriptView
+        lines={[
+          "[00:00:02] Me: before",
+          "-- hand-added annotation --",
+          "[00:00:09] Me: after",
+        ]}
+      />,
+    );
+
+    // The annotation splits one speaker into two labeled turns.
+    expect(screen.getAllByText("Me")).toHaveLength(2);
+    expect(screen.getByText(/hand-added annotation/)).toBeInTheDocument();
+    expect(screen.getByText("00:00:02")).toBeInTheDocument();
+    expect(screen.getByText("00:00:09")).toBeInTheDocument();
+  });
+
+  it("still finds and highlights matches inside a grouped turn", () => {
+    const lines = ["[00:00:02] Me: Berlin first", "[00:00:06] Me: then berlin again"];
+    const matches = findTranscriptMatches(lines, "berlin");
+    render(<TranscriptView lines={lines} matches={matches} activeMatchIndex={1} />);
+
+    const marks = screen.getAllByText(/berlin/i);
+    expect(marks).toHaveLength(2);
+    expect(marks[1]).toHaveAttribute("data-current-match", "true");
+  });
+});
+
 describe("TranscriptView: click-to-seek (Task 4, stage-0.7)", () => {
   it("calls onSeek with the offset in seconds parsed from a clicked line's timestamp", () => {
     const onSeek = vi.fn();

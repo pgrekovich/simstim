@@ -99,6 +99,45 @@ fn parse_rfc3339(date: &str) -> Option<DateTime<FixedOffset>> {
     DateTime::parse_from_rfc3339(date).ok()
 }
 
+/// IPC-facing breakdown of what the notes folder weighs (stage 4.1 Storage
+/// page): the user's own data, split into notes vs audio. Mirrors
+/// `StorageStats` in `ipc.ts`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct StorageStats {
+    /// Parseable session `.md` files found.
+    pub note_count: u64,
+    /// Total bytes of those `.md` files.
+    pub notes_bytes: u64,
+    /// Total bytes of the audio files those sessions resolve to.
+    pub audio_bytes: u64,
+    /// Sum of `duration_secs` over the sessions that actually have audio,
+    /// so the UI can show "N hours of audio" next to the byte size.
+    pub audio_secs: u64,
+}
+
+/// One pass over `dir`, no caching: the folder is a local disk and the
+/// Settings dialog fetches this on open. Junk `.md` files are skipped the
+/// same way `list_sessions_in` skips them (both go through `parse_meta`).
+pub fn storage_stats_in(dir: &Path) -> StorageStats {
+    let file_bytes = |p: &Path| std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
+    let mut stats = StorageStats::default();
+    for session in list_sessions_in(dir) {
+        let md = PathBuf::from(&session.path);
+        stats.note_count += 1;
+        stats.notes_bytes += file_bytes(&md);
+        if let Some(audio) = crate::retranscribe::resolve_audio_path(&md) {
+            stats.audio_bytes += file_bytes(&audio);
+            stats.audio_secs += session.duration_secs.unwrap_or(0);
+        }
+    }
+    stats
+}
+
+#[tauri::command]
+pub fn storage_stats() -> StorageStats {
+    storage_stats_in(&Config::load().output_dir)
+}
+
 /// Full read of one session file for the session view.
 ///
 /// `finalizing` is the path of a session currently in the stop-to-encode
@@ -940,6 +979,37 @@ mod tests {
             "newer date should sort first"
         );
         assert_eq!(sessions[1].title, "Untitled");
+    }
+
+    #[test]
+    fn storage_stats_in_counts_real_bytes_and_only_audio_backed_durations() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // A session with audio: its md bytes, audio bytes and duration count.
+        let with_audio = dir.path().join("with-audio.md");
+        let mut tr = Transcript::new(t(10, 0, 0));
+        tr.set_duration_secs(600);
+        tr.save(&with_audio).unwrap();
+        let flac = dir.path().join("with-audio.flac");
+        std::fs::write(&flac, vec![0u8; 1000]).unwrap();
+
+        // A session without audio: md counts, duration must NOT count.
+        let without_audio = dir.path().join("no-audio.md");
+        let mut tr2 = Transcript::new(t(11, 0, 0));
+        tr2.set_duration_secs(120);
+        tr2.save(&without_audio).unwrap();
+
+        // Junk md and non-md neighbors are ignored entirely.
+        std::fs::write(dir.path().join("junk.md"), "# not a transcript\n").unwrap();
+        std::fs::write(dir.path().join("stray.flac"), vec![0u8; 5000]).unwrap();
+
+        let stats = storage_stats_in(dir.path());
+        let expected_notes_bytes = std::fs::metadata(&with_audio).unwrap().len()
+            + std::fs::metadata(&without_audio).unwrap().len();
+        assert_eq!(stats.note_count, 2);
+        assert_eq!(stats.notes_bytes, expected_notes_bytes);
+        assert_eq!(stats.audio_bytes, 1000, "only resolved session audio counts");
+        assert_eq!(stats.audio_secs, 600, "audio-less sessions add no hours");
     }
 
     #[test]

@@ -498,6 +498,54 @@ model download and summary setup. The iteration also replaced engine-first
 model copy with product language, retained the technical model name quietly,
 and made download progress monotonic. Approved and shipped in v0.9.0.
 
+## Stage 4.1: settings redesign (approved 2026-09-02)
+
+Reorganize the Settings dialog into five task-shaped categories in the left
+rail - General, Recording, Transcription, Summaries, Storage - replacing the
+two-page General/Models split. The owner picked this structure from three
+interactive mockups (variants in the artifact's version history) and refined
+it over two iterations.
+
+Decisions locked with the owner on the mockup:
+
+- **Categories.** General: appearance, Dock, notes folder. Recording: call
+  detection with auto-stop nested under it, keep-audio with format nested
+  under it. Transcription: the live model, then the accurate pass (whisper
+  choice + the two automation toggles). Summaries: provider list, then the
+  behavior toggles. Storage: what the user's calls weigh (notes vs audio)
+  plus the model manager's disk view with deletion.
+- **Meta-names first.** Every model row leads with a user-meaning name and
+  shows the engine name small below (the registry's `name` /
+  `technical_name` split, same as onboarding): "Live transcription" /
+  Parakeet, "Balanced" / Whisper large-v3-turbo, "Best quality" / Whisper
+  large-v3, "On this Mac" / Qwen. The README's model list follows.
+- **Explain the accurate pass.** One paragraph above the whisper list says
+  why it exists and what it costs: live trades accuracy for speed; the pass
+  re-reads saved audio with a bigger model (cleaner wording, names and
+  numbers, much stronger non-English), takes minutes in the background, and
+  needs kept audio. A one-line footnote under the live model ("good, not
+  perfect") sets up the contrast.
+- **Honest summary ranking.** The Summaries intro states plainly that cloud
+  models write noticeably better summaries while the on-device model keeps
+  everything on this Mac; the local row's own line repeats "private ·
+  simpler summaries".
+- **Copy rules.** Row descriptions are one line or absent; longer
+  explanations live in one paragraph above a group, never per-row. Settings
+  say "Summarize", not "Enhance". Sub-rows are indented and dim when their
+  parent is off, but ONLY where the dependency is real (auto-stop under
+  detection, format under keep-audio). `delete_audio_after_retranscribe`,
+  `enhance_rename_title` and `enhance_use_calendar` also apply to manual
+  runs, so they stay flat rows - the mockup's nesting there was wrong and
+  is deliberately not reproduced.
+- **Storage counts the user's data too.** A "Your calls" group shows the
+  notes file count and byte size against the audio hours and byte size
+  (new `storage_stats` IPC command: one pass over the notes folder), with
+  the footnote "everything above lives in <folder> and is yours to move,
+  sync or delete". Models keep per-row sizes and deletion below it.
+
+Out of scope, flagged for later: renaming the session view's Enhance button
+to match the "Summarize" vocabulary, and any change to onboarding.
+
 ## Milestones after MVP-0
 
 1. Audio file kept next to the .md; re-transcribe command (whisper turbo).

@@ -29,7 +29,7 @@ Download the [latest release][releases], open the disk image, drag simstim
 to Applications, launch. Signed with a Developer ID and notarized. Requires
 macOS 14.2+ on Apple Silicon.
 
-ASR models download inside the app on first run (Settings > Models), into
+ASR models download inside the app on first run (Settings > Transcription), into
 `~/Library/Application Support/simstim/models/` (or via
 `./scripts/download-models.sh` from a checkout).
 
@@ -72,7 +72,7 @@ auto_stop_after_call = false
 
 `retranscribe_model` may also be `whisper-large-v3`. Model selection in the
 file does not download a model. The required transcription model downloads
-automatically during onboarding; optional models stay explicit in Settings > Models.
+automatically during onboarding; optional models stay explicit in Settings.
 `delete_audio_after_retranscribe = true` is irreversible after a successful
 pass. `onboarding_complete` becomes true after the guided permissions, transcription
 model and optional summary setup; advanced users may also set it by hand.
@@ -133,13 +133,15 @@ it and its audio to the Trash, never a hard delete.
 Parakeet's live transcript can be rough, especially on non-English speech.
 Open a session that has audio, press Re-transcribe, and the selected whisper
 model replaces the transcript outright (title, notes, date, duration stay).
-Two models are offered in Settings > Models:
+Two models are offered in Settings > Transcription:
 
-* **Whisper turbo** (874 MB, default): ~12x realtime, a 30-minute call takes
-  ~2.5 minutes.
-* **Whisper large-v3** (3.1 GB): strongest on non-English, slower.
+* **Balanced** (Whisper large-v3-turbo, 874 MB, default): ~12x realtime, a
+  30-minute call takes ~2.5 minutes.
+* **Best quality** (Whisper large-v3, 3.1 GB): strongest on non-English,
+  slower.
 
-Two opt-in settings in Settings > Models (Re-transcribe group): re-transcribe automatically after
+Two opt-in settings next to the model choice (Settings > Transcription):
+re-transcribe automatically after
 every stop, and delete the audio once a re-transcribe succeeds (irreversible:
 without audio a call can never be re-transcribed again). Jobs queue FIFO;
 a second request never gets rejected, it waits its turn.

@@ -30,10 +30,12 @@ import {
   setRetranscribeModel,
   setShowInDock,
   setTheme,
+  storageStats,
   type AppConfig,
   type DownloadProgress,
   type EnhanceProviderInfo,
   type ModelInfo,
+  type StorageStats,
 } from "@/lib/ipc";
 import { applyTheme } from "@/lib/theme";
 import { ENHANCE_MODEL_OPTIONS } from "@/lib/enhanceModels";
@@ -68,11 +70,29 @@ function formatGb(gb: number): string {
   return `${parseFloat(gb.toFixed(decimals))} GB`;
 }
 
-/** Formats a byte count as "487 MB" or "1.08 GB" (decimal MB and GB throughout, never 1024). */
+/**
+ * Formats a byte count as "487 MB" or "1.08 GB" (decimal MB and GB
+ * throughout, never 1024). Small values fall through to KB (stage 4.1: the
+ * Storage page shows the notes' total, which for years of Markdown is still
+ * kilobytes -- that contrast with the audio is the point of the row).
+ */
 function humanBytes(bytes: number): string {
+  if (bytes === 0) return "0 MB";
   const mb = bytes / 1_000_000;
   if (mb >= 1000) return formatGb(mb / 1000);
-  return `${Math.round(mb)} MB`;
+  if (mb >= 1) return `${Math.round(mb)} MB`;
+  return `${Math.max(1, Math.round(bytes / 1000))} KB`;
+}
+
+/**
+ * "96 hours" / "45 minutes" for the Storage page's audio row: whole units
+ * only, it's a feel for scale, not accounting.
+ */
+function humanHours(secs: number): string {
+  const hours = secs / 3600;
+  if (hours >= 2) return `${Math.round(hours)} hours`;
+  const minutes = Math.round(secs / 60);
+  return `${minutes} ${minutes === 1 ? "minute" : "minutes"}`;
 }
 
 /** Formats a registry `size_mb` (already in MB) the same way as `humanBytes`. */
@@ -105,16 +125,20 @@ const RADIO_CLASS =
 /**
  * The left-rail pages; a nav click swaps which section is visible.
  *
- * Two pages, grouped by what the user is doing rather than by subsystem
- * (owner request, refined during e2e): General holds ALL behavior -- the
- * app, everything about a call (detection, audio retention), what happens
- * after it ends, and how summaries behave. Models is a pure download
- * center plus per-function selection (live, re-transcribe, summaries):
- * no behavior toggles live there.
+ * Five task-shaped pages (stage 4.1, owner-picked from mockups): General is
+ * the app itself; Recording is when capture is offered and what audio is
+ * kept; Transcription holds the live model and the accurate pass (whisper
+ * choice plus its two automation toggles); Summaries holds the provider
+ * choice and summary behavior; Storage weighs the user's calls and the
+ * models on disk. Models live NEXT TO the toggles that run them -- the old
+ * separate download-center page is gone; deletion lives on Storage.
  */
 const NAV_SECTIONS = [
   { id: "settings-general", label: "General" },
-  { id: "settings-models", label: "Models" },
+  { id: "settings-recording", label: "Recording" },
+  { id: "settings-transcription", label: "Transcription" },
+  { id: "settings-summaries", label: "Summaries" },
+  { id: "settings-storage", label: "Storage" },
 ] as const;
 
 /**
@@ -127,18 +151,35 @@ function Row({
   htmlFor,
   description,
   error,
+  sub,
+  dimmed,
   children,
 }: {
   label: ReactNode;
   htmlFor?: string;
   description?: ReactNode;
   error?: string | null;
+  /**
+   * Marks this row as a sub-option of the toggle above it (stage 4.1):
+   * indented, and expected to be paired with `dimmed` bound to the parent
+   * being off. Only used where the dependency is real -- a sub-row must be
+   * meaningless (not just less useful) while its parent is off.
+   */
+  sub?: boolean;
+  /** Fades the whole row; the control itself must also be `disabled`. */
+  dimmed?: boolean;
   children?: ReactNode;
 }) {
   return (
-    <div className="flex items-center justify-between gap-6 px-0.5 py-3.5">
+    <div
+      className={cn(
+        "flex items-center justify-between gap-6 px-0.5 py-3.5",
+        sub && "pl-6",
+        dimmed && "opacity-45",
+      )}
+    >
       <div className="flex min-w-0 flex-col gap-[3px]">
-        <Label className="text-[13px] font-medium" htmlFor={htmlFor}>{label}</Label>
+        <Label className={cn("text-[13px]", sub ? "font-normal" : "font-medium")} htmlFor={htmlFor}>{label}</Label>
         {description && <span className="text-[11.5px] leading-[1.45] text-muted-foreground">{description}</span>}
         {error && <span className="font-mono text-[10.5px] text-destructive">{error}</span>}
       </div>
@@ -150,6 +191,52 @@ function Row({
 /** A bordered group of rows, the section's visual unit. */
 function Group({ children }: { children: ReactNode }) {
   return <div className="divide-y divide-border border-y border-border">{children}</div>;
+}
+
+/**
+ * The mono uppercase heading above a `Group`, with an optional right-aligned
+ * figure (disk totals on Storage). Same visual as the old Models page's
+ * per-group headers, now shared by every section that titles its groups.
+ */
+function GroupHeading({ children, right }: { children: ReactNode; right?: ReactNode }) {
+  return (
+    <div className="flex items-baseline justify-between gap-2">
+      <h4 className="font-mono text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+        {children}
+      </h4>
+      {right && <span className="font-mono text-[10.5px] text-muted-foreground">{right}</span>}
+    </div>
+  );
+}
+
+/**
+ * One model's two-line identity (stage 4.1 meta-names): the user-meaning
+ * `name` leads, the engine's `technical_name` renders small below it, then
+ * an optional tagline/size line. What people choose by is the first line;
+ * what the row actually runs stays one glance away.
+ */
+function ModelName({
+  name,
+  technicalName,
+  detail,
+  mutedName,
+}: {
+  name: string;
+  technicalName?: string | null;
+  detail?: ReactNode;
+  mutedName?: boolean;
+}) {
+  return (
+    <div className="flex min-w-0 flex-col">
+      <span className={cn("truncate text-sm font-medium", mutedName && "text-muted-foreground")}>
+        {name}
+      </span>
+      {technicalName && (
+        <span className="font-mono text-[10px] text-muted-foreground/55">{technicalName}</span>
+      )}
+      {detail && <span className="text-xs text-muted-foreground">{detail}</span>}
+    </div>
+  );
 }
 
 interface SettingsDialogProps {
@@ -257,6 +344,9 @@ function ModelActions({
 export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: SettingsDialogProps) {
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [models, setModels] = useState<ModelInfo[]>([]);
+  // The Storage page's "Your calls" figures (stage 4.1). Fetched on every
+  // open (one cheap pass over the local notes folder); `null` renders "...".
+  const [storage, setStorage] = useState<StorageStats | null>(null);
   const [activeSection, setActiveSection] = useState<string>(NAV_SECTIONS[0].id);
   const [enhanceProviders, setEnhanceProviders] = useState<EnhanceProviderInfo[]>([]);
   const [enhanceProviderError, setEnhanceProviderError] = useState<string | null>(null);
@@ -334,6 +424,12 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
     // restart.
     listEnhanceProviders()
       .then(setEnhanceProviders)
+      .catch(() => {});
+    // Storage figures re-count on every open: recordings finished or files
+    // moved since the last look should be reflected. Stale-but-shown beats
+    // blank, so a rejection just keeps the previous numbers.
+    storageStats()
+      .then(setStorage)
       .catch(() => {});
   }, [isOpen, refresh]);
 
@@ -816,15 +912,12 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
             </header>
             <div ref={contentScrollRef} className="min-h-0 flex-1 overflow-y-auto">
               <div className="flex w-full flex-col px-8 pb-10 pt-1.5">
-                {/* General: app behavior plus everything about a call --
-                    detection lives here (it decides when recording is
-                    offered, nothing to do with audio encoding), followed by
-                    what gets kept afterwards. */}
+                {/* General (stage 4.1): the app itself and nothing else --
+                    everything call-shaped lives on Recording, Transcription
+                    and Summaries so each page answers one question. */}
                 <section id="settings-general" className={cn("flex flex-col gap-6", activeSection !== "settings-general" && "hidden")}>
-                  <div className="flex flex-col gap-1.5">
-                  <h4 className="font-mono text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">App</h4>
                   <Group>
-                    <Row label="Theme" error={themeError}>
+                    <Row label="Appearance" error={themeError}>
                       {THEME_OPTIONS.map((option) => (
                         <Button
                           key={option.value}
@@ -839,7 +932,7 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                     <Row
                       label="Show in Dock"
                       htmlFor="show-in-dock"
-                      description="Turn this off to keep Simstim in the menu bar only."
+                      description="Off keeps Simstim in the menu bar only."
                       error={showInDockError}
                     >
                       <Checkbox
@@ -868,14 +961,19 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                       </Button>
                     </Row>
                   </Group>
-                  </div>
-                  <div className="flex flex-col gap-1.5">
-                  <h4 className="font-mono text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">Call detection</h4>
+                </section>
+
+                {/* Recording: when capture is offered, and what audio a call
+                    leaves behind. The two sub-rows are REAL dependencies
+                    (auto-stop is part of the detection lifecycle; format
+                    only applies while audio is being kept), which is what
+                    earns them the indent + dim treatment. */}
+                <section id="settings-recording" className={cn("flex flex-col gap-6", activeSection !== "settings-recording" && "hidden")}>
                   <Group>
                     <Row
-                      label="Offer to record when a call starts"
+                      label="Suggest recording when a call starts"
                       htmlFor="detect-calls"
-                      description="Watches microphone activity from known calling apps. Recording still needs your click."
+                      description="Watches microphone use in known call apps. Recording never starts without your click."
                       error={detectCallsError}
                     >
                       <Checkbox
@@ -887,9 +985,11 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                       />
                     </Row>
                     <Row
-                      label="Stop automatically when the call ends"
+                      sub
+                      dimmed={!config?.detect_calls}
+                      label="Stop when the call ends"
                       htmlFor="auto-stop-after-call"
-                      description="Waits for the call app to release audio and for the remote channel to stay silent."
+                      description="Waits for the call app to go quiet."
                       error={autoStopAfterCallError}
                     >
                       <Checkbox
@@ -901,97 +1001,307 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                       />
                     </Row>
                   </Group>
-                  </div>
                   <div className="flex flex-col gap-1.5">
-                  <h4 className="font-mono text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">Call audio</h4>
-                  <Group>
-                    <Row
-                      label="Keep call audio"
-                      htmlFor="keep-audio"
-                      description="Stores a stereo audio file next to each transcript. Re-transcribing needs it."
-                      error={keepAudioError}
-                    >
-                      <Checkbox
-                        variant="switch"
-                        id="keep-audio"
-                        checked={config?.keep_audio ?? true}
-                        disabled={!config}
-                        onCheckedChange={(checked) => handleSetKeepAudio(checked === true)}
-                      />
-                    </Row>
-                    <Row
-                      label="Audio format"
-                      description="AAC: about 17 MB per hour, small quality loss (default). FLAC: lossless, about 137 MB per hour."
-                      error={audioFormatError}
-                    >
-                      {AUDIO_FORMAT_OPTIONS.map((option) => (
-                        <Button
-                          key={option.value}
-                          variant={config?.audio_format === option.value ? "default" : "outline"}
-                          size="sm"
+                    <Group>
+                      <Row
+                        label="Keep audio files"
+                        htmlFor="keep-audio"
+                        description="Saved next to each note. The accurate pass needs them."
+                        error={keepAudioError}
+                      >
+                        <Checkbox
+                          variant="switch"
+                          id="keep-audio"
+                          checked={config?.keep_audio ?? true}
+                          disabled={!config}
+                          onCheckedChange={(checked) => handleSetKeepAudio(checked === true)}
+                        />
+                      </Row>
+                      <Row
+                        sub
+                        dimmed={!config?.keep_audio}
+                        label="Format"
+                        error={audioFormatError}
+                      >
+                        {AUDIO_FORMAT_OPTIONS.map((option) => (
+                          <Button
+                            key={option.value}
+                            variant={config?.audio_format === option.value ? "default" : "outline"}
+                            size="sm"
+                            disabled={!config || !config.keep_audio}
+                            onClick={() => handleSetAudioFormat(option.value)}
+                          >
+                            {option.label}
+                          </Button>
+                        ))}
+                      </Row>
+                    </Group>
+                    {/* Measured numbers (stage 0.7 codec benchmark), not estimates. */}
+                    <p className="text-[11px] leading-[1.5] text-muted-foreground">
+                      AAC is about 17 MB per hour with a small quality loss. FLAC is lossless, about 137 MB per hour.
+                    </p>
+                  </div>
+                </section>
+
+                {/* Transcription: the live model, then the accurate pass
+                    with its own automation. Downloads happen here, next to
+                    the choice they serve; deletion lives on Storage. */}
+                <section id="settings-transcription" className={cn("flex flex-col gap-7", activeSection !== "settings-transcription" && "hidden")}>
+                  <div className="flex flex-col gap-1.5">
+                    <GroupHeading>Live · while you talk</GroupHeading>
+                    {liveModelError && <span className="text-xs text-destructive">{liveModelError}</span>}
+                    <ul className="flex flex-col divide-y divide-border border-y border-border">
+                      {liveModels.map((model) => {
+                        const p = progress[model.id];
+                        const busy = busyIds.has(model.id);
+                        return (
+                          <li key={model.id} className="flex flex-col gap-2 px-0.5 py-3.5">
+                            <div className="flex items-center justify-between gap-3">
+                              <ModelName
+                                name={model.name}
+                                technicalName={model.technical_name}
+                                detail={humanSizeMb(model.size_mb)}
+                              />
+                              {model.downloaded && model.active && (
+                                <span className="text-sm text-muted-foreground">Active</span>
+                              )}
+                              {model.downloaded && !model.active && (
+                                <Button variant="outline" size="sm" disabled={busy} onClick={() => handleUse(model.id)}>
+                                  Use
+                                </Button>
+                              )}
+                              {!model.downloaded && (!p || p.phase === "error") && (
+                                <Button variant="outline" size="sm" onClick={() => handleDownload(model.id)}>
+                                  Download
+                                </Button>
+                              )}
+                            </div>
+                            {!model.downloaded && <ModelProgress progress={p} />}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                    <p className="text-[11px] leading-[1.5] text-muted-foreground">
+                      Fast enough to follow speech as it happens. Good, not perfect.
+                    </p>
+                  </div>
+
+                  <div className="flex flex-col gap-1.5">
+                    <GroupHeading>Accurate pass · after the call</GroupHeading>
+                    {/* The why-and-cost paragraph (stage 4.1, owner request):
+                        the row copy below stays one line because this
+                        carries the explanation once. */}
+                    <p className="max-w-[62ch] text-[11.5px] leading-[1.55] text-muted-foreground">
+                      The live transcript trades accuracy for speed. The accurate pass re-reads
+                      the saved audio with a bigger model: cleaner wording, better names and
+                      numbers, much stronger non-English speech. It takes a few minutes in the
+                      background and needs "Keep audio files" on.
+                    </p>
+                    {retranscribeError && <span className="text-xs text-destructive">{retranscribeError}</span>}
+                    {retranscribeModelRetired && (
+                      <span className="text-xs text-muted-foreground">
+                        Selected model is no longer offered. Pick another model.
+                      </span>
+                    )}
+                    {retranscribeModelMissing && (
+                      <span className="text-xs text-muted-foreground">
+                        Selected model is not downloaded. Pick another or download it again.
+                      </span>
+                    )}
+                    <div className="divide-y divide-border border-y border-border">
+                      <ul className="flex flex-col divide-y divide-border">
+                        {retranscribeModels.filter((model) => !model.retired).map((model) => {
+                          const p = progress[model.id];
+                          const busy = busyIds.has(model.id);
+                          return (
+                            <li key={model.id} className="flex flex-col gap-2 px-0.5 py-3.5">
+                              <div className="flex items-center justify-between gap-3">
+                                <div className="flex min-w-0 items-center gap-2.5">
+                                  {model.downloaded && (
+                                    <input
+                                      type="radio"
+                                      name="retranscribe-model"
+                                      aria-label={model.name}
+                                      checked={config?.retranscribe_model === model.id}
+                                      disabled={busy}
+                                      onChange={() => handleSetRetranscribeModel(model.id)}
+                                      className={RADIO_CLASS}
+                                    />
+                                  )}
+                                  <ModelName
+                                    name={model.name}
+                                    technicalName={model.technical_name}
+                                    detail={
+                                      model.tagline
+                                        ? `${model.tagline} · ${humanSizeMb(model.size_mb)}`
+                                        : humanSizeMb(model.size_mb)
+                                    }
+                                  />
+                                </div>
+                                {!model.downloaded && (!p || p.phase === "error") && (
+                                  <Button variant="outline" size="sm" onClick={() => handleDownload(model.id)}>
+                                    Download
+                                  </Button>
+                                )}
+                              </div>
+                              {!model.downloaded && <ModelProgress progress={p} />}
+                            </li>
+                          );
+                        })}
+                      </ul>
+                      <Row
+                        label="Run automatically after each call"
+                        htmlFor="auto-retranscribe"
+                        description={
+                          <>
+                            Replaces the live transcript in the background.
+                            {config && !config.keep_audio && " Needs kept audio."}
+                          </>
+                        }
+                        error={autoRetranscribeError}
+                      >
+                        <Checkbox
+                          variant="switch"
+                          id="auto-retranscribe"
+                          checked={config?.auto_retranscribe ?? false}
                           disabled={!config || !config.keep_audio}
-                          onClick={() => handleSetAudioFormat(option.value)}
-                        >
-                          {option.label}
-                        </Button>
-                      ))}
-                    </Row>
-                  </Group>
+                          onCheckedChange={(checked) => handleSetAutoRetranscribe(checked === true)}
+                        />
+                      </Row>
+                      {/* Deliberately NOT a sub-row of the auto toggle: it
+                          also fires after MANUAL re-transcribes (stage 0.9
+                          Global Constraints), so nesting it would lie. */}
+                      <Row
+                        label="Delete audio after re-transcribing"
+                        htmlFor="delete-audio-after-retranscribe"
+                        description="Applies to manual runs too. Frees disk; that call can never be re-transcribed again."
+                        error={deleteAudioAfterError}
+                      >
+                        <Checkbox
+                          variant="switch"
+                          id="delete-audio-after-retranscribe"
+                          checked={config?.delete_audio_after_retranscribe ?? false}
+                          disabled={!config}
+                          onCheckedChange={(checked) => handleSetDeleteAudioAfterRetranscribe(checked === true)}
+                        />
+                      </Row>
+                    </div>
                   </div>
-                  {/* What the app does on its own once a call ends. These
-                      configure behavior, not models, so they live here
-                      (owner request): Models stays a pure download center
-                      plus per-function selection. */}
+                </section>
+
+                {/* Summaries: who writes them, then how they behave. The
+                    intro ranks the options honestly (owner request): cloud
+                    writes better, on-device keeps everything local. */}
+                <section id="settings-summaries" className={cn("flex flex-col gap-7", activeSection !== "settings-summaries" && "hidden")}>
                   <div className="flex flex-col gap-1.5">
-                  <h4 className="font-mono text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">After a call</h4>
+                    <GroupHeading>Who writes them</GroupHeading>
+                    <p className="max-w-[62ch] text-[11.5px] leading-[1.55] text-muted-foreground">
+                      Cloud models write noticeably better summaries; the on-device model keeps
+                      everything on this Mac. Cloud providers get the note's text and
+                      transcript, never audio.
+                    </p>
+                    <ul className="flex flex-col divide-y divide-border border-y border-border">
+                      {summaryModels.map((model) => {
+                        const p = progress[model.id];
+                        const localProvider = enhanceProviders.find((provider) => provider.id === "local");
+                        const name = localProvider?.name ?? model.name;
+                        return (
+                          <li key={model.id} className="flex flex-col gap-2 px-0.5 py-3.5">
+                            <div className="flex items-center justify-between gap-3">
+                              <ModelName
+                                name={name}
+                                technicalName={model.technical_name}
+                                detail={
+                                  model.tagline
+                                    ? `${model.tagline} · ${humanSizeMb(model.size_mb)}`
+                                    : humanSizeMb(model.size_mb)
+                                }
+                              />
+                              <div className="flex shrink-0 items-center gap-1.5">
+                                {!model.downloaded && (!p || p.phase === "error") && (
+                                  <Button variant="outline" size="sm" onClick={() => handleDownload(model.id)}>
+                                    Download
+                                  </Button>
+                                )}
+                                {!model.retired && (
+                                  <input
+                                    type="radio"
+                                    name="enhance-provider"
+                                    aria-label={name}
+                                    checked={config?.enhance_provider === "local"}
+                                    disabled={!localProvider?.available}
+                                    onChange={() => handleSetEnhanceProvider("local")}
+                                    className={RADIO_CLASS}
+                                  />
+                                )}
+                              </div>
+                            </div>
+                            {!model.downloaded && <ModelProgress progress={p} />}
+                            {config?.enhance_provider === "local" && enhanceProviderError && (
+                              <span className="text-xs text-destructive">{enhanceProviderError}</span>
+                            )}
+                          </li>
+                        );
+                      })}
+                      {enhanceProviders
+                        .filter((provider) => provider.id !== "local")
+                        .map((provider) => (
+                          <li key={provider.id}>
+                            <Row
+                              label={provider.name}
+                              description={
+                                provider.available
+                                  ? provider.version ?? "installed"
+                                  : `not installed (no \`${provider.id}\` CLI found)`
+                              }
+                              error={
+                                config?.enhance_provider === provider.id ? enhanceProviderError : null
+                              }
+                            >
+                              {provider.available && (
+                                <select
+                                  aria-label={`${provider.name} model`}
+                                  value={config?.enhance_models?.[provider.id] ?? ""}
+                                  onChange={(e) => handleSetEnhanceModel(provider.id, e.target.value)}
+                                  className="h-7 rounded-md border border-input bg-transparent px-2 text-xs outline-none focus-visible:border-ring"
+                                >
+                                  {(ENHANCE_MODEL_OPTIONS[provider.id] ?? [{ value: "", label: "Default" }]).map(
+                                    (option) => (
+                                      <option key={option.value} value={option.value}>
+                                        {option.label}
+                                      </option>
+                                    )
+                                  )}
+                                </select>
+                              )}
+                              <input
+                                type="radio"
+                                name="enhance-provider"
+                                aria-label={provider.name}
+                                checked={config?.enhance_provider === provider.id}
+                                disabled={!provider.available}
+                                onChange={() => handleSetEnhanceProvider(provider.id)}
+                                className={RADIO_CLASS}
+                              />
+                            </Row>
+                          </li>
+                        ))}
+                      {enhanceProviders.length === 0 && (
+                        <li>
+                          <Row
+                            label="Cloud providers not probed yet"
+                            description="Reopen Settings to check for the claude and codex CLIs."
+                          />
+                        </li>
+                      )}
+                    </ul>
+                  </div>
+
                   <Group>
-                    {/* Stage 0.9 (fix-review correction): only the AUTO
-                        toggle needs `keep_audio` on -- it fires right after
-                        a recording stops, so it's useless without an audio
-                        file having just been kept. The delete toggle is NOT
-                        gated the same way: delete-after applies to ANY
-                        successful re-transcribe, including a MANUAL one on
-                        an old session that still has audio from back when
-                        `keep_audio` was on, even if it's off right now. */}
                     <Row
-                      label="Re-transcribe automatically after stopping"
-                      htmlFor="auto-retranscribe"
-                      description={
-                        <>
-                          Runs the selected whisper model on the finished call in the background.
-                          {config && !config.keep_audio && " Needs call audio."}
-                        </>
-                      }
-                      error={autoRetranscribeError}
-                    >
-                      <Checkbox
-                        variant="switch"
-                        id="auto-retranscribe"
-                        checked={config?.auto_retranscribe ?? false}
-                        disabled={!config || !config.keep_audio}
-                        onCheckedChange={(checked) => handleSetAutoRetranscribe(checked === true)}
-                      />
-                    </Row>
-                    <Row
-                      label="Delete the audio after re-transcribing"
-                      htmlFor="delete-audio-after-retranscribe"
-                      description={
-                        'Removes the recording once a re-transcribe succeeds - manual or automatic, it always applies, regardless of whether "Keep call audio" is currently on (an old session recorded with it on can still be re-transcribed manually) - and that call can never be re-transcribed again.'
-                      }
-                      error={deleteAudioAfterError}
-                    >
-                      <Checkbox
-                        variant="switch"
-                        id="delete-audio-after-retranscribe"
-                        checked={config?.delete_audio_after_retranscribe ?? false}
-                        disabled={!config}
-                        onCheckedChange={(checked) => handleSetDeleteAudioAfterRetranscribe(checked === true)}
-                      />
-                    </Row>
-                    <Row
-                      label="Enhance automatically after each call"
+                      label="Summarize after each call"
                       htmlFor="auto-enhance"
-                      description={'Fires once the call stops (after the automatic re-transcribe when that is on) and after any successful re-transcribe. With empty notes it writes a summary with key points and action items.'}
+                      description="Key points and action items, written below your notes."
                       error={autoEnhanceError}
                     >
                       <Checkbox
@@ -1002,15 +1312,13 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                         onCheckedChange={(checked) => handleSetAutoEnhance(checked === true)}
                       />
                     </Row>
-                  </Group>
-                  </div>
-                  <div className="flex flex-col gap-1.5">
-                  <h4 className="font-mono text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">Summaries</h4>
-                  <Group>
+                    {/* Flat rows on purpose: renaming and calendar context
+                        also apply to MANUAL summaries, so they are not
+                        sub-options of the automatic toggle. */}
                     <Row
-                      label="Let it title notes"
+                      label="Allow renaming notes"
                       htmlFor="enhance-rename-title"
-                      description={'Replaces automatic titles ("Untitled", "Zoom call 14:03") with one proposed by the summary. Titles you typed yourself are never touched.'}
+                      description={'Only titles Simstim made up ("Untitled", "Zoom call 14:03"). Yours are never touched.'}
                       error={renameTitleError}
                     >
                       <Checkbox
@@ -1022,9 +1330,9 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                       />
                     </Row>
                     <Row
-                      label="Use your calendar for context"
+                      label="Use calendar for context"
                       htmlFor="enhance-use-calendar"
-                      description="Looks up the meeting that overlapped the call through your own calendar connectors, via the Claude Code CLI, and hands its name and participants to whichever cloud provider summarizes. A found event names the note with the event's own name, verbatim, when title renaming is on. Not offered for the local provider: local means no cloud call at all."
+                      description="Names the meeting from the overlapping calendar event. Cloud providers only."
                       error={useCalendarError}
                     >
                       <Checkbox
@@ -1036,298 +1344,105 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                       />
                     </Row>
                   </Group>
-                  </div>
                 </section>
 
-                {/* Models: a pure download center plus per-function
-                    selection (owner request) -- which model records live,
-                    which re-transcribes, which provider summarizes. All
-                    behavior toggles live on General. */}
-                <section id="settings-models" className={cn("flex flex-col gap-7", activeSection !== "settings-models" && "hidden")}>
-            {/* Live transcription (stage 0.8): every `role === "live"` entry.
-                Parakeet is the only one today and stays the only one a future
-                entry could add to without this section changing -- it's
-                driven by `role`, not a hardcoded id. Live models never get a
-                delete control here (Global Constraints: deleting the model
-                that drives recording would break it). */}
-            <div className="flex flex-col gap-1.5">
-              <div className="flex items-baseline justify-between gap-2">
-                <h4 className="font-mono text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
-                  Live transcription
-                </h4>
-                <span className="font-mono text-[10.5px] text-muted-foreground">
-                  {humanBytes(totalDiskUsed(liveModels))} on disk
-                </span>
-              </div>
-              {liveModelError && <span className="text-xs text-destructive">{liveModelError}</span>}
-              <ul className="flex flex-col divide-y divide-border border-y border-border">
-                {liveModels.map((model) => {
-                  const p = progress[model.id];
-                  const busy = busyIds.has(model.id);
-                  return (
-                    <li key={model.id} className="flex flex-col gap-2 px-0.5 py-3.5">
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="flex flex-col">
-                          <span className="text-sm font-medium">{model.name}</span>
-                          {model.technical_name && (
-                            <span className="font-mono text-[10px] text-muted-foreground/55">
-                              {model.technical_name}
-                            </span>
-                          )}
-                          <span className="text-xs text-muted-foreground">{humanSizeMb(model.size_mb)}</span>
-                        </div>
-                        {model.downloaded && model.active && (
-                          <span className="text-sm text-muted-foreground">Active</span>
-                        )}
-                        {model.downloaded && !model.active && (
-                          <Button variant="outline" size="sm" disabled={busy} onClick={() => handleUse(model.id)}>
-                            Use
-                          </Button>
-                        )}
-                        {!model.downloaded && (!p || p.phase === "error") && (
-                          <Button variant="outline" size="sm" onClick={() => handleDownload(model.id)}>
-                            Download
-                          </Button>
-                        )}
-                      </div>
-                      {!model.downloaded && <ModelProgress progress={p} />}
-                    </li>
-                  );
-                })}
-              </ul>
-            </div>
-
-            {/* Re-transcribe (stage 0.8): every `role === "retranscribe"`
-                entry (the whisper family). Radio-style selection among
-                downloaded models only reflects `config.retranscribe_model`;
-                every downloaded row also gets a delete control to reclaim
-                disk. The two automation toggles that configure this pass sit
-                in the same list, under the models they run. */}
-            <div className="flex flex-col gap-1.5">
-              <div className="flex items-baseline justify-between gap-2">
-                <h4 className="font-mono text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
-                  Re-transcribe
-                </h4>
-                <span className="font-mono text-[10.5px] text-muted-foreground">
-                  {humanBytes(totalDiskUsed(retranscribeModels))} on disk
-                </span>
-              </div>
-              <span className="text-xs text-muted-foreground">
-                Turbo is faster (about 12x realtime measured for this file on this machine).
-                Large-v3 is slower but the strongest on non-English speech.
-              </span>
-              {retranscribeError && <span className="text-xs text-destructive">{retranscribeError}</span>}
-              {retranscribeModelRetired && (
-                <span className="text-xs text-muted-foreground">
-                  Selected model is no longer offered. Pick another model.
-                </span>
-              )}
-              {retranscribeModelMissing && (
-                <span className="text-xs text-muted-foreground">
-                  Selected model is not downloaded. Pick another or download it again.
-                </span>
-              )}
-              <ul className="flex flex-col divide-y divide-border border-y border-border">
-                {retranscribeModels.map((model) => {
-                  const p = progress[model.id];
-                  const busy = busyIds.has(model.id);
-                  // Retired (stage 0.8.x curation): this row only exists at
-                  // all because its files are still on disk (`list_models`
-                  // hides an absent retired entry outright, see
-                  // `models::list_models_at`'s docs) -- the owner needs to
-                  // see it so it can be deleted, but it can never be
-                  // downloaded or selected again. No radio, no tagline, no
-                  // Download button; just the name, size, a muted "no longer
-                  // offered" note, and delete.
-                  return (
-                    <li key={model.id} className="flex flex-col gap-2 px-0.5 py-3.5">
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="flex min-w-0 items-center gap-2.5">
-                          {model.downloaded && !model.retired && (
-                            <input
-                              type="radio"
-                              name="retranscribe-model"
-                              aria-label={model.name}
-                              checked={config?.retranscribe_model === model.id}
-                              disabled={busy}
-                              onChange={() => handleSetRetranscribeModel(model.id)}
-                              className={RADIO_CLASS}
-                            />
-                          )}
-                          <div className="flex min-w-0 flex-col">
-                            <span
-                              className={cn(
-                                "truncate text-sm font-medium",
-                                model.retired && "text-muted-foreground",
-                              )}
-                            >
-                              {model.name}
-                            </span>
-                            {model.tagline && !model.retired && (
-                              <span className="text-xs text-muted-foreground">{model.tagline}</span>
-                            )}
-                            <span className="text-xs text-muted-foreground">{humanSizeMb(model.size_mb)}</span>
-                            {model.retired && (
-                              <span className="text-xs text-muted-foreground">(no longer offered)</span>
-                            )}
-                          </div>
-                        </div>
-
-                        <div className="flex shrink-0 items-center gap-1.5">
-                          <ModelActions
-                            model={model}
-                            progress={p}
-                            busy={busy}
-                            confirming={deleteConfirmId === model.id}
-                            onDownload={handleDownload}
-                            onDeleteClick={handleDeleteClick}
-                            onConfirmDelete={handleConfirmDelete}
-                            onCancelDelete={handleCancelDelete}
-                          />
-                        </div>
-                      </div>
-                      {!model.downloaded && <ModelProgress progress={p} />}
-                      {deleteErrors[model.id] && (
-                        <span className="text-xs text-destructive">{deleteErrors[model.id]}</span>
-                      )}
-                    </li>
-                  );
-                })}
-              </ul>
-            </div>
-
-            {/* Summaries: the provider picker IS the model manager (owner
-                request: download, selection and configuration on one page).
-                The local row carries Qwen's download/progress/delete controls
-                inline, next to its own selection radio, instead of pointing
-                at a different tab; the cloud CLI rows keep their model
-                override menus; the automation toggle sits below them. */}
-            <div className="flex flex-col gap-1.5">
-              <div className="flex items-baseline justify-between gap-2">
-                <h4 className="font-mono text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
-                  Summaries
-                </h4>
-                <span className="font-mono text-[10.5px] text-muted-foreground">
-                  {humanBytes(totalDiskUsed(summaryModels))} on disk
-                </span>
-              </div>
-              <span className="text-xs text-muted-foreground">
-                The local model runs entirely on this Mac: notes and transcripts stay private.
-                Claude Code and Codex are optional cloud providers: they send only the note's
-                text and transcript, and only when you click Enhance or enable automatic
-                summaries.
-              </span>
-              <ul className="flex flex-col divide-y divide-border border-y border-border">
-                {summaryModels.map((model) => {
-                  const p = progress[model.id];
-                  const busy = busyIds.has(model.id);
-                  const localProvider = enhanceProviders.find((provider) => provider.id === "local");
-                  const name = localProvider?.name ?? model.name;
-                  return (
-                    <li key={model.id} className="flex flex-col gap-2 px-0.5 py-3.5">
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="flex min-w-0 flex-col">
-                          <span className="truncate text-sm font-medium">{name}</span>
-                          {model.technical_name && (
-                            <span className="font-mono text-[10px] text-muted-foreground/55">
-                              {model.technical_name}
-                            </span>
-                          )}
-                          {model.tagline && (
-                            <span className="text-xs text-muted-foreground">{model.tagline}</span>
-                          )}
-                          <span className="text-xs text-muted-foreground">
-                            {humanSizeMb(model.size_mb)}
-                            {model.downloaded && " · on-device, Metal"}
-                          </span>
-                        </div>
-                        <div className="flex shrink-0 items-center gap-1.5">
-                          <ModelActions
-                            model={model}
-                            progress={p}
-                            busy={busy}
-                            confirming={deleteConfirmId === model.id}
-                            onDownload={handleDownload}
-                            onDeleteClick={handleDeleteClick}
-                            onConfirmDelete={handleConfirmDelete}
-                            onCancelDelete={handleCancelDelete}
-                          />
-                          {!model.retired && (
-                            <input
-                              type="radio"
-                              name="enhance-provider"
-                              aria-label={name}
-                              checked={config?.enhance_provider === "local"}
-                              disabled={!localProvider?.available}
-                              onChange={() => handleSetEnhanceProvider("local")}
-                              className={RADIO_CLASS}
-                            />
-                          )}
-                        </div>
-                      </div>
-                      {!model.downloaded && <ModelProgress progress={p} />}
-                      {deleteErrors[model.id] && (
-                        <span className="text-xs text-destructive">{deleteErrors[model.id]}</span>
-                      )}
-                      {config?.enhance_provider === "local" && enhanceProviderError && (
-                        <span className="text-xs text-destructive">{enhanceProviderError}</span>
-                      )}
-                    </li>
-                  );
-                })}
-                {enhanceProviders
-                  .filter((provider) => provider.id !== "local")
-                  .map((provider) => (
-                    <li key={provider.id}>
+                {/* Storage (stage 4.1): what everything weighs. The user's
+                    own data first -- the contrast between kilobytes of
+                    Markdown and gigabytes of audio is the point -- then the
+                    models, which is also where deletion lives. */}
+                <section id="settings-storage" className={cn("flex flex-col gap-7", activeSection !== "settings-storage" && "hidden")}>
+                  <div className="flex flex-col gap-1.5">
+                    <GroupHeading
+                      right={storage ? humanBytes(storage.notes_bytes + storage.audio_bytes) : null}
+                    >
+                      Your calls
+                    </GroupHeading>
+                    <Group>
                       <Row
-                        label={provider.name}
+                        label="Notes"
                         description={
-                          provider.available
-                            ? provider.version ?? "installed"
-                            : `not installed (no \`${provider.id}\` CLI found)`
-                        }
-                        error={
-                          config?.enhance_provider === provider.id ? enhanceProviderError : null
+                          storage
+                            ? `${storage.note_count} ${storage.note_count === 1 ? "call" : "calls"}, one Markdown file each`
+                            : "..."
                         }
                       >
-                        {provider.available && (
-                          <select
-                            aria-label={`${provider.name} model`}
-                            value={config?.enhance_models?.[provider.id] ?? ""}
-                            onChange={(e) => handleSetEnhanceModel(provider.id, e.target.value)}
-                            className="h-7 rounded-md border border-input bg-transparent px-2 text-xs outline-none focus-visible:border-ring"
-                          >
-                            {(ENHANCE_MODEL_OPTIONS[provider.id] ?? [{ value: "", label: "Default" }]).map(
-                              (option) => (
-                                <option key={option.value} value={option.value}>
-                                  {option.label}
-                                </option>
-                              )
-                            )}
-                          </select>
-                        )}
-                        <input
-                          type="radio"
-                          name="enhance-provider"
-                          aria-label={provider.name}
-                          checked={config?.enhance_provider === provider.id}
-                          disabled={!provider.available}
-                          onChange={() => handleSetEnhanceProvider(provider.id)}
-                          className={RADIO_CLASS}
-                        />
+                        <span className="font-mono text-[10.5px] text-muted-foreground">
+                          {storage ? humanBytes(storage.notes_bytes) : "..."}
+                        </span>
                       </Row>
-                    </li>
-                  ))}
-                {enhanceProviders.length === 0 && (
-                  <li>
-                    <Row
-                      label="Cloud providers not probed yet"
-                      description="Reopen Settings to check for the claude and codex CLIs."
-                    />
-                  </li>
-                )}
-              </ul>
-            </div>
+                      <Row
+                        label="Call audio"
+                        description={
+                          storage
+                            ? storage.audio_bytes > 0
+                              ? humanHours(storage.audio_secs)
+                              : "No audio kept"
+                            : "..."
+                        }
+                      >
+                        <span className="font-mono text-[10.5px] text-muted-foreground">
+                          {storage ? humanBytes(storage.audio_bytes) : "..."}
+                        </span>
+                      </Row>
+                    </Group>
+                    <p className="text-[11px] leading-[1.5] text-muted-foreground">
+                      Everything above lives in{" "}
+                      <span className="font-mono">{config?.output_dir ?? "the notes folder"}</span>{" "}
+                      and is yours to move, sync or delete.
+                    </p>
+                  </div>
+
+                  <div className="flex flex-col gap-1.5">
+                    <GroupHeading right={humanBytes(totalDiskUsed(models))}>Models</GroupHeading>
+                    <ul className="flex flex-col divide-y divide-border border-y border-border">
+                      {models.filter((model) => model.downloaded).map((model) => {
+                        const busy = busyIds.has(model.id);
+                        return (
+                          <li key={model.id} className="flex flex-col gap-2 px-0.5 py-3.5">
+                            <div className="flex items-center justify-between gap-3">
+                              <ModelName
+                                name={model.name}
+                                technicalName={model.technical_name}
+                                detail={model.retired ? "(no longer offered)" : undefined}
+                                mutedName={model.retired}
+                              />
+                              <div className="flex shrink-0 items-center gap-1.5">
+                                <span className="font-mono text-[10.5px] text-muted-foreground">
+                                  {humanBytes(freedBytes(model))}
+                                </span>
+                                {/* Live models never offer deletion (Global
+                                    Constraints: deleting the model that
+                                    drives recording would break it). */}
+                                {model.role !== "live" && (
+                                  <ModelActions
+                                    model={model}
+                                    progress={progress[model.id]}
+                                    busy={busy}
+                                    confirming={deleteConfirmId === model.id}
+                                    onDownload={handleDownload}
+                                    onDeleteClick={handleDeleteClick}
+                                    onConfirmDelete={handleConfirmDelete}
+                                    onCancelDelete={handleCancelDelete}
+                                  />
+                                )}
+                              </div>
+                            </div>
+                            {deleteErrors[model.id] && (
+                              <span className="text-xs text-destructive">{deleteErrors[model.id]}</span>
+                            )}
+                          </li>
+                        );
+                      })}
+                      {!models.some((model) => model.downloaded) && (
+                        <li>
+                          <Row
+                            label="No models on disk yet"
+                            description="Download them from Transcription and Summaries."
+                          />
+                        </li>
+                      )}
+                    </ul>
+                  </div>
                 </section>
               </div>
             </div>

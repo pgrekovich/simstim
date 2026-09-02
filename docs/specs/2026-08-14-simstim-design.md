@@ -546,6 +546,10 @@ Decisions locked with the owner on the mockup:
 Out of scope, flagged for later: renaming the session view's Enhance button
 to match the "Summarize" vocabulary, and any change to onboarding.
 
+Status (2026-09-02): implemented on `stage-4.1`. All four gates green;
+verified visually in a browser (all five pages, sub-row dimming, dark theme,
+Storage figures). Awaiting owner e2e.
+
 ## Milestones after MVP-0
 
 1. Audio file kept next to the .md; re-transcribe command (whisper turbo).

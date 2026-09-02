@@ -30,6 +30,12 @@ vi.mock("@/lib/ipc", () => ({
     { id: "codex", name: "Codex", available: false, version: null },
   ]),
   setAutoStopAfterCall: vi.fn().mockResolvedValue(undefined),
+  storageStats: vi.fn().mockResolvedValue({
+    note_count: 0,
+    notes_bytes: 0,
+    audio_bytes: 0,
+    audio_secs: 0,
+  }),
 }));
 
 vi.mock("@tauri-apps/api/event", () => ({
@@ -73,12 +79,29 @@ beforeEach(() => {
   vi.mocked(ipc.setActiveModel).mockClear().mockResolvedValue(undefined);
   vi.mocked(ipc.setRetranscribeModel).mockClear().mockResolvedValue(undefined);
   vi.mocked(ipc.deleteModel).mockClear().mockResolvedValue(undefined);
+  vi.mocked(ipc.storageStats).mockClear().mockResolvedValue({
+    note_count: 0,
+    notes_bytes: 0,
+    audio_bytes: 0,
+    audio_secs: 0,
+  });
   vi.mocked(ipc.listEnhanceProviders).mockClear().mockResolvedValue([
     { id: "local", name: "On this Mac", available: false, version: null },
     { id: "claude", name: "Claude Code", available: true, version: "2.0.0 (Claude Code)" },
     { id: "codex", name: "Codex", available: false, version: null },
   ]);
 });
+
+/**
+ * Every section stays mounted (visibility is CSS-only), and since stage 4.1 a
+ * downloaded model renders BOTH in its function section and on Storage - so
+ * model-row queries must be scoped to one section or they match twice.
+ */
+function section(id: string): HTMLElement {
+  const el = document.getElementById(id);
+  if (!el) throw new Error(`section ${id} not rendered`);
+  return el;
+}
 
 describe("SettingsDialog: Dock visibility (stage 3)", () => {
   it("persists menu-bar-only mode from General settings", async () => {
@@ -106,10 +129,10 @@ describe("SettingsDialog: call detection (stage 1.0)", () => {
 
     render(<SettingsDialog open onOpenChange={() => {}} />);
     const detect = await screen.findByRole("checkbox", {
-      name: /offer to record when a call starts/i,
+      name: /suggest recording when a call starts/i,
     });
     const autoStop = screen.getByRole("checkbox", {
-      name: /stop automatically when the call ends/i,
+      name: /stop when the call ends/i,
     });
     expect(detect).toHaveAttribute("aria-checked", "true");
     expect(autoStop).not.toBeDisabled();
@@ -123,7 +146,7 @@ describe("SettingsDialog: call detection (stage 1.0)", () => {
     vi.mocked(ipc.setDetectCalls).mockRejectedValueOnce(new Error("config write failed"));
     render(<SettingsDialog open onOpenChange={() => {}} />);
     const detect = await screen.findByRole("checkbox", {
-      name: /offer to record when a call starts/i,
+      name: /suggest recording when a call starts/i,
     });
 
     fireEvent.click(detect);
@@ -148,7 +171,7 @@ describe("SettingsDialog: keep-audio toggle (stage 0.7 Task 5)", () => {
 
     render(<SettingsDialog open onOpenChange={() => {}} />);
 
-    const checkbox = await screen.findByRole("checkbox", { name: /keep call audio/i });
+    const checkbox = await screen.findByRole("checkbox", { name: /keep audio files/i });
     expect(checkbox).toHaveAttribute("aria-checked", "true");
 
     fireEvent.click(checkbox);
@@ -162,7 +185,7 @@ describe("SettingsDialog: keep-audio toggle (stage 0.7 Task 5)", () => {
 
     render(<SettingsDialog open onOpenChange={() => {}} />);
 
-    const checkbox = await screen.findByRole("checkbox", { name: /keep call audio/i });
+    const checkbox = await screen.findByRole("checkbox", { name: /keep audio files/i });
     expect(checkbox).toHaveAttribute("aria-checked", "true");
 
     fireEvent.click(checkbox);
@@ -231,7 +254,7 @@ describe("SettingsDialog: auto re-transcribe and audio cleanup toggles (stage 0.
     render(<SettingsDialog open onOpenChange={() => {}} />);
 
     const checkbox = await screen.findByRole("checkbox", {
-      name: /re-transcribe automatically after stopping/i,
+      name: /run automatically after each call/i,
     });
     expect(checkbox).toHaveAttribute("aria-checked", "false");
 
@@ -247,7 +270,7 @@ describe("SettingsDialog: auto re-transcribe and audio cleanup toggles (stage 0.
     render(<SettingsDialog open onOpenChange={() => {}} />);
 
     const checkbox = await screen.findByRole("checkbox", {
-      name: /re-transcribe automatically after stopping/i,
+      name: /run automatically after each call/i,
     });
     fireEvent.click(checkbox);
 
@@ -266,7 +289,7 @@ describe("SettingsDialog: auto re-transcribe and audio cleanup toggles (stage 0.
     render(<SettingsDialog open onOpenChange={() => {}} />);
 
     const checkbox = await screen.findByRole("checkbox", {
-      name: /delete the audio after re-transcribing/i,
+      name: /delete audio after re-transcribing/i,
     });
     expect(checkbox).toHaveAttribute("aria-checked", "false");
 
@@ -282,7 +305,7 @@ describe("SettingsDialog: auto re-transcribe and audio cleanup toggles (stage 0.
     render(<SettingsDialog open onOpenChange={() => {}} />);
 
     const checkbox = await screen.findByRole("checkbox", {
-      name: /delete the audio after re-transcribing/i,
+      name: /delete audio after re-transcribing/i,
     });
     fireEvent.click(checkbox);
 
@@ -294,8 +317,9 @@ describe("SettingsDialog: auto re-transcribe and audio cleanup toggles (stage 0.
   it("renders the delete toggle's irreversibility copy plainly, for every re-transcribe not just automatic", async () => {
     render(<SettingsDialog open onOpenChange={() => {}} />);
 
-    await screen.findByText(/removes the recording once a re-transcribe succeeds/i);
-    await screen.findByText(/manual or automatic/i);
+    // Stage 4.1 copy: one line, but both halves of the contract survive --
+    // it fires on manual runs too, and it is irreversible.
+    await screen.findByText(/applies to manual runs too/i);
     await screen.findByText(/can never be re-transcribed again/i);
   });
 
@@ -311,16 +335,16 @@ describe("SettingsDialog: auto re-transcribe and audio cleanup toggles (stage 0.
     render(<SettingsDialog open onOpenChange={() => {}} />);
 
     const autoCheckbox = await screen.findByRole("checkbox", {
-      name: /re-transcribe automatically after stopping/i,
+      name: /run automatically after each call/i,
     });
     const deleteCheckbox = await screen.findByRole("checkbox", {
-      name: /delete the audio after re-transcribing/i,
+      name: /delete audio after re-transcribing/i,
     });
     expect(autoCheckbox).toBeDisabled();
     expect(deleteCheckbox).not.toBeDisabled();
 
     // Exactly one "Needs call audio" note -- on the auto row only.
-    const notes = screen.getAllByText(/needs call audio/i);
+    const notes = screen.getAllByText(/needs kept audio/i);
     expect(notes).toHaveLength(1);
   });
 
@@ -328,14 +352,14 @@ describe("SettingsDialog: auto re-transcribe and audio cleanup toggles (stage 0.
     render(<SettingsDialog open onOpenChange={() => {}} />);
 
     const autoCheckbox = await screen.findByRole("checkbox", {
-      name: /re-transcribe automatically after stopping/i,
+      name: /run automatically after each call/i,
     });
     const deleteCheckbox = await screen.findByRole("checkbox", {
-      name: /delete the audio after re-transcribing/i,
+      name: /delete audio after re-transcribing/i,
     });
     expect(autoCheckbox).not.toBeDisabled();
     expect(deleteCheckbox).not.toBeDisabled();
-    expect(screen.queryByText(/needs call audio/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/needs kept audio/i)).not.toBeInTheDocument();
   });
 
   it("keeps the delete toggle enabled even when keep_audio is off, so an old session's audio can still be deleted after a manual re-transcribe", async () => {
@@ -344,7 +368,7 @@ describe("SettingsDialog: auto re-transcribe and audio cleanup toggles (stage 0.
     render(<SettingsDialog open onOpenChange={() => {}} />);
 
     const deleteCheckbox = await screen.findByRole("checkbox", {
-      name: /delete the audio after re-transcribing/i,
+      name: /delete audio after re-transcribing/i,
     });
     expect(deleteCheckbox).not.toBeDisabled();
     expect(deleteCheckbox).not.toHaveAttribute("aria-checked", "true");
@@ -367,7 +391,7 @@ describe("SettingsDialog: whisper model row (stage 0.7 Task 5)", () => {
     },
     {
       id: "whisper-large-v3-turbo-q8",
-      name: "Whisper turbo",
+      name: "Balanced",
       technical_name: null,
       tagline: "faster, slightly weaker on non-English",
       size_mb: 874,
@@ -384,21 +408,24 @@ describe("SettingsDialog: whisper model row (stage 0.7 Task 5)", () => {
 
     render(<SettingsDialog open onOpenChange={() => {}} />);
 
-    await screen.findByText("Whisper turbo");
-    await screen.findByText("874 MB");
+    const transcription = section("settings-transcription");
+    await within(transcription).findByText("Balanced");
 
     // The live-engine row still gets its normal Active affordance.
-    const parakeetRow = screen.getByText("Transcription model").closest("li")!;
+    const parakeetRow = within(transcription).getByText("Transcription model").closest("li")!;
     expect(within(parakeetRow).getByText(/active/i)).toBeInTheDocument();
 
     // Whisper is downloaded but must never show Use or Active: it can't
-    // become the live engine. Being downloaded now surfaces as a selection
-    // radio plus a delete control instead (stage 0.8 model manager).
-    const whisperRow = screen.getByText("Whisper turbo").closest("li")!;
+    // become the live engine. Being downloaded surfaces as a selection
+    // radio here; deletion lives on Storage (stage 4.1), not on this row.
+    const whisperRow = within(transcription).getByText("Balanced").closest("li")!;
     expect(within(whisperRow).queryByRole("button", { name: /use/i })).not.toBeInTheDocument();
     expect(within(whisperRow).queryByText(/^active$/i)).not.toBeInTheDocument();
     expect(within(whisperRow).getByRole("radio")).toBeInTheDocument();
-    expect(within(whisperRow).getByRole("button", { name: /delete/i })).toBeInTheDocument();
+    expect(within(whisperRow).queryByRole("button", { name: /delete/i })).not.toBeInTheDocument();
+
+    const storageRow = within(section("settings-storage")).getByText("Balanced").closest("li")!;
+    expect(within(storageRow).getByRole("button", { name: /delete/i })).toBeInTheDocument();
   });
 
   it("still offers Download for whisper when it has not been downloaded yet", async () => {
@@ -429,7 +456,7 @@ describe("SettingsDialog: model manager (stage 0.8 Task 2)", () => {
 
   const whisperQ8: ModelInfo = {
     id: "whisper-large-v3-turbo-q8",
-    name: "Whisper turbo",
+    name: "Balanced",
     technical_name: null,
     tagline: "faster, slightly weaker on non-English",
     size_mb: 874,
@@ -442,7 +469,7 @@ describe("SettingsDialog: model manager (stage 0.8 Task 2)", () => {
 
   const whisperLargeV3: ModelInfo = {
     id: "whisper-large-v3",
-    name: "Whisper large-v3",
+    name: "Best quality",
     technical_name: null,
     tagline: "best quality, slower",
     size_mb: 3095,
@@ -487,10 +514,10 @@ describe("SettingsDialog: model manager (stage 0.8 Task 2)", () => {
 
     render(<SettingsDialog open onOpenChange={() => {}} />);
 
-    const currentRadio = await screen.findByRole("radio", { name: "Whisper turbo" });
+    const currentRadio = await screen.findByRole("radio", { name: "Balanced" });
     expect(currentRadio).toBeChecked();
 
-    const otherRadio = screen.getByRole("radio", { name: "Whisper large-v3" });
+    const otherRadio = screen.getByRole("radio", { name: "Best quality" });
     expect(otherRadio).not.toBeChecked();
 
     fireEvent.click(otherRadio);
@@ -500,20 +527,32 @@ describe("SettingsDialog: model manager (stage 0.8 Task 2)", () => {
     expect(currentRadio).not.toBeChecked();
   });
 
-  it("renders a retired model (still on disk) with size and delete only, no radio, no download, no tagline", async () => {
+  it("renders a retired model (still on disk) on Storage only, with size and delete, no radio, no download", async () => {
     vi.mocked(ipc.listModels).mockResolvedValue([parakeet, whisperQ8, whisperLargeQ5Retired]);
 
     render(<SettingsDialog open onOpenChange={() => {}} />);
 
-    const row = (await screen.findByText(/whisper large-v3 \(older version\)/i)).closest("li")!;
+    // Stage 4.1: Transcription shows only the offered lineup; a retired
+    // entry surfaces solely on Storage, where it can still be deleted.
+    const transcription = section("settings-transcription");
+    await within(transcription).findByText("Balanced");
+    expect(
+      within(transcription).queryByText(/whisper large-v3 \(older version\)/i),
+    ).not.toBeInTheDocument();
+
+    const row = within(section("settings-storage"))
+      .getByText(/whisper large-v3 \(older version\)/i)
+      .closest("li")!;
     expect(within(row).queryByRole("radio")).not.toBeInTheDocument();
     expect(within(row).queryByRole("button", { name: /download/i })).not.toBeInTheDocument();
     expect(within(row).getByRole("button", { name: /delete/i })).toBeInTheDocument();
     expect(within(row).getByText(/no longer offered/i)).toBeInTheDocument();
-    expect(within(row).getByText("1.08 GB")).toBeInTheDocument();
+    // Storage states the REAL on-disk size (1_100_000_000 bytes), not the
+    // advertised size_mb.
+    expect(within(row).getByText("1.1 GB")).toBeInTheDocument();
 
     // The still-offered rows are unaffected by a retired sibling being present.
-    expect(screen.getByRole("radio", { name: "Whisper turbo" })).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "Balanced" })).toBeInTheDocument();
   });
 
   it("requires confirmation before deleting, and states the real freed size", async () => {
@@ -521,8 +560,8 @@ describe("SettingsDialog: model manager (stage 0.8 Task 2)", () => {
 
     render(<SettingsDialog open onOpenChange={() => {}} />);
 
-    const row = (await screen.findByText("Whisper turbo")).closest("li")!;
-    const deleteButton = within(row).getByRole("button", { name: /delete whisper turbo/i });
+    const row = (await within(section("settings-storage")).findByText("Balanced")).closest("li")!;
+    const deleteButton = within(row).getByRole("button", { name: /delete balanced/i });
 
     fireEvent.click(deleteButton);
     expect(ipc.deleteModel).not.toHaveBeenCalled();
@@ -535,12 +574,14 @@ describe("SettingsDialog: model manager (stage 0.8 Task 2)", () => {
     await waitFor(() => expect(ipc.deleteModel).toHaveBeenCalledWith(whisperQ8.id));
   });
 
-  it("renders no delete control on the live model row", async () => {
+  it("renders no delete control on the live model row, even on Storage", async () => {
     vi.mocked(ipc.listModels).mockResolvedValue([parakeet, whisperQ8]);
 
     render(<SettingsDialog open onOpenChange={() => {}} />);
 
-    const parakeetRow = (await screen.findByText("Parakeet TDT 0.6B v3 (int8)")).closest("li")!;
+    const parakeetRow = (
+      await within(section("settings-storage")).findByText("Transcription model")
+    ).closest("li")!;
     expect(within(parakeetRow).queryByRole("button", { name: /delete/i })).not.toBeInTheDocument();
   });
 
@@ -549,7 +590,7 @@ describe("SettingsDialog: model manager (stage 0.8 Task 2)", () => {
 
     render(<SettingsDialog open onOpenChange={() => {}} />);
 
-    const row = (await screen.findByText("Whisper large-v3")).closest("li")!;
+    const row = (await screen.findByText("Best quality")).closest("li")!;
     expect(within(row).getByRole("button", { name: /download/i })).toBeInTheDocument();
     expect(within(row).queryByRole("radio")).not.toBeInTheDocument();
     expect(within(row).queryByRole("button", { name: /delete/i })).not.toBeInTheDocument();
@@ -572,28 +613,33 @@ describe("SettingsDialog: model manager (stage 0.8 Task 2)", () => {
 
     render(<SettingsDialog open onOpenChange={() => {}} />);
 
-    const row = (await screen.findByText("Whisper turbo")).closest("li")!;
-    fireEvent.click(within(row).getByRole("button", { name: /delete whisper turbo/i }));
+    const row = (await within(section("settings-storage")).findByText("Balanced")).closest("li")!;
+    fireEvent.click(within(row).getByRole("button", { name: /delete balanced/i }));
     fireEvent.click(await within(row).findByRole("button", { name: /delete 874 mb\?/i }));
 
     await waitFor(() => expect(ipc.deleteModel).toHaveBeenCalledWith(whisperQ8.id));
     await waitFor(() => {
-      const refreshedRow = screen.getByText("Whisper turbo").closest("li")!;
+      // Gone from Storage (only downloaded models weigh anything there),
+      // back to a Download offer on Transcription.
+      expect(within(section("settings-storage")).queryByText("Balanced")).not.toBeInTheDocument();
+      const refreshedRow = within(section("settings-transcription"))
+        .getByText("Balanced")
+        .closest("li")!;
       expect(within(refreshedRow).getByRole("button", { name: /download/i })).toBeInTheDocument();
       expect(within(refreshedRow).queryByRole("radio")).not.toBeInTheDocument();
     });
   });
 
-  it("formats GB sizes decimally, matching the README (1081 MB -> 1.08 GB, 3095 MB -> 3.1 GB)", async () => {
+  it("formats GB sizes decimally, matching the README (advertised on Transcription, on-disk on Storage)", async () => {
     vi.mocked(ipc.listModels).mockResolvedValue([parakeet, whisperLargeQ5Retired, whisperLargeV3]);
 
     render(<SettingsDialog open onOpenChange={() => {}} />);
 
-    // `humanSizeMb` (the advertised size_mb, decimal MB throughout) -- shown
-    // on both a retired row (whisperLargeQ5Retired) and a still-offered one
-    // (whisperLargeV3), since size formatting doesn't depend on retired status.
-    await screen.findByText("1.08 GB");
-    await screen.findByText("3.1 GB");
+    // Transcription quotes the advertised size_mb (3095 MB -> "3.1 GB",
+    // inside the tagline line); Storage quotes real on-disk bytes
+    // (1_100_000_000 -> "1.1 GB" on the retired row). Both decimal, never 1024.
+    await within(section("settings-transcription")).findByText(/3\.1 GB/);
+    await within(section("settings-storage")).findByText("1.1 GB");
   });
 
   it("shows a muted note in the Re-transcribe group when the configured model is not downloaded", async () => {
@@ -614,7 +660,7 @@ describe("SettingsDialog: model manager (stage 0.8 Task 2)", () => {
 
     render(<SettingsDialog open onOpenChange={() => {}} />);
 
-    await screen.findByText("Whisper turbo");
+    await within(section("settings-transcription")).findByText("Balanced");
     expect(screen.queryByText(/selected model is not downloaded/i)).not.toBeInTheDocument();
   });
 
@@ -637,20 +683,17 @@ describe("SettingsDialog: model manager (stage 0.8 Task 2)", () => {
     expect(screen.queryByText(/selected model is not downloaded/i)).not.toBeInTheDocument();
   });
 
-  it("shows total disk used near each group heading, scoped to that group", async () => {
+  it("shows the total on-disk model size in the Storage heading, downloaded rows only", async () => {
     vi.mocked(ipc.listModels).mockResolvedValue([parakeet, whisperQ8, whisperLargeV3NotDownloaded]);
 
     render(<SettingsDialog open onOpenChange={() => {}} />);
 
-    // Live transcription: only parakeet, 487_000_000 bytes -> 487 MB.
-    // Re-transcribe: only whisperQ8 is downloaded, 874_188_075 bytes -> 874 MB
-    // (the not-downloaded large-v3 contributes nothing). Each total sits in
-    // its own group's heading row so neither reads as a whole-app total.
-    const liveHeading = await screen.findByRole("heading", { name: "Live transcription" });
-    expect(within(liveHeading.parentElement!).getByText("487 MB on disk")).toBeInTheDocument();
-
-    const retranscribeHeading = screen.getByRole("heading", { name: "Re-transcribe" });
-    expect(within(retranscribeHeading.parentElement!).getByText("874 MB on disk")).toBeInTheDocument();
+    // 487_000_000 + 874_188_075 real bytes -> "1.36 GB"; the not-downloaded
+    // large-v3 contributes nothing and renders no Storage row at all.
+    const storage = section("settings-storage");
+    const heading = await within(storage).findByRole("heading", { name: "Models" });
+    expect(within(heading.parentElement!).getByText("1.36 GB")).toBeInTheDocument();
+    expect(within(storage).queryByText("Best quality")).not.toBeInTheDocument();
   });
 
   it("disarms an armed delete confirmation when the dialog closes and reopens", async () => {
@@ -663,17 +706,19 @@ describe("SettingsDialog: model manager (stage 0.8 Task 2)", () => {
 
     const { rerender } = render(<SettingsDialog open onOpenChange={() => {}} />);
 
-    const row = (await screen.findByText("Whisper turbo")).closest("li")!;
-    fireEvent.click(within(row).getByRole("button", { name: /delete whisper turbo/i }));
+    const row = (await within(section("settings-storage")).findByText("Balanced")).closest("li")!;
+    fireEvent.click(within(row).getByRole("button", { name: /delete balanced/i }));
     await within(row).findByRole("button", { name: /delete 874 mb\?/i });
 
     rerender(<SettingsDialog open={false} onOpenChange={() => {}} />);
     rerender(<SettingsDialog open onOpenChange={() => {}} />);
 
-    const reopenedRow = (await screen.findByText("Whisper turbo")).closest("li")!;
+    const reopenedRow = (
+      await within(section("settings-storage")).findByText("Balanced")
+    ).closest("li")!;
     // Back to the trash icon, not the armed "Delete 874 MB?" button.
     const trashButton = await within(reopenedRow).findByRole("button", {
-      name: /delete whisper turbo/i,
+      name: /delete balanced/i,
     });
     expect(within(reopenedRow).queryByRole("button", { name: /delete 874 mb\?/i })).not.toBeInTheDocument();
 
@@ -685,14 +730,15 @@ describe("SettingsDialog: model manager (stage 0.8 Task 2)", () => {
 });
 
 describe("SettingsDialog: AI enhance provider (stage 0.11)", () => {
-  // The summary provider rows live on the merged Models page now: the local
-  // row is the local model-manager row (download/progress/delete inline)
-  // with its selection radio, so picking and downloading never span tabs.
+  // The summary provider rows live on the Summaries page (stage 4.1): the
+  // local row is the local model row (download/progress inline) with its
+  // selection radio, so picking and downloading never span pages. Deletion
+  // lives on Storage with every other downloaded model.
   const qwen: ModelInfo = {
     id: "qwen3.5-4b-q4-k-m",
     name: "Local summary model",
     technical_name: "Qwen3.5 4B (Q4_K_M)",
-    tagline: "private summaries on this Mac",
+    tagline: "nothing leaves this Mac, simpler summaries",
     size_mb: 2740,
     downloaded: false,
     active: false,
@@ -706,14 +752,14 @@ describe("SettingsDialog: AI enhance provider (stage 0.11)", () => {
     size_on_disk_bytes: 2_740_000_000,
   };
 
-  async function openModelsSection() {
+  async function openSummariesSection() {
     render(<SettingsDialog open onOpenChange={() => {}} />);
-    fireEvent.click(await screen.findByRole("button", { name: /^models$/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /^summaries$/i }));
   }
 
   it("lists probed providers with availability and picks one via the radio", async () => {
     vi.mocked(ipc.listModels).mockResolvedValue([qwen]);
-    await openModelsSection();
+    await openSummariesSection();
 
     await screen.findByText("2.0.0 (Claude Code)");
     expect(screen.getByText(/not installed \(no `codex` CLI found\)/i)).toBeInTheDocument();
@@ -726,31 +772,40 @@ describe("SettingsDialog: AI enhance provider (stage 0.11)", () => {
 
   it("renders the local row as one merged download-and-select row", async () => {
     vi.mocked(ipc.listModels).mockResolvedValue([qwen]);
-    await openModelsSection();
+    await openSummariesSection();
 
     // Not downloaded: the row offers Download right here (no pointer to a
-    // different tab) and its selection radio is disabled until it is ready.
+    // different page) and its selection radio is disabled until it is ready.
     const row = (await screen.findByText("On this Mac")).closest("li")!;
     expect(within(row).getByRole("button", { name: /download/i })).toBeInTheDocument();
     expect(within(row).getByRole("radio", { name: "On this Mac" })).toBeDisabled();
     const technicalName = within(row).getByText("Qwen3.5 4B (Q4_K_M)");
     expect(technicalName).toHaveClass("text-[10px]", "text-muted-foreground/55");
-    expect(within(row).getByText("2.74 GB")).toBeInTheDocument();
+    expect(within(row).getByText(/2\.74 GB/)).toBeInTheDocument();
   });
 
-  it("offers delete and an enabled radio once the local model is downloaded", async () => {
+  it("offers an enabled radio once the local model is downloaded, with deletion on Storage", async () => {
     vi.mocked(ipc.listModels).mockResolvedValue([qwenDownloaded]);
     vi.mocked(ipc.listEnhanceProviders).mockResolvedValue([
       { id: "local", name: "On this Mac", available: true, version: "on-device · Metal" },
       { id: "claude", name: "Claude Code", available: true, version: "2.0.0" },
       { id: "codex", name: "Codex", available: false, version: null },
     ]);
-    await openModelsSection();
+    await openSummariesSection();
 
-    const row = (await screen.findByText("On this Mac")).closest("li")!;
+    const row = (
+      await within(section("settings-summaries")).findByText("On this Mac")
+    ).closest("li")!;
     expect(within(row).queryByRole("button", { name: /download/i })).not.toBeInTheDocument();
-    expect(within(row).getByRole("button", { name: /delete local summary model/i })).toBeInTheDocument();
+    expect(within(row).queryByRole("button", { name: /delete/i })).not.toBeInTheDocument();
     expect(within(row).getByRole("radio", { name: "On this Mac" })).not.toBeDisabled();
+
+    const storageRow = within(section("settings-storage"))
+      .getByText("Local summary model")
+      .closest("li")!;
+    expect(
+      within(storageRow).getByRole("button", { name: /delete local summary model/i }),
+    ).toBeInTheDocument();
   });
 
   it("persists a provider switch", async () => {
@@ -760,7 +815,7 @@ describe("SettingsDialog: AI enhance provider (stage 0.11)", () => {
       { id: "claude", name: "Claude Code", available: true, version: "2.0.0" },
       { id: "codex", name: "Codex", available: true, version: "codex-cli 0.149.0" },
     ]);
-    await openModelsSection();
+    await openSummariesSection();
 
     const codexRadio = await screen.findByRole("radio", { name: "Codex" });
     fireEvent.click(codexRadio);
@@ -777,7 +832,7 @@ describe("SettingsDialog: AI enhance provider (stage 0.11)", () => {
       { id: "local", name: "On this Mac", available: true, version: "on-device · Metal" },
       { id: "claude", name: "Claude Code", available: true, version: "2.0.0" },
     ]);
-    await openModelsSection();
+    await openSummariesSection();
 
     expect(await screen.findByRole("radio", { name: "On this Mac" })).toBeChecked();
     expect(screen.queryByRole("combobox", { name: /local.*model/i })).not.toBeInTheDocument();
@@ -787,7 +842,7 @@ describe("SettingsDialog: AI enhance provider (stage 0.11)", () => {
 describe("SettingsDialog: enhance model override (stage 0.11)", () => {
   it("persists a model pick and clears it back to Default", async () => {
     render(<SettingsDialog open onOpenChange={() => {}} />);
-    fireEvent.click(await screen.findByRole("button", { name: /^models$/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /^summaries$/i }));
 
     const select = await screen.findByRole("combobox", { name: /claude code model/i });
     fireEvent.change(select, { target: { value: "fable" } });
@@ -804,21 +859,21 @@ describe("SettingsDialog: model titles and calendar context", () => {
   it("persists the title-renaming opt-in", async () => {
     render(<SettingsDialog open onOpenChange={() => {}} />);
 
-    const toggle = await screen.findByRole("checkbox", { name: /let it title notes/i });
+    const toggle = await screen.findByRole("checkbox", { name: /allow renaming notes/i });
     expect(toggle).toHaveAttribute("aria-checked", "false");
     fireEvent.click(toggle);
 
     await waitFor(() => expect(ipc.setEnhanceRenameTitle).toHaveBeenCalledWith(true));
     expect(toggle).toHaveAttribute("aria-checked", "true");
     // The copy must state the rule-6 boundary plainly.
-    await screen.findByText(/titles you typed yourself are never touched/i);
+    await screen.findByText(/yours are never touched/i);
   });
 
   it("offers calendar context for both cloud providers", async () => {
     render(<SettingsDialog open onOpenChange={() => {}} />);
 
     // baseConfig selects claude: the toggle is live and persists.
-    const toggle = await screen.findByRole("checkbox", { name: /use your calendar for context/i });
+    const toggle = await screen.findByRole("checkbox", { name: /use calendar for context/i });
     expect(toggle).not.toBeDisabled();
     fireEvent.click(toggle);
     await waitFor(() => expect(ipc.setEnhanceUseCalendar).toHaveBeenCalledWith(true));
@@ -828,7 +883,7 @@ describe("SettingsDialog: model titles and calendar context", () => {
     vi.mocked(ipc.getConfig).mockResolvedValue({ ...baseConfig, enhance_provider: "codex" });
     render(<SettingsDialog open onOpenChange={() => {}} />);
 
-    const toggle = await screen.findByRole("checkbox", { name: /use your calendar for context/i });
+    const toggle = await screen.findByRole("checkbox", { name: /use calendar for context/i });
     expect(toggle).not.toBeDisabled();
   });
 
@@ -836,50 +891,103 @@ describe("SettingsDialog: model titles and calendar context", () => {
     vi.mocked(ipc.getConfig).mockResolvedValue({ ...baseConfig, enhance_provider: "local" });
     render(<SettingsDialog open onOpenChange={() => {}} />);
 
-    const toggle = await screen.findByRole("checkbox", { name: /use your calendar for context/i });
+    const toggle = await screen.findByRole("checkbox", { name: /use calendar for context/i });
     expect(toggle).toBeDisabled();
   });
 });
 
-describe("SettingsDialog: two-page navigation (settings reorg)", () => {
-  it("offers exactly General and Models in the nav, with call detection and audio on General", async () => {
+describe("SettingsDialog: five-page navigation (stage 4.1)", () => {
+  it("offers exactly the five task-shaped sections in the nav", async () => {
     render(<SettingsDialog open onOpenChange={() => {}} />);
 
     await screen.findByRole("button", { name: /^general$/i });
-    screen.getByRole("button", { name: /^models$/i });
-    expect(screen.queryByRole("button", { name: /^audio$/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /^summary$/i })).not.toBeInTheDocument();
-
-    // Call detection and call audio both render inside the General section
-    // (all sections stay mounted; visibility is CSS-only).
-    const general = document.getElementById("settings-general")!;
-    expect(
-      within(general).getByRole("checkbox", { name: /offer to record when a call starts/i }),
-    ).toBeInTheDocument();
-    expect(
-      within(general).getByRole("checkbox", { name: /keep call audio/i }),
-    ).toBeInTheDocument();
+    for (const name of [/^recording$/i, /^transcription$/i, /^summaries$/i, /^storage$/i]) {
+      expect(screen.getByRole("button", { name })).toBeInTheDocument();
+    }
+    // The old download-center page is gone.
+    expect(screen.queryByRole("button", { name: /^models$/i })).not.toBeInTheDocument();
   });
 
-  it("keeps Models a pure download center: every behavior toggle lives on General", async () => {
+  it("keeps every toggle next to what it configures, and Storage free of toggles", async () => {
     render(<SettingsDialog open onOpenChange={() => {}} />);
-    await screen.findByRole("checkbox", { name: /re-transcribe automatically/i });
+    await screen.findByRole("checkbox", { name: /run automatically after each call/i });
 
-    // No switch of any kind on the Models page -- only downloads, deletes
-    // and per-function selection (radios, model menus).
-    const models = document.getElementById("settings-models")!;
-    expect(within(models).queryAllByRole("checkbox")).toHaveLength(0);
+    // General: only the app itself.
+    const general = section("settings-general");
+    expect(within(general).getByRole("checkbox", { name: /show in dock/i })).toBeInTheDocument();
+    expect(within(general).queryAllByRole("checkbox")).toHaveLength(1);
 
-    // The automation and summary-behavior toggles all sit inside General.
-    const general = document.getElementById("settings-general")!;
+    // Recording: detection with its dependent auto-stop, and audio retention.
+    const recording = section("settings-recording");
     for (const name of [
-      /re-transcribe automatically after stopping/i,
-      /delete the audio after re-transcribing/i,
-      /enhance automatically after each call/i,
-      /let it title notes/i,
-      /use your calendar for context/i,
+      /suggest recording when a call starts/i,
+      /stop when the call ends/i,
+      /keep audio files/i,
     ]) {
-      expect(within(general).getByRole("checkbox", { name })).toBeInTheDocument();
+      expect(within(recording).getByRole("checkbox", { name })).toBeInTheDocument();
     }
+
+    // Transcription: the accurate pass's two automation toggles sit under
+    // the whisper choice they configure.
+    const transcription = section("settings-transcription");
+    for (const name of [
+      /run automatically after each call/i,
+      /delete audio after re-transcribing/i,
+    ]) {
+      expect(within(transcription).getByRole("checkbox", { name })).toBeInTheDocument();
+    }
+
+    // Summaries: provider choice plus the three summary-behavior toggles.
+    const summaries = section("settings-summaries");
+    for (const name of [
+      /summarize after each call/i,
+      /allow renaming notes/i,
+      /use calendar for context/i,
+    ]) {
+      expect(within(summaries).getByRole("checkbox", { name })).toBeInTheDocument();
+    }
+
+    // Storage only weighs and deletes; it configures nothing.
+    expect(within(section("settings-storage")).queryAllByRole("checkbox")).toHaveLength(0);
+  });
+});
+
+describe("SettingsDialog: storage page (stage 4.1)", () => {
+  it("weighs notes against audio and points at the notes folder", async () => {
+    vi.mocked(ipc.storageStats).mockResolvedValue({
+      note_count: 142,
+      notes_bytes: 340_000,
+      audio_bytes: 1_857_000_000,
+      audio_secs: 345_600,
+    });
+
+    render(<SettingsDialog open onOpenChange={() => {}} />);
+
+    const storage = section("settings-storage");
+    // The whole point of the group: years of notes are kilobytes, the
+    // audio next to them is gigabytes.
+    await within(storage).findByText("142 calls, one Markdown file each");
+    expect(within(storage).getByText("340 KB")).toBeInTheDocument();
+    expect(within(storage).getByText("96 hours")).toBeInTheDocument();
+    // Row value and the group total both round to the same figure here.
+    expect(within(storage).getAllByText("1.86 GB")).toHaveLength(2);
+    // The folder pointer keeps the files-are-yours promise in view.
+    expect(within(storage).getByText(/yours to move, sync or delete/i)).toBeInTheDocument();
+    expect(within(storage).getByText("/tmp/calls")).toBeInTheDocument();
+  });
+
+  it("says plainly when no audio is kept", async () => {
+    vi.mocked(ipc.storageStats).mockResolvedValue({
+      note_count: 3,
+      notes_bytes: 9_000,
+      audio_bytes: 0,
+      audio_secs: 0,
+    });
+
+    render(<SettingsDialog open onOpenChange={() => {}} />);
+
+    const storage = section("settings-storage");
+    await within(storage).findByText("3 calls, one Markdown file each");
+    expect(within(storage).getByText("No audio kept")).toBeInTheDocument();
   });
 });

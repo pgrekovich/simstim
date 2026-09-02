@@ -73,6 +73,12 @@ vi.mock("@/lib/ipc", () => ({
   setEnhanceRenameTitle: vi.fn().mockResolvedValue(undefined),
   setEnhanceUseCalendar: vi.fn().mockResolvedValue(undefined),
   listEnhanceProviders: vi.fn().mockResolvedValue([]),
+  storageStats: vi.fn().mockResolvedValue({
+    note_count: 0,
+    notes_bytes: 0,
+    audio_bytes: 0,
+    audio_secs: 0,
+  }),
   showMainWindow: vi.fn().mockResolvedValue(undefined),
 }));
 

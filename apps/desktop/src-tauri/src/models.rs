@@ -167,9 +167,11 @@ pub static REGISTRY: &[ModelSpec] = &[
         // (stage-0.8 Global Constraints) -- must not change, or the owner
         // would be asked to re-download it.
         id: "whisper-large-v3-turbo-q8",
-        name: "Whisper turbo",
-        technical_name: None,
-        tagline: Some("faster, slightly weaker on non-English"),
+        // Meta-name first (stage 4.1): the row leads with what the choice
+        // means to the user; the engine name renders small below it.
+        name: "Balanced",
+        technical_name: Some("Whisper large-v3-turbo (q8)"),
+        tagline: Some("about 12x realtime, slightly weaker on non-English"),
         size_mb: 874,
         layout: ModelLayout::File {
             url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q8_0.bin",
@@ -205,9 +207,10 @@ pub static REGISTRY: &[ModelSpec] = &[
         // non-turbo option kept -- best quality, slower, usually the
         // strongest of the two on non-English audio.
         id: "whisper-large-v3",
-        name: "Whisper large-v3",
-        technical_name: None,
-        tagline: Some("best quality, slower"),
+        // Meta-name first (stage 4.1), same split as the row above.
+        name: "Best quality",
+        technical_name: Some("Whisper large-v3"),
+        tagline: Some("strongest on non-English speech, slower"),
         size_mb: 3095,
         layout: ModelLayout::File {
             url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin",
@@ -221,7 +224,9 @@ pub static REGISTRY: &[ModelSpec] = &[
         id: "qwen3.5-4b-q4-k-m",
         name: "Local summary model",
         technical_name: Some("Qwen3.5 4B (Q4_K_M)"),
-        tagline: Some("private summaries on this Mac"),
+        // Honest ranking (stage 4.1, owner request): private AND plainly
+        // weaker than the cloud rows next to it.
+        tagline: Some("nothing leaves this Mac, simpler summaries"),
         size_mb: 2740,
         layout: ModelLayout::File {
             url: "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf",

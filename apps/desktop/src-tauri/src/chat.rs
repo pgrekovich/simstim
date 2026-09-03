@@ -143,10 +143,12 @@ fn reply_contract(spoken_hint: &str) -> String {
         "After the answer, end the reply with one line per piece of evidence you \
          actually used, in exactly this shape:\n\
          {spoken_hint}\n\
-         Then at most two lines, each proposing a next question the user would \
-         plausibly ask, written in the same language the user's question below \
-         is written in:\n\
+         Then at most two lines, each proposing a natural NEXT question that \
+         builds on this answer and that the notes can plausibly answer, written \
+         in the same language the user's question below is written in:\n\
          FOLLOWUP: <question>\n\
+         Emit no FOLLOWUP lines at all when nothing genuinely worth asking \
+         follows -- weak suggestions are worse than none.\n\
          The SOURCE and FOLLOWUP lines must be the very last lines of the reply, \
          with nothing after them. If the notes hold no evidence, emit no SOURCE \
          lines at all -- never invent one."
@@ -331,6 +333,36 @@ pub(crate) fn build_this_call_prompt(
     )
 }
 
+/// The claude CLI's `-p --output-format json` reply: `(answer text, exact
+/// model id)`. The model comes from `modelUsage` -- when several models
+/// contributed (subagents), the one that wrote the most output is the
+/// answer's author. `None` means the output wasn't that JSON shape at all
+/// (callers keep the raw text); `Some(Err)` is the CLI's own reported
+/// failure (`is_error: true`).
+fn parse_claude_json(raw: &str) -> Option<Result<(String, Option<String>), String>> {
+    let value: serde_json::Value = serde_json::from_str(raw.trim()).ok()?;
+    let text = value.get("result")?.as_str()?.trim().to_string();
+    if value.get("is_error").and_then(|v| v.as_bool()) == Some(true) {
+        return Some(Err(if text.is_empty() {
+            "the provider reported an error".to_string()
+        } else {
+            text
+        }));
+    }
+    if text.is_empty() {
+        return Some(Err("the provider returned an empty response".to_string()));
+    }
+    let model = value
+        .get("modelUsage")
+        .and_then(|usage| usage.as_object())
+        .and_then(|map| {
+            map.iter()
+                .max_by_key(|(_, v)| v.get("outputTokens").and_then(|t| t.as_u64()).unwrap_or(0))
+                .map(|(id, _)| id.clone())
+        });
+    Some(Ok((text, model)))
+}
+
 /// A `SOURCE:` line's payload, parsed. Accepted shapes (whitespace-tolerant):
 /// `<file> @ <hh:mm:ss>`, `<file>`, `<hh:mm:ss>`. A file is anything that
 /// isn't a bare timestamp; a `None` return means the line is junk and stays
@@ -463,11 +495,15 @@ fn build_command(
             // git context) with the notes folder reachable via --add-dir.
             // --tools restricts the built-in set to the three read-only
             // file tools; --allowedTools pre-approves them so -p mode never
-            // stalls on a permission it can't ask for.
+            // stalls on a permission it can't ask for. JSON output, unlike
+            // enhance's text mode, because the result carries `modelUsage`:
+            // the owner wants every answer labeled with the EXACT model that
+            // wrote it, not the provider name (a bare `claude` hides which
+            // model the CLI's default resolved to).
             cmd.args([
                 "-p",
                 "--output-format",
-                "text",
+                "json",
                 "--tools",
                 "Read,Grep,Glob",
                 "--allowedTools",
@@ -691,13 +727,25 @@ fn ask_inner<R: tauri::Runtime>(
         let (cmd, codex_out) =
             build_command(&provider, &binary, model.as_deref(), &notes_dir, workdir.path())?;
         let raw = run_chat(cmd, codex_out.as_deref(), &prompt, &cancel)?;
+        // claude answers in its JSON envelope, which names the exact model
+        // that wrote the reply; an unexpected non-JSON output degrades to
+        // the raw text with the configured label.
+        let (raw, exact_model) = if provider == "claude" {
+            match parse_claude_json(&raw) {
+                Some(Ok((text, model))) => (text, model),
+                Some(Err(message)) => return Err(message),
+                None => (raw, None),
+            }
+        } else {
+            (raw, None)
+        };
         let (text, sources, followups) = split_reply(&raw);
         Ok::<_, String>(ChatMessage {
             role: "assistant",
             text,
             sources,
             followups,
-            label: Some(chat_label(&provider, model.as_deref())),
+            label: Some(exact_model.unwrap_or_else(|| chat_label(&provider, model.as_deref()))),
             asked_at: None,
         })
     })();
@@ -1006,6 +1054,41 @@ mod tests {
         }
     }
 
+    mod claude_json {
+        use super::*;
+
+        /// The real CLI envelope shape (2026-09, `claude -p --output-format
+        /// json`): the answer in `result`, the exact model in `modelUsage`.
+        #[test]
+        fn takes_the_answer_and_the_dominant_model() {
+            let raw = r#"{"is_error":false,"result":"The answer.\nSOURCE: a.md @ 00:00:01",
+                "modelUsage":{
+                    "claude-haiku-4-5":{"outputTokens":12},
+                    "claude-sonnet-5":{"outputTokens":840}
+                }}"#;
+            let (text, model) = parse_claude_json(raw).unwrap().unwrap();
+            assert_eq!(text, "The answer.\nSOURCE: a.md @ 00:00:01");
+            assert_eq!(model.as_deref(), Some("claude-sonnet-5"));
+        }
+
+        #[test]
+        fn surfaces_the_clis_own_reported_error() {
+            let raw = r#"{"is_error":true,"result":"Credit balance too low"}"#;
+            assert_eq!(
+                parse_claude_json(raw).unwrap().unwrap_err(),
+                "Credit balance too low"
+            );
+            let raw = r#"{"is_error":false,"result":"   "}"#;
+            assert!(parse_claude_json(raw).unwrap().is_err(), "empty result is an error");
+        }
+
+        #[test]
+        fn non_json_output_degrades_to_raw_text() {
+            assert!(parse_claude_json("plain text answer").is_none());
+            assert!(parse_claude_json(r#"{"no_result_field":1}"#).is_none());
+        }
+    }
+
     mod validation {
         use super::*;
 
@@ -1056,6 +1139,10 @@ mod tests {
                 .map(|a| a.to_string_lossy().to_string())
                 .collect();
             assert!(out.is_none());
+            assert!(
+                args.windows(2).any(|w| w[0] == "--output-format" && w[1] == "json"),
+                "claude must answer in the JSON envelope that names the exact model"
+            );
             assert!(args.windows(2).any(|w| w[0] == "--tools" && w[1] == "Read,Grep,Glob"));
             assert!(args.windows(2).any(|w| w[0] == "--allowedTools" && w[1] == "Read,Grep,Glob"));
             assert!(args.windows(2).any(|w| w[0] == "--add-dir" && w[1] == "/tmp/notes"));
@@ -1118,9 +1205,13 @@ mod tests {
         let (cmd, out) =
             build_command("claude", &binary, None, notes.path(), workdir.path()).unwrap();
         let raw = run_chat(cmd, out.as_deref(), &prompt, &AtomicBool::new(false)).unwrap();
-        eprintln!("--- raw reply ---\n{raw}\n-----------------");
-        let (text, sources, followups) = split_reply(&raw);
+        let (reply, model) = parse_claude_json(&raw)
+            .expect("the CLI must answer in its JSON envelope")
+            .expect("the CLI reported an error");
+        eprintln!("--- reply (model: {model:?}) ---\n{reply}\n-----------------");
+        let (text, sources, followups) = split_reply(&reply);
         eprintln!("text: {text}\nsources: {sources:?}\nfollowups: {followups:?}");
         assert!(text.to_lowercase().contains("marek"));
+        assert!(model.is_some(), "modelUsage must name the answering model");
     }
 }

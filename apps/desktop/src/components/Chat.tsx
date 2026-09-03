@@ -303,13 +303,15 @@ export function ChatConversation({
                   {index === messages.length - 1 && message.followups.length > 0 && (
                     <div className="flex flex-wrap gap-1.5 pt-1">
                       {message.followups.map((followup) => (
+                        // No fixed height: a long suggestion wraps into a
+                        // taller pill instead of overflowing a 28px one.
                         <button
                           key={followup}
                           type="button"
                           disabled={running}
                           onClick={() => send(followup)}
                           className={cn(
-                            "inline-flex h-7 items-center rounded-full border border-foreground/[0.14] px-3 text-quiet-foreground hover:border-foreground/[0.28] hover:bg-foreground/[0.05] disabled:opacity-50",
+                            "inline-flex min-h-7 items-center rounded-[14px] border border-foreground/[0.14] px-3 py-[4.5px] text-left leading-[1.4] text-quiet-foreground hover:border-foreground/[0.28] hover:bg-foreground/[0.05] disabled:opacity-50",
                             pane ? "text-[12px]" : "text-[11.5px]",
                           )}
                         >

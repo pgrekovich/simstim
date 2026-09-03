@@ -637,6 +637,21 @@ file-and-second citation and parsed followups; both surfaces, the ⌘K
 handoff, citation jumps and the Settings group verified visually in a
 browser (light and dark). Awaiting owner e2e.
 
+Status (2026-09-03, evening): the owner's first live e2e produced an
+iteration, all applied: answers are labeled with the EXACT model from the
+CLI's JSON envelope (his CLI default resolved to claude-sonnet-5, which a
+bare "claude" label had hidden); followups must build on the answer, be
+answerable from the notes, and may be omitted; input auto-focuses on
+opening either surface; the pane input runs full width (footer hint
+removed); citation chips actually scroll the transcript (the jump had
+fired into the CSS-hidden tab, where scrollIntoView is a no-op); the
+drawer gained its visible toolbar button from artboard 8c; both side
+panes are drag-resizable with persisted widths; the note pane keeps a
+360px minimum through any resize and the window gained minWidth 800, so
+the toolbar cannot be crumpled; chat answers render as compact UI sans
+(.chat-answer) instead of the Summary's 15px reading serif. Owner e2e
+continues.
+
 ## Milestones after MVP-0
 
 1. Audio file kept next to the .md; re-transcribe command (whisper turbo).

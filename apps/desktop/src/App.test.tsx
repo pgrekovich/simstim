@@ -410,6 +410,10 @@ describe("App: menu-bar recording toggle (stage 3)", () => {
   });
 
   it("resizes the Ask this call drawer, wider toward the left", async () => {
+    // jsdom's 1024px window leaves no headroom over the note pane's 640px
+    // minimum with the sidebar open; act like a real full-size window.
+    const originalWidth = window.innerWidth;
+    Object.defineProperty(window, "innerWidth", { value: 1600, configurable: true });
     vi.mocked(ipc.listSessions).mockResolvedValueOnce([
       {
         path: "/tmp/old.md",
@@ -430,12 +434,16 @@ describe("App: menu-bar recording toggle (stage 3)", () => {
     fireEvent.pointerUp(window);
     expect(drawer).toHaveStyle({ width: "360px" });
     expect(window.localStorage.getItem("simstim.ask-call-width")).toBe("360");
+    Object.defineProperty(window, "innerWidth", { value: originalWidth, configurable: true });
   });
 
   it("gives the panes way on window resize so the note keeps its minimum", async () => {
-    // Width keys persist across tests in this file's jsdom; start clean.
+    // Width keys persist across tests in this file's jsdom; start clean,
+    // and in a window with drag headroom (see the drawer test above).
     window.localStorage.removeItem("simstim.sidebar-width");
     window.localStorage.removeItem("simstim.ask-call-width");
+    const originalWidth = window.innerWidth;
+    Object.defineProperty(window, "innerWidth", { value: 1600, configurable: true });
     vi.mocked(ipc.listSessions).mockResolvedValueOnce([
       {
         path: "/tmp/old.md",
@@ -461,7 +469,6 @@ describe("App: menu-bar recording toggle (stage 3)", () => {
     fireEvent.pointerUp(window);
     expect(drawer).toHaveStyle({ width: "420px" });
 
-    const originalWidth = window.innerWidth;
     Object.defineProperty(window, "innerWidth", { value: 800, configurable: true });
     fireEvent(window, new Event("resize"));
     expect(drawer).toHaveStyle({ width: "260px" });

@@ -115,8 +115,14 @@ export const ASK_CALL_WIDTH: PaneWidthSpec = {
   max: 520,
 };
 
-/** The note pane must stay usable no matter how the side panes are dragged. */
-const MAIN_PANE_MIN = 360;
+/**
+ * The note pane must stay usable no matter how the side panes are dragged --
+ * and "usable" is set by its TOOLBAR, not its text column: three tabs, the
+ * Enhance control, Record (wider while recording), the ask and overflow
+ * icons and their gaps need ~640px before anything clips (owner report: the
+ * tab list was getting cut under Record with both panes open).
+ */
+const MAIN_PANE_MIN = 640;
 
 /**
  * `maxOverride` tightens (never widens) the spec's own ceiling: drags pass
@@ -1342,8 +1348,14 @@ function App() {
 
           {/* SessionView portals its Radix tab list here so the switcher is
               part of the 56 px toolbar while its context and mounted tab
-              contents remain owned by SessionView. */}
-          <div id="topbar-tabs-slot" className="flex min-w-0 flex-1 items-center overflow-hidden" />
+              contents remain owned by SessionView. The mask fades the right
+              edge instead of hard-clipping it: below MAIN_PANE_MIN (a window
+              at its minimum with both panes open) the tabs dissolve rather
+              than get cut mid-letter under Record. */}
+          <div
+            id="topbar-tabs-slot"
+            className="flex min-w-0 flex-1 items-center overflow-hidden [mask-image:linear-gradient(to_right,black_calc(100%-28px),transparent)]"
+          />
           <div
             id="topbar-transcript-find-slot"
             className="relative z-10 flex min-w-0 shrink-0 items-center"

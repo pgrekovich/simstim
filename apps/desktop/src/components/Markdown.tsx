@@ -16,12 +16,14 @@ const MarkdownRenderer = lazy(() => import("@/components/MarkdownRenderer"));
 interface MarkdownContentProps {
   children: string;
   className?: string;
+  /** Inline style pass-through (chat sizes its answers via a CSS variable). */
+  style?: React.CSSProperties;
 }
 
-/** Safe Markdown rendering shared by user Notes and generated Summary. */
-export function MarkdownContent({ children, className }: MarkdownContentProps) {
+/** Safe Markdown rendering shared by user Notes, generated Summary and chat. */
+export function MarkdownContent({ children, className, style }: MarkdownContentProps) {
   return (
-    <div className={cn("markdown-content", className)}>
+    <div className={cn("markdown-content", className)} style={style}>
       <Suspense
         fallback={
           <div aria-label="Rendering Markdown" className="space-y-2 py-1">

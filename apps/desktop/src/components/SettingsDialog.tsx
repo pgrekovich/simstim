@@ -506,8 +506,10 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
   }
 
   /**
-   * Picks which CLI `enhanceSession` runs (stage 0.11). Optimistic with
-   * rollback, same as every other row here.
+   * Picks which CLI `enhanceSession` runs (stage 0.11) -- and, since the
+   * owner's one-AI-choice ruling (stage 4.2 e2e), which one answers Ask
+   * your notes / Ask this call too. Optimistic with rollback, same as
+   * every other row here.
    */
   async function handleSetEnhanceProvider(provider: string) {
     const previous = config?.enhance_provider;
@@ -1205,7 +1207,8 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                     <p className="max-w-[62ch] text-[11.5px] leading-[1.55] text-muted-foreground">
                       Cloud models write noticeably better summaries; the on-device model keeps
                       everything on this Mac. Cloud providers get the note's text and
-                      transcript, never audio.
+                      transcript, never audio. The same choice answers Ask your notes
+                      (⌘L) and Ask this call (⌘J); asking needs a cloud provider.
                     </p>
                     <ul className="flex flex-col divide-y divide-border border-y border-border">
                       {summaryModels.map((model) => {

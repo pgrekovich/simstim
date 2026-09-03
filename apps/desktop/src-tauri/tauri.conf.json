@@ -17,6 +17,8 @@
         "title": "Simstim",
         "width": 800,
         "height": 600,
+        "minWidth": 800,
+        "minHeight": 500,
         "titleBarStyle": "Overlay",
         "trafficLightPosition": {
           "x": 14,

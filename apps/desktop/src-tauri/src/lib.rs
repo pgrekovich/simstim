@@ -1,6 +1,7 @@
 pub mod aac;
 pub mod audio_sink;
 pub mod banner;
+pub mod chat;
 pub mod config;
 pub mod detect;
 pub mod enhance;
@@ -610,6 +611,7 @@ pub fn run() {
         .manage(DownloadState::default())
         .manage(retranscribe::RetranscribeState::default())
         .manage(enhance::EnhanceState::default())
+        .manage(chat::ChatState::default())
         .setup(|app| {
             // Security review finding (this task): the static
             // `assetProtocol.scope` in tauri.conf.json is empty on purpose
@@ -679,6 +681,10 @@ pub fn run() {
             config::set_enhance_use_calendar,
             enhance::list_enhance_providers,
             enhance::enhance_session,
+            chat::chat_ask,
+            chat::chat_history,
+            chat::chat_clear,
+            chat::chat_cancel,
             detect::set_detect_calls,
             banner::banner_dismiss,
             banner::banner_current_state,

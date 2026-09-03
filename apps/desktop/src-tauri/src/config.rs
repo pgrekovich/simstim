@@ -547,6 +547,22 @@ mod tests {
         assert_eq!(Config::default().enhance_provider, "local");
     }
 
+    /// Owner ruling (stage 4.2 e2e): ONE AI choice powers both summaries
+    /// and chat -- the retired `chat_provider`/`chat_model` keys in an
+    /// older config file must be ignored, not an error.
+    #[test]
+    fn retired_chat_keys_in_an_old_config_are_ignored() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            "enhance_provider = \"codex\"\nchat_provider = \"claude\"\nchat_model = \"opus\"\n",
+        )
+        .unwrap();
+        let cfg = Config::load_from(&path);
+        assert_eq!(cfg.enhance_provider, "codex");
+    }
+
     #[test]
     fn dock_visibility_defaults_to_on() {
         assert!(Config::default().show_in_dock);

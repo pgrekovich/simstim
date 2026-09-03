@@ -7,6 +7,7 @@ import {
   Ellipsis,
   FileText,
   Folder,
+  MessageCircleQuestion,
   PanelLeftOpen,
   Search,
   Settings,
@@ -23,7 +24,11 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { RecordButton } from "@/components/RecordButton";
+import { ResizeHandle } from "@/components/ResizeHandle";
 import { EmptyState } from "@/components/EmptyState";
+import { AskCallDrawer } from "@/components/AskCallDrawer";
+import { AskNotesView } from "@/components/AskNotesView";
+import { type ChatAskRequest } from "@/components/Chat";
 import { GlobalSearch, type SpokenSearchTarget } from "@/components/GlobalSearch";
 import {
   SessionView,
@@ -46,6 +51,7 @@ import {
   type AppConfig,
   type CallDetectedPayload,
   type CallEndedPayload,
+  type ChatSource,
   type EnhanceProgress,
   type ModelInfo,
   type RetranscribeProgress,
@@ -79,6 +85,68 @@ function initialSidebarCollapsed(): boolean {
     return window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "true";
   } catch {
     return false;
+  }
+}
+
+/**
+ * Resizable pane widths (stage 4.2 polish, owner request): the sidebar and
+ * the Ask-this-call drawer are dragged at their shared border, persisted per
+ * pane, and double-click restores the design default. Bounds keep either
+ * pane from being dragged into uselessness or swallowing the note.
+ */
+export interface PaneWidthSpec {
+  key: string;
+  default: number;
+  min: number;
+  max: number;
+}
+
+export const SIDEBAR_WIDTH: PaneWidthSpec = {
+  key: "simstim.sidebar-width",
+  default: 224,
+  min: 180,
+  max: 400,
+};
+
+export const ASK_CALL_WIDTH: PaneWidthSpec = {
+  key: "simstim.ask-call-width",
+  default: 300,
+  min: 260,
+  max: 520,
+};
+
+/**
+ * The note pane must stay usable no matter how the side panes are dragged --
+ * and "usable" is set by its TOOLBAR, not its text column: three tabs, the
+ * Enhance control, Record (wider while recording), the ask and overflow
+ * icons and their gaps need ~640px before anything clips (owner report: the
+ * tab list was getting cut under Record with both panes open).
+ */
+const MAIN_PANE_MIN = 640;
+
+/**
+ * `maxOverride` tightens (never widens) the spec's own ceiling: drags pass
+ * the space actually available in the window so a side pane can't crush the
+ * note below [`MAIN_PANE_MIN`]; the minimum still wins over it, so a tiny
+ * window degrades to overlap rather than an unusably thin pane.
+ */
+export function clampPaneWidth(
+  spec: PaneWidthSpec,
+  width: number,
+  maxOverride?: number,
+): number {
+  if (!Number.isFinite(width)) return spec.default;
+  const max = Math.max(spec.min, Math.min(spec.max, maxOverride ?? spec.max));
+  return Math.min(max, Math.max(spec.min, Math.round(width)));
+}
+
+function initialPaneWidth(spec: PaneWidthSpec): number {
+  try {
+    const stored = window.localStorage.getItem(spec.key);
+    if (stored === null) return spec.default;
+    return clampPaneWidth(spec, Number(stored));
+  } catch {
+    return spec.default;
   }
 }
 
@@ -129,11 +197,30 @@ function App() {
   const [busy, setBusy] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
+  // Ask your notes (stage 4.2): when open, the folder-wide chat owns the
+  // main pane (the selection stays put underneath and comes back on close).
+  const [askNotesOpen, setAskNotesOpen] = useState(false);
+  // A question handed to Ask your notes from the ⌘K palette's bottom row.
+  const [askNotesRequest, setAskNotesRequest] = useState<ChatAskRequest | null>(null);
+  const askNotesRequestIdRef = useRef(0);
+  // Ask this call (stage 4.2): the right-hand drawer over the open note.
+  const [askCallOpen, setAskCallOpen] = useState(false);
+  // A clicked citation chip's jump target, keyed by path so it only reaches
+  // the SessionView for that note (same recipe as transcriptFindRequest).
+  const [transcriptJumpRequest, setTranscriptJumpRequest] = useState<
+    { id: number; timestamp: string; path: string } | null
+  >(null);
+  const transcriptJumpRequestIdRef = useRef(0);
   const [transcriptFindRequest, setTranscriptFindRequest] = useState<
     (TranscriptFindRequest & { path: string }) | null
   >(null);
   const transcriptFindRequestIdRef = useRef(0);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(initialSidebarCollapsed);
+  const [sidebarWidth, setSidebarWidth] = useState(() => initialPaneWidth(SIDEBAR_WIDTH));
+  const [askCallWidth, setAskCallWidth] = useState(() => initialPaneWidth(ASK_CALL_WIDTH));
+  // Width of the pane being dragged, snapshotted at drag start; each drag
+  // event applies the pointer's total travel to this base.
+  const dragBaseWidthRef = useRef(0);
   const [autoStopAfterCall, setAutoStopAfterCall] = useState(false);
   const loadingFallbackRef = useRef<number | null>(null);
   const callLifecycleRef = useRef({
@@ -306,6 +393,47 @@ function App() {
       // A blocked localStorage should not make the application unusable.
     }
   }, [sidebarCollapsed]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(SIDEBAR_WIDTH.key, String(sidebarWidth));
+      window.localStorage.setItem(ASK_CALL_WIDTH.key, String(askCallWidth));
+    } catch {
+      // Same tolerance as the collapsed flag above.
+    }
+  }, [sidebarWidth, askCallWidth]);
+
+  // The note pane's MAIN_PANE_MIN invariant must hold through window
+  // resizes, restored widths and pane toggles -- not just drags (owner
+  // request: the toolbar must never crumple, however the user resizes).
+  // The drawer, the secondary pane, gives way first; then the sidebar. At
+  // the window's own minWidth (800, tauri.conf.json) the invariant is
+  // exactly satisfiable with both panes at their minimums. The setters
+  // bail out on unchanged values, so this effect (which depends on what it
+  // sets) settles instead of looping.
+  const drawerVisible = askCallOpen && selectedPath !== null && !askNotesOpen;
+  useEffect(() => {
+    function reclamp() {
+      const available = window.innerWidth - MAIN_PANE_MIN;
+      let drawer = askCallWidth;
+      if (drawerVisible) {
+        drawer = clampPaneWidth(
+          ASK_CALL_WIDTH,
+          askCallWidth,
+          available - (sidebarCollapsed ? 0 : sidebarWidth),
+        );
+        setAskCallWidth(drawer);
+      }
+      if (!sidebarCollapsed) {
+        setSidebarWidth(
+          clampPaneWidth(SIDEBAR_WIDTH, sidebarWidth, available - (drawerVisible ? drawer : 0)),
+        );
+      }
+    }
+    reclamp();
+    window.addEventListener("resize", reclamp);
+    return () => window.removeEventListener("resize", reclamp);
+  }, [sidebarCollapsed, sidebarWidth, drawerVisible, askCallWidth]);
 
   // The floating banner window (stage 1.1) owns rendering call
   // suggestions; its clicks forward here so recording keeps its single
@@ -891,16 +1019,20 @@ function App() {
     openSettings: () => {},
     openSearch: () => {},
     openTranscriptFind: () => {},
+    toggleAskNotes: () => {},
+    toggleAskCall: () => {},
   });
   useEffect(() => {
     shortcutsRef.current = {
       newNote: () => {
         if (!appConfig?.onboarding_complete) return;
+        setAskNotesOpen(false);
         void handleNewSession();
       },
       startRecording: () => {
         // Same gating as the Record button and the EmptyState row.
         if (!appConfig?.onboarding_complete || busy || sessionActive || !modelReady) return;
+        setAskNotesOpen(false);
         void handleStart();
       },
       openSettings: () => setSettingsOpen(true),
@@ -910,7 +1042,7 @@ function App() {
       openTranscriptFind: () => {
         if (!appConfig?.onboarding_complete) return;
         if (settingsOpen) return;
-        if (selectedPath === null) {
+        if (selectedPath === null || askNotesOpen) {
           setSearchOpen(true);
           return;
         }
@@ -919,6 +1051,18 @@ function App() {
           path: selectedPath,
           query: "",
         });
+      },
+      // Ask your notes (⌘L): a toggle -- the selection stays put underneath
+      // and comes back on close.
+      toggleAskNotes: () => {
+        if (!appConfig?.onboarding_complete || settingsOpen) return;
+        setAskNotesOpen((open) => !open);
+      },
+      // Ask this call (⌘J): only meaningful with a note on screen.
+      toggleAskCall: () => {
+        if (!appConfig?.onboarding_complete || settingsOpen) return;
+        if (selectedPath === null || askNotesOpen) return;
+        setAskCallOpen((open) => !open);
       },
     };
   });
@@ -942,6 +1086,12 @@ function App() {
       } else if (key === "f" && !e.shiftKey) {
         e.preventDefault();
         shortcutsRef.current.openTranscriptFind();
+      } else if (key === "l" && !e.shiftKey) {
+        e.preventDefault();
+        shortcutsRef.current.toggleAskNotes();
+      } else if (key === "j" && !e.shiftKey) {
+        e.preventDefault();
+        shortcutsRef.current.toggleAskCall();
       } else if (key === "\\" && !e.shiftKey) {
         e.preventDefault();
         setSidebarCollapsed((collapsed) => !collapsed);
@@ -991,9 +1141,53 @@ function App() {
     }
   }
 
+  // Chat citation navigation (stage 4.2): opens the cited note and centers
+  // its transcript on the cited second. `contextPath` is the note a bare
+  // `↩ hh:mm:ss` chip refers to (the drawer's own note); the folder-wide
+  // surface never produces one. A cited file that isn't a known session
+  // (the folder can be an Obsidian vault with other Markdown) opens in the
+  // system editor instead.
+  function handleOpenCitation(source: ChatSource, contextPath: string | null) {
+    if (source.file === null) {
+      if (contextPath !== null && source.timestamp) {
+        setTranscriptJumpRequest({
+          id: ++transcriptJumpRequestIdRef.current,
+          path: contextPath,
+          timestamp: source.timestamp,
+        });
+      }
+      return;
+    }
+    const fileName = source.file;
+    const session = sessions.find((s) => s.path.endsWith(`/${fileName}`));
+    if (session) {
+      setAskNotesOpen(false);
+      setSelectedPath(session.path);
+      if (source.timestamp) {
+        setTranscriptJumpRequest({
+          id: ++transcriptJumpRequestIdRef.current,
+          path: session.path,
+          timestamp: source.timestamp,
+        });
+      }
+      return;
+    }
+    if (appConfig) {
+      void openPath(`${appConfig.output_dir}/${fileName}`);
+    }
+  }
+
+  // The ⌘K palette's bottom row: the typed query becomes a question on the
+  // Ask your notes surface, sent as soon as it mounts.
+  function handleAskAllNotes(question: string) {
+    setAskNotesOpen(true);
+    setAskNotesRequest({ id: ++askNotesRequestIdRef.current, question });
+  }
+
   async function handleNewSession() {
     if (!appConfig?.onboarding_complete || busy) return;
     setBusy(true);
+    setAskNotesOpen(false);
     try {
       const path = await createSession();
       await refreshSessions();
@@ -1027,7 +1221,7 @@ function App() {
   // The empty-state screen (nothing selected and not recording)
   // hides the topbar entirely. A lone Record button floating over the
   // shortcut menu reads as clutter, so its branch renders a bare drag strip.
-  const showTopbar = sessionActive || selectedPath !== null;
+  const showTopbar = sessionActive || selectedPath !== null || askNotesOpen;
   // Sidebar rows with machine work in flight, path -> the lowercase status
   // word shown under the title (design language: quiet mono status).
   // Enhance is written first so a same-path overlap shows the newer
@@ -1074,18 +1268,38 @@ function App() {
   return (
     <div className="flex h-screen bg-background text-foreground">
       {!sidebarCollapsed && <Sidebar
+        width={sidebarWidth}
         sessions={sessions}
         selectedPath={selectedPath}
         activePath={activePath}
         busyPaths={busyPaths}
         onSelect={(path) => {
+          setAskNotesOpen(false);
           setSelectedPath(path);
         }}
         onNewSession={handleNewSession}
         onCollapse={() => setSidebarCollapsed(true)}
         onOpenSearch={() => setSearchOpen(true)}
+        onOpenAsk={() => setAskNotesOpen(true)}
+        askActive={askNotesOpen}
         onDelete={handleDeleteSession}
       />}
+      {!sidebarCollapsed && (
+        <ResizeHandle
+          label="Resize sidebar"
+          onDragStart={() => { dragBaseWidthRef.current = sidebarWidth; }}
+          onDrag={(deltaX) =>
+            setSidebarWidth(
+              clampPaneWidth(
+                SIDEBAR_WIDTH,
+                dragBaseWidthRef.current + deltaX,
+                window.innerWidth - MAIN_PANE_MIN - (askCallOpen ? askCallWidth : 0),
+              ),
+            )
+          }
+          onReset={() => setSidebarWidth(SIDEBAR_WIDTH.default)}
+        />
+      )}
 
       <div className="relative flex min-w-0 flex-1 flex-col">
         {!showTopbar && !sidebarCollapsed && <div data-tauri-drag-region className="h-11 shrink-0" />}
@@ -1134,8 +1348,14 @@ function App() {
 
           {/* SessionView portals its Radix tab list here so the switcher is
               part of the 56 px toolbar while its context and mounted tab
-              contents remain owned by SessionView. */}
-          <div id="topbar-tabs-slot" className="flex min-w-0 flex-1 items-center overflow-hidden" />
+              contents remain owned by SessionView. The mask fades the right
+              edge instead of hard-clipping it: below MAIN_PANE_MIN (a window
+              at its minimum with both panes open) the tabs dissolve rather
+              than get cut mid-letter under Record. */}
+          <div
+            id="topbar-tabs-slot"
+            className="flex min-w-0 flex-1 items-center overflow-hidden [mask-image:linear-gradient(to_right,black_calc(100%-28px),transparent)]"
+          />
           <div
             id="topbar-transcript-find-slot"
             className="relative z-10 flex min-w-0 shrink-0 items-center"
@@ -1161,6 +1381,23 @@ function App() {
             onClick={sessionActive ? handleStop : () => void handleStart()}
           />}
 
+          {/* Ask this call (stage 4.2, design 8c): the drawer's visible
+              entry point, right of Record like the mockup; ⌘J is the
+              shortcut, not the only way in. Filled while the drawer is
+              open, mirroring the mockup's dark chat square. */}
+          {showTopbar && selectedPath !== null && !askNotesOpen && (
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label="Ask this call"
+              title="Ask this call (⌘J)"
+              className={askCallOpen ? "bg-foreground text-background hover:bg-foreground/90 hover:text-background" : undefined}
+              onClick={() => setAskCallOpen((open) => !open)}
+            >
+              <MessageCircleQuestion className="size-4" />
+            </Button>
+          )}
+
           {/* Global actions always live in overflow. Note-specific actions
               only appear while the selected note owns the main pane. */}
           {showTopbar && <DropdownMenu>
@@ -1170,7 +1407,7 @@ function App() {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
-              {selectedPath !== null && (
+              {selectedPath !== null && !askNotesOpen && (
                 <>
                   <DropdownMenuItem
                     disabled={
@@ -1235,6 +1472,15 @@ function App() {
           </div>
         )}
 
+        {askNotesOpen ? (
+          // Full-bleed on purpose: the surface owns its own insets so the
+          // footer input bar can run edge to edge (design 8b).
+          <AskNotesView
+            sessions={sessions}
+            askRequest={askNotesRequest}
+            onOpenCitation={(source) => handleOpenCitation(source, null)}
+          />
+        ) : (
         <div className="flex min-h-0 flex-1 flex-col px-8 pb-7 pt-1">
           {selectedPath === null ? (
             <EmptyState
@@ -1273,6 +1519,9 @@ function App() {
               }}
               transcriptFindRequest={
                 transcriptFindRequest?.path === selectedPath ? transcriptFindRequest : null
+              }
+              transcriptJumpRequest={
+                transcriptJumpRequest?.path === selectedPath ? transcriptJumpRequest : null
               }
             />
           ) : sessionDataError ? (
@@ -1317,10 +1566,46 @@ function App() {
               transcriptFindRequest={
                 transcriptFindRequest?.path === selectedPath ? transcriptFindRequest : null
               }
+              transcriptJumpRequest={
+                transcriptJumpRequest?.path === selectedPath ? transcriptJumpRequest : null
+              }
             />
           )}
         </div>
+        )}
       </div>
+
+      {/* Ask this call (stage 4.2): the drawer converses with the OPEN note,
+          recording or not; chat is CLI-only, so a mid-call ask never touches
+          the live pipeline. Hidden while Ask your notes owns the main pane. */}
+      {drawerVisible && selectedPath !== null && (
+        <>
+          <ResizeHandle
+            label="Resize Ask this call"
+            onDragStart={() => { dragBaseWidthRef.current = askCallWidth; }}
+            // The drawer sits on the RIGHT: dragging its left edge leftward
+            // (negative delta) makes it wider.
+            onDrag={(deltaX) =>
+              setAskCallWidth(
+                clampPaneWidth(
+                  ASK_CALL_WIDTH,
+                  dragBaseWidthRef.current - deltaX,
+                  window.innerWidth - MAIN_PANE_MIN - (sidebarCollapsed ? 0 : sidebarWidth),
+                ),
+              )
+            }
+            onReset={() => setAskCallWidth(ASK_CALL_WIDTH.default)}
+          />
+          <AskCallDrawer
+            width={askCallWidth}
+            path={selectedPath}
+            sessions={sessions}
+            recordingStartedAt={selectedPath === activePath ? recordingStartedAt : null}
+            onClose={() => setAskCallOpen(false)}
+            onOpenCitation={(source) => handleOpenCitation(source, selectedPath)}
+          />
+        </>
+      )}
 
       <SettingsDialog
         open={settingsOpen}
@@ -1332,6 +1617,7 @@ function App() {
         onOpenChange={setSearchOpen}
         sessions={sessions}
         onOpenSession={(path: string, spoken?: SpokenSearchTarget) => {
+          setAskNotesOpen(false);
           setSelectedPath(path);
           setTranscriptFindRequest({
             id: ++transcriptFindRequestIdRef.current,
@@ -1340,6 +1626,7 @@ function App() {
             timestamp: spoken?.timestamp,
           });
         }}
+        onAskAllNotes={handleAskAllNotes}
       />
     </div>
   );

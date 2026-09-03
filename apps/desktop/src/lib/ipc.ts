@@ -505,6 +505,84 @@ export function setEnhanceModel(provider: string, model: string): Promise<void> 
   return invoke("set_enhance_model", { provider, model });
 }
 
+/**
+ * Mirrors `chat::ChatSource` (apps/desktop/src-tauri/src/chat.rs): one
+ * evidence chip on an assistant message. `file` is the cited note's file
+ * name relative to the notes folder (`null` when the model cited the
+ * current call itself); `timestamp` is the supporting transcript second
+ * (`null` when the evidence wasn't a transcript line).
+ */
+export interface ChatSource {
+  file: string | null;
+  timestamp: string | null;
+}
+
+/** Mirrors `chat::ChatMessage`: one message of a conversation. */
+export interface ChatMessage {
+  role: "user" | "assistant";
+  text: string;
+  sources: ChatSource[];
+  followups: string[];
+  /** Provider/model label ("claude", "claude/opus"); `null` on user messages. */
+  label: string | null;
+  /**
+   * Display-only "asked at" string the UI passed with the question (the
+   * recording clock for a mid-call ask); `null` otherwise.
+   */
+  asked_at: string | null;
+}
+
+/** Mirrors `chat::ChatHistory`: a scope's messages plus its in-flight flag. */
+export interface ChatHistory {
+  messages: ChatMessage[];
+  running: boolean;
+}
+
+/**
+ * Mirrors `chat::ChatProgressPayload`, the `chat-progress` event payload:
+ * one ask's lifecycle for its scope (`"all"`, or the note's path). `running`
+ * fires once the ask claims the scope; exactly one terminal `done`/`error`
+ * follows. A cancelled ask terminates as `error` with the message
+ * "cancelled" -- the UI's cue for a quiet dismissal, not an error banner.
+ */
+export interface ChatProgress {
+  scope: string;
+  phase: "running" | "done" | "error";
+  message: string | null;
+}
+
+/**
+ * Asks one question in a conversation (stage 4.2). `path: null` asks the
+ * whole notes folder; `path: <a session's path>` asks that note, including
+ * the one being recorded right now (the backend snapshots its on-disk
+ * transcript per ask). Mirrors `chat::chat_ask`. The promise resolves once
+ * the answer is stored (or rejects with the failure); progress and the
+ * terminal phase also arrive as `chat-progress` events, and the updated
+ * conversation is fetched back with `chatHistory`.
+ */
+export function chatAsk(
+  path: string | null,
+  question: string,
+  askedAt?: string,
+): Promise<void> {
+  return invoke("chat_ask", { path, question, askedAt });
+}
+
+/** The scope's conversation so far, for seeding a freshly mounted view. */
+export function chatHistory(path: string | null): Promise<ChatHistory> {
+  return invoke("chat_history", { path });
+}
+
+/** Forgets the scope's conversation. Rejected while an ask is in flight. */
+export function chatClear(path: string | null): Promise<void> {
+  return invoke("chat_clear", { path });
+}
+
+/** Cancels the scope's in-flight ask, if any (kills the CLI subprocess). */
+export function chatCancel(path: string | null): Promise<void> {
+  return invoke("chat_cancel", { path });
+}
+
 /** Mirrors `sessions::SearchSnippet`: one matching line inside a SearchHit. */
 export interface SearchSnippet {
   /** Where the line came from, so the results pane can label it. */

@@ -129,6 +129,13 @@ interface SessionViewProps {
    */
   onRetranscribeEnd?: (path: string) => void;
   transcriptFindRequest?: TranscriptFindRequest | null;
+  /**
+   * Scroll-to-citation (stage 4.2): a chat source chip for THIS session was
+   * clicked. Switches to the transcript tab and centers the line nearest the
+   * cited timestamp (passed through to `TranscriptView`'s `jumpRequest`).
+   * Same monotonic-id recipe as `transcriptFindRequest`.
+   */
+  transcriptJumpRequest?: { id: number; timestamp: string } | null;
 }
 
 export interface TranscriptFindRequest {
@@ -231,6 +238,7 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
     onRetranscribeStart,
     onRetranscribeEnd,
     transcriptFindRequest,
+    transcriptJumpRequest = null,
   },
   ref
 ) {
@@ -661,6 +669,16 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
     );
   }, [findQuery, transcriptLines, transcriptMatches]);
 
+  // A citation jump must also surface the transcript tab: the chip lives in
+  // the chat drawer, but its target is a transcript line. The scroll itself
+  // happens inside TranscriptView (it owns the line refs).
+  const handledJumpTabRef = useRef(0);
+  useEffect(() => {
+    if (!transcriptJumpRequest || handledJumpTabRef.current === transcriptJumpRequest.id) return;
+    handledJumpTabRef.current = transcriptJumpRequest.id;
+    setActiveTab("transcript");
+  }, [transcriptJumpRequest]);
+
   function moveFind(direction: 1 | -1) {
     if (transcriptMatches.length === 0) return;
     setActiveFindIndex((current) =>
@@ -915,6 +933,13 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
             onSeek={audioPath ? handleSeek : undefined}
             matches={transcriptMatches}
             activeMatchIndex={findOpen ? activeFindIndex : -1}
+            // Withheld until the transcript tab is actually the visible one:
+            // the tab contents are force-mounted and CSS-hidden, and
+            // scrollIntoView inside a display:none container is a silent
+            // no-op -- the jump effect above switches the tab, and only the
+            // re-render that shows it may deliver the request (owner bug
+            // report: chip click opened the transcript but never scrolled).
+            jumpRequest={activeTab === "transcript" ? transcriptJumpRequest : null}
           />
 
           {retranscribeStatusText && (

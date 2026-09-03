@@ -77,6 +77,15 @@ fn default_enhance_provider() -> String {
     "local".to_string()
 }
 
+/// Chat (stage 4.2) runs only through the cloud CLIs: the embedded local
+/// model cannot search the folder agentically and would compete with live
+/// ASR for the GPU on a mid-call ask.
+pub const VALID_CHAT_PROVIDERS: &[&str] = &["claude", "codex"];
+
+fn default_chat_provider() -> String {
+    "claude".to_string()
+}
+
 /// Call detection only suggests recording and therefore defaults on.
 fn default_detect_calls() -> bool {
     true
@@ -149,6 +158,15 @@ pub struct Config {
     /// calls. Off by default -- turning it on widens what the cloud CLI is
     /// permitted to do, so it must be an explicit choice.
     pub enhance_use_calendar: bool,
+    /// Which cloud CLI answers Ask your notes / Ask this call (stage 4.2).
+    /// Deliberately separate from `enhance_provider`: summaries may stay
+    /// local while chat, which requires a CLI, has its own choice. See
+    /// [`VALID_CHAT_PROVIDERS`].
+    pub chat_provider: String,
+    /// Chat's model override, free-form like `enhance_models` values; empty
+    /// means the CLI's own default. A single field, not a per-provider map:
+    /// the chat provider is one setting, and switching it is rare.
+    pub chat_model: String,
     /// Whether mic activity from known calling apps may surface a recording
     /// suggestion. Detection never starts capture itself.
     pub detect_calls: bool,
@@ -178,6 +196,8 @@ impl Default for Config {
             auto_enhance: false,
             enhance_rename_title: false,
             enhance_use_calendar: false,
+            chat_provider: default_chat_provider(),
+            chat_model: String::new(),
             detect_calls: default_detect_calls(),
             auto_stop_after_call: default_auto_stop_after_call(),
         }
@@ -295,6 +315,28 @@ pub fn set_enhance_model(provider: String, model: String) -> Result<(), String> 
     } else {
         cfg.enhance_models.insert(provider, model);
     }
+    cfg.save().map_err(|e| e.to_string())
+}
+
+/// Sets and persists which cloud CLI answers chat questions (stage 4.2).
+/// Validates against [`VALID_CHAT_PROVIDERS`]; "local" is not an option here
+/// by design (see the constant's doc comment).
+#[tauri::command]
+pub fn set_chat_provider(provider: String) -> Result<(), String> {
+    if !VALID_CHAT_PROVIDERS.contains(&provider.as_str()) {
+        return Err(format!("unknown chat provider: {provider}"));
+    }
+    let mut cfg = Config::load_for_update().map_err(|e| e.to_string())?;
+    cfg.chat_provider = provider;
+    cfg.save().map_err(|e| e.to_string())
+}
+
+/// Sets and persists chat's model override (stage 4.2). An empty/whitespace
+/// `model` clears it back to the CLI's own default.
+#[tauri::command]
+pub fn set_chat_model(model: String) -> Result<(), String> {
+    let mut cfg = Config::load_for_update().map_err(|e| e.to_string())?;
+    cfg.chat_model = model.trim().to_string();
     cfg.save().map_err(|e| e.to_string())
 }
 
@@ -518,6 +560,8 @@ mod tests {
             auto_enhance: true,
             enhance_rename_title: true,
             enhance_use_calendar: true,
+            chat_provider: "codex".to_string(),
+            chat_model: "gpt-5".to_string(),
             detect_calls: false,
             auto_stop_after_call: true,
         };
@@ -545,6 +589,14 @@ mod tests {
     #[test]
     fn summaries_default_to_the_private_local_provider() {
         assert_eq!(Config::default().enhance_provider, "local");
+    }
+
+    #[test]
+    fn chat_defaults_to_claude_with_the_cli_default_model() {
+        assert_eq!(Config::default().chat_provider, "claude");
+        assert_eq!(Config::default().chat_model, "");
+        // Chat can never run locally: the valid set is CLI-only by design.
+        assert!(!VALID_CHAT_PROVIDERS.contains(&"local"));
     }
 
     #[test]

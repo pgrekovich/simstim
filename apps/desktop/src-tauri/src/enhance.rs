@@ -147,7 +147,7 @@ fn emit_progress<R: tauri::Runtime>(
 /// Resolves `binary` to an executable path. A bundled GUI app launches with
 /// a minimal PATH (no /opt/homebrew/bin), so well-known install dirs are
 /// checked explicitly before falling back to whatever PATH has.
-fn resolve_binary(binary: &str) -> Option<PathBuf> {
+pub(crate) fn resolve_binary(binary: &str) -> Option<PathBuf> {
     let mut candidates: Vec<PathBuf> = vec![
         PathBuf::from("/opt/homebrew/bin").join(binary),
         PathBuf::from("/usr/local/bin").join(binary),

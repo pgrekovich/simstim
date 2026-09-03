@@ -151,3 +151,77 @@ describe("GlobalSearch", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("folder unavailable");
   });
 });
+
+describe("GlobalSearch: ask across all notes (stage 4.2)", () => {
+  it("offers the ask row only with a query, and hands the question over", async () => {
+    const onAskAllNotes = vi.fn();
+    const onOpenChange = vi.fn();
+    render(
+      <GlobalSearch
+        open
+        onOpenChange={onOpenChange}
+        sessions={sessions}
+        onOpenSession={vi.fn()}
+        onAskAllNotes={onAskAllNotes}
+      />,
+    );
+
+    // Blank query: recent notes only, no ask row.
+    expect(screen.queryByRole("option", { name: /ask across all notes/i })).toBeNull();
+
+    fireEvent.change(screen.getByRole("searchbox", { name: /search all notes/i }), {
+      target: { value: "berlin rollout" },
+    });
+    fireEvent.click(await screen.findByRole("option", { name: /ask across all notes/i }));
+    expect(onAskAllNotes).toHaveBeenCalledExactlyOnceWith("berlin rollout");
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it("asks with ⌘Enter regardless of the active row", async () => {
+    const onAskAllNotes = vi.fn();
+    render(
+      <GlobalSearch
+        open
+        onOpenChange={vi.fn()}
+        sessions={sessions}
+        onOpenSession={vi.fn()}
+        onAskAllNotes={onAskAllNotes}
+      />,
+    );
+
+    const input = screen.getByRole("searchbox", { name: /search all notes/i });
+    fireEvent.change(input, { target: { value: "berlin" } });
+    await screen.findByRole("option", { name: /ask across all notes/i });
+    fireEvent.keyDown(input, { key: "Enter", metaKey: true });
+    expect(onAskAllNotes).toHaveBeenCalledExactlyOnceWith("berlin");
+  });
+
+  it("keeps plain Enter on results and reaches the ask row by arrows", async () => {
+    const onAskAllNotes = vi.fn();
+    const onOpenSession = vi.fn();
+    render(
+      <GlobalSearch
+        open
+        onOpenChange={vi.fn()}
+        sessions={sessions}
+        onOpenSession={onOpenSession}
+        onAskAllNotes={onAskAllNotes}
+      />,
+    );
+
+    const input = screen.getByRole("searchbox", { name: /search all notes/i });
+    fireEvent.change(input, { target: { value: "budget" } });
+    // The ask row renders instantly; the RESULT rows land only once the
+    // debounced search resolves, so wait for one before pressing Enter.
+    await screen.findByRole("option", { name: /about the budget/i });
+
+    // Arrow past the two result rows (one note, one spoken) to the ask row.
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onAskAllNotes).toHaveBeenCalledExactlyOnceWith("budget");
+    // Plain Enter on a result row stays navigation (the test above); it
+    // never fell through to ask here.
+    expect(onOpenSession).not.toHaveBeenCalled();
+  });
+});

@@ -266,3 +266,40 @@ describe("Sidebar: global search", () => {
     expect(onOpenSearch).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("Sidebar: ask your notes (stage 4.2)", () => {
+  it("renders the pinned ask row above the list and opens the surface", () => {
+    const onOpenAsk = vi.fn();
+    render(
+      <Sidebar
+        sessions={makeSessions()}
+        selectedPath={null}
+        activePath={null}
+        onSelect={vi.fn()}
+        onNewSession={vi.fn()}
+        onOpenAsk={onOpenAsk}
+        onDelete={vi.fn()}
+      />
+    );
+
+    const row = screen.getByRole("button", { name: /ask your notes/i });
+    expect(row).toHaveTextContent("⌘L");
+    row.click();
+    expect(onOpenAsk).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders no ask row when the surface isn't wired up", () => {
+    render(
+      <Sidebar
+        sessions={makeSessions()}
+        selectedPath={null}
+        activePath={null}
+        onSelect={vi.fn()}
+        onNewSession={vi.fn()}
+        onDelete={vi.fn()}
+      />
+    );
+
+    expect(screen.queryByRole("button", { name: /ask your notes/i })).toBeNull();
+  });
+});

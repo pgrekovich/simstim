@@ -1,4 +1,4 @@
-import { PanelLeftClose, Search, SquarePen, Trash2 } from "lucide-react";
+import { MessageCircleQuestion, PanelLeftClose, Search, SquarePen, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { SessionMeta } from "@/lib/ipc";
@@ -22,6 +22,10 @@ interface SidebarProps {
   onCollapse?: () => void;
   /** Opens the global search palette. */
   onOpenSearch?: () => void;
+  /** Opens the Ask your notes surface (stage 4.2); the pinned row above the list. */
+  onOpenAsk?: () => void;
+  /** Whether the Ask your notes surface currently owns the main pane. */
+  askActive?: boolean;
   /** Row-hover trash button; App owns the confirm dialog and the IPC call. */
   onDelete: (path: string) => void;
 }
@@ -94,6 +98,8 @@ export function Sidebar({
   onNewSession,
   onCollapse,
   onOpenSearch = () => {},
+  onOpenAsk,
+  askActive = false,
   onDelete,
 }: SidebarProps) {
   const groups = groupSessions(sessions);
@@ -138,6 +144,27 @@ export function Sidebar({
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
+        {onOpenAsk && (
+          <button
+            type="button"
+            onClick={onOpenAsk}
+            className={cn(
+              "mt-1.5 flex h-[30px] w-full items-center gap-2 rounded-[7px] border px-2.5 text-left",
+              askActive
+                ? "border-[var(--voice-remote)]/55 bg-background text-foreground shadow-[0_1px_2px_rgb(30_27_22/0.06)]"
+                : "border-foreground/[0.11] bg-background text-quiet-foreground hover:border-foreground/[0.2] hover:bg-card hover:text-foreground active:bg-foreground/[0.06]",
+            )}
+          >
+            <MessageCircleQuestion
+              aria-hidden="true"
+              className="size-[14px] shrink-0 text-[var(--voice-remote)]"
+            />
+            <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium">Ask your notes</span>
+            <span className="inline-flex h-[17px] shrink-0 items-center rounded-[4px] bg-foreground/[0.07] px-[5px] font-mono text-[10.5px] text-quiet-foreground">
+              ⌘L
+            </span>
+          </button>
+        )}
         {sessions.length === 0 ? (
           <p className="px-2 py-4 text-center text-xs text-muted-foreground">
             no sessions yet

@@ -24,6 +24,9 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { RecordButton } from "@/components/RecordButton";
 import { EmptyState } from "@/components/EmptyState";
+import { AskCallDrawer } from "@/components/AskCallDrawer";
+import { AskNotesView } from "@/components/AskNotesView";
+import { type ChatAskRequest } from "@/components/Chat";
 import { GlobalSearch, type SpokenSearchTarget } from "@/components/GlobalSearch";
 import {
   SessionView,
@@ -46,6 +49,7 @@ import {
   type AppConfig,
   type CallDetectedPayload,
   type CallEndedPayload,
+  type ChatSource,
   type EnhanceProgress,
   type ModelInfo,
   type RetranscribeProgress,
@@ -129,6 +133,20 @@ function App() {
   const [busy, setBusy] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
+  // Ask your notes (stage 4.2): when open, the folder-wide chat owns the
+  // main pane (the selection stays put underneath and comes back on close).
+  const [askNotesOpen, setAskNotesOpen] = useState(false);
+  // A question handed to Ask your notes from the ⌘K palette's bottom row.
+  const [askNotesRequest, setAskNotesRequest] = useState<ChatAskRequest | null>(null);
+  const askNotesRequestIdRef = useRef(0);
+  // Ask this call (stage 4.2): the right-hand drawer over the open note.
+  const [askCallOpen, setAskCallOpen] = useState(false);
+  // A clicked citation chip's jump target, keyed by path so it only reaches
+  // the SessionView for that note (same recipe as transcriptFindRequest).
+  const [transcriptJumpRequest, setTranscriptJumpRequest] = useState<
+    { id: number; timestamp: string; path: string } | null
+  >(null);
+  const transcriptJumpRequestIdRef = useRef(0);
   const [transcriptFindRequest, setTranscriptFindRequest] = useState<
     (TranscriptFindRequest & { path: string }) | null
   >(null);
@@ -891,16 +909,20 @@ function App() {
     openSettings: () => {},
     openSearch: () => {},
     openTranscriptFind: () => {},
+    toggleAskNotes: () => {},
+    toggleAskCall: () => {},
   });
   useEffect(() => {
     shortcutsRef.current = {
       newNote: () => {
         if (!appConfig?.onboarding_complete) return;
+        setAskNotesOpen(false);
         void handleNewSession();
       },
       startRecording: () => {
         // Same gating as the Record button and the EmptyState row.
         if (!appConfig?.onboarding_complete || busy || sessionActive || !modelReady) return;
+        setAskNotesOpen(false);
         void handleStart();
       },
       openSettings: () => setSettingsOpen(true),
@@ -910,7 +932,7 @@ function App() {
       openTranscriptFind: () => {
         if (!appConfig?.onboarding_complete) return;
         if (settingsOpen) return;
-        if (selectedPath === null) {
+        if (selectedPath === null || askNotesOpen) {
           setSearchOpen(true);
           return;
         }
@@ -919,6 +941,18 @@ function App() {
           path: selectedPath,
           query: "",
         });
+      },
+      // Ask your notes (⌘L): a toggle -- the selection stays put underneath
+      // and comes back on close.
+      toggleAskNotes: () => {
+        if (!appConfig?.onboarding_complete || settingsOpen) return;
+        setAskNotesOpen((open) => !open);
+      },
+      // Ask this call (⌘J): only meaningful with a note on screen.
+      toggleAskCall: () => {
+        if (!appConfig?.onboarding_complete || settingsOpen) return;
+        if (selectedPath === null || askNotesOpen) return;
+        setAskCallOpen((open) => !open);
       },
     };
   });
@@ -942,6 +976,12 @@ function App() {
       } else if (key === "f" && !e.shiftKey) {
         e.preventDefault();
         shortcutsRef.current.openTranscriptFind();
+      } else if (key === "l" && !e.shiftKey) {
+        e.preventDefault();
+        shortcutsRef.current.toggleAskNotes();
+      } else if (key === "j" && !e.shiftKey) {
+        e.preventDefault();
+        shortcutsRef.current.toggleAskCall();
       } else if (key === "\\" && !e.shiftKey) {
         e.preventDefault();
         setSidebarCollapsed((collapsed) => !collapsed);
@@ -991,9 +1031,53 @@ function App() {
     }
   }
 
+  // Chat citation navigation (stage 4.2): opens the cited note and centers
+  // its transcript on the cited second. `contextPath` is the note a bare
+  // `↩ hh:mm:ss` chip refers to (the drawer's own note); the folder-wide
+  // surface never produces one. A cited file that isn't a known session
+  // (the folder can be an Obsidian vault with other Markdown) opens in the
+  // system editor instead.
+  function handleOpenCitation(source: ChatSource, contextPath: string | null) {
+    if (source.file === null) {
+      if (contextPath !== null && source.timestamp) {
+        setTranscriptJumpRequest({
+          id: ++transcriptJumpRequestIdRef.current,
+          path: contextPath,
+          timestamp: source.timestamp,
+        });
+      }
+      return;
+    }
+    const fileName = source.file;
+    const session = sessions.find((s) => s.path.endsWith(`/${fileName}`));
+    if (session) {
+      setAskNotesOpen(false);
+      setSelectedPath(session.path);
+      if (source.timestamp) {
+        setTranscriptJumpRequest({
+          id: ++transcriptJumpRequestIdRef.current,
+          path: session.path,
+          timestamp: source.timestamp,
+        });
+      }
+      return;
+    }
+    if (appConfig) {
+      void openPath(`${appConfig.output_dir}/${fileName}`);
+    }
+  }
+
+  // The ⌘K palette's bottom row: the typed query becomes a question on the
+  // Ask your notes surface, sent as soon as it mounts.
+  function handleAskAllNotes(question: string) {
+    setAskNotesOpen(true);
+    setAskNotesRequest({ id: ++askNotesRequestIdRef.current, question });
+  }
+
   async function handleNewSession() {
     if (!appConfig?.onboarding_complete || busy) return;
     setBusy(true);
+    setAskNotesOpen(false);
     try {
       const path = await createSession();
       await refreshSessions();
@@ -1027,7 +1111,7 @@ function App() {
   // The empty-state screen (nothing selected and not recording)
   // hides the topbar entirely. A lone Record button floating over the
   // shortcut menu reads as clutter, so its branch renders a bare drag strip.
-  const showTopbar = sessionActive || selectedPath !== null;
+  const showTopbar = sessionActive || selectedPath !== null || askNotesOpen;
   // Sidebar rows with machine work in flight, path -> the lowercase status
   // word shown under the title (design language: quiet mono status).
   // Enhance is written first so a same-path overlap shows the newer
@@ -1079,11 +1163,14 @@ function App() {
         activePath={activePath}
         busyPaths={busyPaths}
         onSelect={(path) => {
+          setAskNotesOpen(false);
           setSelectedPath(path);
         }}
         onNewSession={handleNewSession}
         onCollapse={() => setSidebarCollapsed(true)}
         onOpenSearch={() => setSearchOpen(true)}
+        onOpenAsk={() => setAskNotesOpen(true)}
+        askActive={askNotesOpen}
         onDelete={handleDeleteSession}
       />}
 
@@ -1170,7 +1257,7 @@ function App() {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
-              {selectedPath !== null && (
+              {selectedPath !== null && !askNotesOpen && (
                 <>
                   <DropdownMenuItem
                     disabled={
@@ -1235,6 +1322,15 @@ function App() {
           </div>
         )}
 
+        {askNotesOpen ? (
+          // Full-bleed on purpose: the surface owns its own insets so the
+          // footer input bar can run edge to edge (design 8b).
+          <AskNotesView
+            sessions={sessions}
+            askRequest={askNotesRequest}
+            onOpenCitation={(source) => handleOpenCitation(source, null)}
+          />
+        ) : (
         <div className="flex min-h-0 flex-1 flex-col px-8 pb-7 pt-1">
           {selectedPath === null ? (
             <EmptyState
@@ -1273,6 +1369,9 @@ function App() {
               }}
               transcriptFindRequest={
                 transcriptFindRequest?.path === selectedPath ? transcriptFindRequest : null
+              }
+              transcriptJumpRequest={
+                transcriptJumpRequest?.path === selectedPath ? transcriptJumpRequest : null
               }
             />
           ) : sessionDataError ? (
@@ -1317,10 +1416,27 @@ function App() {
               transcriptFindRequest={
                 transcriptFindRequest?.path === selectedPath ? transcriptFindRequest : null
               }
+              transcriptJumpRequest={
+                transcriptJumpRequest?.path === selectedPath ? transcriptJumpRequest : null
+              }
             />
           )}
         </div>
+        )}
       </div>
+
+      {/* Ask this call (stage 4.2): the drawer converses with the OPEN note,
+          recording or not; chat is CLI-only, so a mid-call ask never touches
+          the live pipeline. Hidden while Ask your notes owns the main pane. */}
+      {askCallOpen && selectedPath !== null && !askNotesOpen && (
+        <AskCallDrawer
+          path={selectedPath}
+          sessions={sessions}
+          recordingStartedAt={selectedPath === activePath ? recordingStartedAt : null}
+          onClose={() => setAskCallOpen(false)}
+          onOpenCitation={(source) => handleOpenCitation(source, selectedPath)}
+        />
+      )}
 
       <SettingsDialog
         open={settingsOpen}
@@ -1332,6 +1448,7 @@ function App() {
         onOpenChange={setSearchOpen}
         sessions={sessions}
         onOpenSession={(path: string, spoken?: SpokenSearchTarget) => {
+          setAskNotesOpen(false);
           setSelectedPath(path);
           setTranscriptFindRequest({
             id: ++transcriptFindRequestIdRef.current,
@@ -1340,6 +1457,7 @@ function App() {
             timestamp: spoken?.timestamp,
           });
         }}
+        onAskAllNotes={handleAskAllNotes}
       />
     </div>
   );

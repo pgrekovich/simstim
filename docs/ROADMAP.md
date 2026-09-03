@@ -56,5 +56,6 @@ window is active, so browser and system shortcuts remain untouched.
 ## Non-goals
 
 Accounts, hosted sync, telemetry, upsell, sharing infrastructure, mobile/watch
-apps and SQLite as a source of truth. Chat across notes remains blocked on an
-explicit product decision; it must not sneak in as incidental roadmap work.
+apps and SQLite as a source of truth. Chat across notes was unblocked by an
+explicit owner decision on 2026-09-03 (stage 4.2 in the main spec): CLI-only,
+read-only agentic search over the files, no index, ephemeral conversations.

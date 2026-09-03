@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { findTranscriptMatches, TranscriptView } from "@/components/TranscriptView";
+import { findTranscriptMatches, nearestLineIndex, TranscriptView } from "@/components/TranscriptView";
 
 describe("TranscriptView: transcript find (stage 2.1)", () => {
   it("finds every case-insensitive occurrence in finalized spoken text", () => {
@@ -151,5 +151,36 @@ describe("TranscriptView: click-to-seek (Task 4, stage-0.7)", () => {
     fireEvent.click(screen.getByRole("button", { name: /long call/i }));
 
     expect(onSeek).toHaveBeenCalledWith(1 * 3600 + 2 * 60 + 3);
+  });
+});
+
+describe("TranscriptView: citation jump (stage 4.2)", () => {
+  const lines = [
+    "[00:00:05] Me: opening",
+    "[00:10:00] Them: berlin stays on hold",
+    "[00:20:00] Me: closing",
+  ];
+
+  it("picks the line nearest the cited timestamp", () => {
+    expect(nearestLineIndex(lines, "00:10:00")).toBe(1);
+    // Not an exact line (a re-transcribe shifted timestamps): nearest wins.
+    expect(nearestLineIndex(lines, "00:11:30")).toBe(1);
+    expect(nearestLineIndex(lines, "00:19:00")).toBe(2);
+    expect(nearestLineIndex(["no timestamps here"], "00:00:01")).toBe(-1);
+  });
+
+  it("centers the cited line when a jump request arrives", () => {
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+    const { rerender } = render(<TranscriptView lines={lines} jumpRequest={null} />);
+    expect(scrollIntoView).not.toHaveBeenCalled();
+
+    rerender(<TranscriptView lines={lines} jumpRequest={{ id: 1, timestamp: "00:10:00" }} />);
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: "center" });
+
+    // The same request id never re-fires on unrelated re-renders.
+    scrollIntoView.mockClear();
+    rerender(<TranscriptView lines={lines} jumpRequest={{ id: 1, timestamp: "00:10:00" }} />);
+    expect(scrollIntoView).not.toHaveBeenCalled();
   });
 });

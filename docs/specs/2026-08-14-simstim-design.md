@@ -557,6 +557,86 @@ paths, de-duplicated provider version) and the Summarizing indicator moving
 from a toolbar chip (it clipped against the find slot) onto the Summary tab
 itself as a spinner, with step detail in the tooltip.
 
+## Stage 4.2: ask your notes (approved 2026-09-03)
+
+The two chat surfaces from the design (artboards 8b and 8c): **Ask your
+notes**, a full-pane conversation over the whole notes folder, and **Ask this
+call**, a right-hand drawer over the open note that also works live, mid-call.
+This is the owner's explicit product decision that unblocks the former
+"knowledge interaction" stage; `docs/ROADMAP.md`'s non-goal line is resolved
+by this section.
+
+Decisions locked with the owner's approval of the design:
+
+- **Two surfaces, both from the mockups.** Ask your notes: a pinned sidebar
+  row above the session list, `⌘L`, opens a full-pane conversation headed by
+  a "N notes · X h" badge (from `storage_stats`). Ask this call: `⌘J`, a
+  300 px drawer to the right of the open note, available for past notes and
+  during a live recording. The `⌘K` search palette gets the mockup's last
+  row - "Ask across all notes: <query>" (`⌘↵`) - which hands the typed query
+  to the Ask your notes surface as a question.
+- **Cloud CLIs only, chat's own provider setting.** Chat runs through the
+  user's own `claude` or `codex` CLI (`chat_provider`, default `claude`,
+  plus a `chat_model` override) - the same binaries, subprocess hygiene and
+  timeout discipline as enhance. The embedded local model is deliberately
+  excluded: it cannot search the folder agentically, its quality is below
+  the bar for cross-note answers, and mid-call it would compete with live
+  ASR for the GPU (the research ruling that already gates local enhance).
+  Because chat is CLI-only, asking mid-call never touches the live pipeline.
+- **Agentic search, no index.** Ask your notes gives the CLI read-only
+  access to the notes folder and lets it grep/read its way to an answer:
+  `claude -p` runs in a fresh empty temp dir with `--add-dir <notes folder>`
+  and only `Read`, `Grep` and `Glob` allowed; `codex exec` runs in the
+  notes folder under its own read-only sandbox. Files are read directly on
+  every ask - no derived index, no cache, nothing to invalidate (rule 1).
+  Ask this call inlines the note's title, user notes and raw timestamped
+  transcript into the prompt, and still grants the same read-only folder
+  access so answers can pull background from other notes (the mockup's
+  "FROM YOUR OTHER NOTES" block).
+- **Mid-call snapshots come from the file.** Each ask reads the live note
+  from disk - transcript lines are already flushed as they finalize
+  (crash-safe by construction), and reading never violates the
+  single-writer rule. The freshest interim (not-yet-final) line is the only
+  thing an answer can miss.
+- **Stateless per ask.** Every question spawns one fresh CLI run: the prompt
+  carries the context plus a bounded replay of the conversation so far
+  (rather than CLI session resume). Robust by construction against a
+  re-transcribe replacing the transcript between asks, a provider switch
+  mid-conversation, and CLI session-storage quirks; follow-ups re-search
+  the folder and therefore always see the newest notes. CLI `--resume` is
+  the recorded optimization if follow-up latency ever bothers the owner.
+- **Citations are part of the reply contract.** The prompt demands trailing
+  line-oriented `SOURCE: <file> @ <hh:mm:ss>` lines (bare `SOURCE: <hh:mm:ss>`
+  for the current call) and up to two `FOLLOWUP: <question>` lines; the app
+  peels them off the answer (same pattern as enhance's `TITLE:` line).
+  Sources render as chips: clicking one opens that note and jumps to the
+  cited transcript second through the existing transcript-find mechanism;
+  followups render as the mockup's suggestion chips and send on click.
+- **Chat is ephemeral and never written to disk.** Conversations live in
+  backend memory per scope ("all notes", or one note's path) and die with
+  the app. Generated chat text is regenerable and is NOT part of the user's
+  notes; nothing chat-related ever lands in the `.md` files (rule 6), and
+  no new store appears (rule 1).
+- **Concurrency and cancellation.** One in-flight ask per scope, different
+  scopes may run concurrently, and chat is independent of the enhance slot
+  (both are subprocess-only). A running ask can be cancelled (the subprocess
+  is killed); a hung provider dies at the timeout like enhance.
+- **Privacy contract, stated in the UI.** Text-only, BYO CLI, and only ever
+  on an explicit question. The Ask your notes footer says plainly that the
+  question plus whatever notes the CLI reads go to the chosen provider.
+  Prompt-injection through transcript content is bounded by the read-only
+  tool allowlist: the CLI can read notes, never write or run anything.
+
+Out of scope, recorded for later: token streaming of answers, CLI session
+resume, persisting conversations, chat through the local model, and any
+pre-built search index.
+
+Status (2026-09-03): implemented on `stage-4.2`. All four gates green; the
+real-CLI manual e2e (`chat_manual_e2e_all_notes`) answers with an exact
+file-and-second citation and parsed followups; both surfaces, the ⌘K
+handoff, citation jumps and the Settings group verified visually in a
+browser (light and dark). Awaiting owner e2e.
+
 ## Milestones after MVP-0
 
 1. Audio file kept next to the .md; re-transcribe command (whisper turbo).

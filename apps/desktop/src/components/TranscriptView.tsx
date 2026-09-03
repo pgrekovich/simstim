@@ -146,6 +146,34 @@ interface TranscriptViewProps {
   onSeek?: (offsetSecs: number) => void;
   matches?: TranscriptMatch[];
   activeMatchIndex?: number;
+  /**
+   * Scroll-to-citation (stage 4.2): centers the transcript on the line
+   * nearest `timestamp` when `id` changes (the same monotonic-id recipe as
+   * `TranscriptFindRequest`). Nearest, not exact: a chat citation's second
+   * usually names a real line, but a re-transcribe between the answer and
+   * the click can shift timestamps slightly.
+   */
+  jumpRequest?: { id: number; timestamp: string } | null;
+}
+
+/**
+ * The index of the parseable line whose timestamp is nearest to `timestamp`
+ * (ties go to the earlier line), or -1 when no line parses at all.
+ */
+export function nearestLineIndex(lines: string[], timestamp: string): number {
+  const target = timestampToSeconds(timestamp);
+  let best = -1;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  lines.forEach((raw, index) => {
+    const parsed = parseLine(raw);
+    if (!parsed.timestamp) return;
+    const distance = Math.abs(timestampToSeconds(parsed.timestamp) - target);
+    if (distance < bestDistance) {
+      best = index;
+      bestDistance = distance;
+    }
+  });
+  return best;
 }
 
 export function TranscriptView({
@@ -155,6 +183,7 @@ export function TranscriptView({
   onSeek,
   matches = [],
   activeMatchIndex = -1,
+  jumpRequest = null,
 }: TranscriptViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const lineRefs = useRef<Array<HTMLElement | null>>([]);
@@ -186,6 +215,19 @@ export function TranscriptView({
       line.scrollIntoView({ block: "center" });
     }
   }, [activeMatchIndex, matches]);
+
+  const handledJumpRef = useRef(0);
+  useEffect(() => {
+    if (!jumpRequest || handledJumpRef.current === jumpRequest.id) return;
+    handledJumpRef.current = jumpRequest.id;
+    const index = nearestLineIndex(lines, jumpRequest.timestamp);
+    if (index === -1) return;
+    wasAtBottomRef.current = false;
+    const line = lineRefs.current[index];
+    if (line && typeof line.scrollIntoView === "function") {
+      line.scrollIntoView({ block: "center" });
+    }
+  }, [jumpRequest, lines]);
 
   return (
     <Card className="min-h-0 flex-1 flex-col overflow-hidden border-0 bg-transparent p-0 shadow-none">

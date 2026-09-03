@@ -31,6 +31,8 @@ vi.mock("@/lib/ipc", () => ({
     auto_enhance: false,
     enhance_rename_title: false,
     enhance_use_calendar: false,
+    chat_provider: "claude",
+    chat_model: "",
     detect_calls: true,
     auto_stop_after_call: false,
   }),
@@ -152,6 +154,8 @@ beforeEach(() => {
     auto_enhance: false,
     enhance_rename_title: false,
     enhance_use_calendar: false,
+    chat_provider: "claude",
+    chat_model: "",
     detect_calls: true,
     auto_stop_after_call: false,
   });
@@ -300,6 +304,8 @@ describe("App: call detection via the banner window (stage 1.1)", () => {
     auto_enhance: false,
     enhance_rename_title: false,
     enhance_use_calendar: false,
+    chat_provider: "claude",
+    chat_model: "",
       detect_calls: true,
       auto_stop_after_call: true,
     });
@@ -333,6 +339,8 @@ describe("App: call detection via the banner window (stage 1.1)", () => {
     auto_enhance: false,
     enhance_rename_title: false,
     enhance_use_calendar: false,
+    chat_provider: "claude",
+    chat_model: "",
       detect_calls: true,
       auto_stop_after_call: true,
     });

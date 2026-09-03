@@ -62,6 +62,8 @@ const baseConfig: AppConfig = {
   auto_enhance: false,
   enhance_rename_title: false,
   enhance_use_calendar: false,
+  chat_provider: "claude",
+  chat_model: "",
   detect_calls: true,
   auto_stop_after_call: false,
 };

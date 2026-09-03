@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import { CornerDownLeft, Search } from "lucide-react";
+import { CornerDownLeft, MessageCircleQuestion, Search } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -14,6 +14,12 @@ interface GlobalSearchProps {
   onOpenChange: (open: boolean) => void;
   sessions: SessionMeta[];
   onOpenSession: (path: string, spoken?: SpokenSearchTarget) => void;
+  /**
+   * Hands the typed query to the Ask your notes surface as a question
+   * (stage 4.2, design 8a's bottom row): reachable as the list's last row
+   * and directly via ⌘↵ from the input. Absent, the row doesn't render.
+   */
+  onAskAllNotes?: (question: string) => void;
 }
 
 export interface SpokenSearchTarget {
@@ -150,6 +156,7 @@ export function GlobalSearch({
   onOpenChange,
   sessions,
   onOpenSession,
+  onAskAllNotes,
 }: GlobalSearchProps) {
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<SearchHit[]>([]);
@@ -204,13 +211,23 @@ export function GlobalSearch({
   const rows = useMemo(() => rowsFromHits(hits, query), [hits, query]);
   const noteRows = rows.filter((row) => row.kind === "note");
   const spokenRows = rows.filter((row) => row.kind === "spoken");
+  // The ask row is navigable like a result but isn't a SearchRow: it sits
+  // at index `rows.length`, always last, only with a non-blank query.
+  const askAvailable = onAskAllNotes !== undefined && query.trim() !== "";
+  const navigableCount = rows.length + (askAvailable ? 1 : 0);
+
+  function askAll() {
+    if (!askAvailable) return;
+    onAskAllNotes?.(query.trim());
+    handleOpenChange(false);
+  }
   const resultCount = query.trim() === ""
     ? rows.length
     : hits.reduce((total, hit) => total + hit.total_matches, 0);
 
   useEffect(() => {
-    setActiveIndex((current) => Math.min(current, Math.max(0, rows.length - 1)));
-  }, [rows.length]);
+    setActiveIndex((current) => Math.min(current, Math.max(0, navigableCount - 1)));
+  }, [navigableCount]);
 
   useEffect(() => {
     const active = document.getElementById(`global-search-result-${activeIndex}`);
@@ -240,13 +257,23 @@ export function GlobalSearch({
   function handleKeyDown(event: KeyboardEvent<HTMLInputElement>) {
     if (event.key === "ArrowDown") {
       event.preventDefault();
-      setActiveIndex((index) => (rows.length === 0 ? 0 : (index + 1) % rows.length));
+      setActiveIndex((index) => (navigableCount === 0 ? 0 : (index + 1) % navigableCount));
     } else if (event.key === "ArrowUp") {
       event.preventDefault();
-      setActiveIndex((index) => (rows.length === 0 ? 0 : (index - 1 + rows.length) % rows.length));
-    } else if (event.key === "Enter" && rows[activeIndex]) {
+      setActiveIndex((index) =>
+        navigableCount === 0 ? 0 : (index - 1 + navigableCount) % navigableCount,
+      );
+    } else if (event.key === "Enter" && event.metaKey) {
+      // ⌘↵ asks regardless of which row is active (design 8a).
       event.preventDefault();
-      openRow(rows[activeIndex]);
+      askAll();
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      if (rows[activeIndex]) {
+        openRow(rows[activeIndex]);
+      } else if (activeIndex === rows.length) {
+        askAll();
+      }
     }
   }
 
@@ -382,6 +409,44 @@ export function GlobalSearch({
                 </section>
               )}
             </>
+          )}
+          {askAvailable && !error && (
+            <button
+              type="button"
+              role="option"
+              id={`global-search-result-${rows.length}`}
+              aria-label={`Ask across all notes: ${query.trim()}`}
+              aria-selected={activeIndex === rows.length}
+              onMouseMove={() => setActiveIndex(rows.length)}
+              onClick={askAll}
+              className={cn(
+                "mt-2 flex w-full items-center gap-3 rounded-[7px] border-t border-foreground/[0.09] px-3 py-2.5 text-left",
+                activeIndex === rows.length
+                  ? "bg-foreground text-background"
+                  : "hover:bg-foreground/[0.05]",
+              )}
+            >
+              <MessageCircleQuestion
+                aria-hidden="true"
+                className={cn(
+                  "size-[15px] shrink-0",
+                  activeIndex === rows.length ? "text-background/80" : "text-muted-foreground",
+                )}
+              />
+              <span className="min-w-0 flex-1 truncate text-[13.5px]">
+                Ask across all notes: <span className="italic">“{query.trim()}”</span>
+              </span>
+              <span
+                className={cn(
+                  "inline-flex h-[17px] shrink-0 items-center rounded-[4px] px-[5px] font-mono text-[10.5px]",
+                  activeIndex === rows.length
+                    ? "bg-background/20 text-background"
+                    : "bg-foreground/[0.07] text-quiet-foreground",
+                )}
+              >
+                ⌘↵
+              </span>
+            </button>
           )}
         </div>
 

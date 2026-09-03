@@ -104,7 +104,11 @@ pub struct ModelSpec {
 pub static REGISTRY: &[ModelSpec] = &[
     ModelSpec {
         id: "parakeet-tdt-0.6b-v3-int8",
-        name: "Transcription model",
+        // "Live transcription", not "Transcription model" (stage 4.1
+        // polish): the name reads correctly everywhere it appears -- the
+        // onboarding download step, the Transcription page, Storage --
+        // without repeating the page's own heading.
+        name: "Live transcription",
         technical_name: Some("Parakeet TDT 0.6B v3 (int8)"),
         tagline: Some("required for recording"),
         size_mb: 671,

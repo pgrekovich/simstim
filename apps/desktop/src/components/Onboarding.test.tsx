@@ -52,7 +52,7 @@ const config: AppConfig = {
 function model(downloaded: boolean): ModelInfo {
   return {
     id: "live",
-    name: "Transcription model",
+    name: "Live transcription",
     technical_name: "Parakeet TDT 0.6B v3 (int8)",
     tagline: "required for recording",
     size_mb: 671,
@@ -145,7 +145,7 @@ describe("Onboarding", () => {
     await waitFor(() => expect(screen.getAllByText("Allowed")).toHaveLength(2));
     fireEvent.click(screen.getByRole("button", { name: /continue/i }));
     await waitFor(() => expect(ipc.downloadModel).toHaveBeenCalledWith("live"));
-    expect(screen.getByText("Transcription model")).toBeVisible();
+    expect(screen.getByText("Live transcription")).toBeVisible();
     const technicalName = screen.getByText("Parakeet TDT 0.6B v3 (int8)");
     expect(technicalName).toHaveClass("text-[10px]", "text-muted-foreground/55");
 

@@ -112,6 +112,11 @@ function freedBytes(model: ModelInfo): number {
   return model.size_on_disk_bytes ?? model.size_mb * 1_000_000;
 }
 
+/** macOS display convention: the home directory reads as "~". */
+function displayPath(path: string): string {
+  return path.replace(/^\/Users\/[^/]+/, "~");
+}
+
 /** Sum of real on-disk bytes across every currently-downloaded model in `list`. */
 function totalDiskUsed(list: ModelInfo[]): number {
   return list.reduce((sum, model) => (model.downloaded ? sum + freedBytes(model) : sum), 0);
@@ -946,12 +951,14 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                     <Row
                       label="Notes folder"
                       description={
+                        // Plain end-truncation: the "~" form keeps the
+                        // path short, and the old RTL trick visually
+                        // reorders "~/Notes/calls" into "Notes/calls/~".
                         <span
                           className="block max-w-72 truncate font-mono"
-                          style={{ direction: "rtl", textAlign: "left" }}
                           title={config?.output_dir ?? ""}
                         >
-                          {config?.output_dir ?? "..."}
+                          {config ? displayPath(config.output_dir) : "..."}
                         </span>
                       }
                       error={folderError}
@@ -1048,7 +1055,7 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                     the choice they serve; deletion lives on Storage. */}
                 <section id="settings-transcription" className={cn("flex flex-col gap-7", activeSection !== "settings-transcription" && "hidden")}>
                   <div className="flex flex-col gap-1.5">
-                    <GroupHeading>Live · while you talk</GroupHeading>
+                    <GroupHeading>While you talk</GroupHeading>
                     {liveModelError && <span className="text-xs text-destructive">{liveModelError}</span>}
                     <ul className="flex flex-col divide-y divide-border border-y border-border">
                       {liveModels.map((model) => {
@@ -1087,7 +1094,7 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                   </div>
 
                   <div className="flex flex-col gap-1.5">
-                    <GroupHeading>Accurate pass · after the call</GroupHeading>
+                    <GroupHeading>After the call</GroupHeading>
                     {/* The why-and-cost paragraph (stage 4.1, owner request):
                         the row copy below stays one line because this
                         carries the explanation once. */}
@@ -1155,7 +1162,7 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                         description={
                           <>
                             Replaces the live transcript in the background.
-                            {config && !config.keep_audio && " Needs kept audio."}
+                            {config && !config.keep_audio && ' Turn on "Keep audio files" first.'}
                           </>
                         }
                         error={autoRetranscribeError}
@@ -1251,7 +1258,10 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                               label={provider.name}
                               description={
                                 provider.available
-                                  ? provider.version ?? "installed"
+                                  ? // The probed CLI version, minus a parenthetical that
+                                    // would just repeat the row's own label
+                                    // ("2.0.0 (Claude Code)" under "Claude Code").
+                                    (provider.version ?? "installed").replace(` (${provider.name})`, "")
                                   : `not installed (no \`${provider.id}\` CLI found)`
                               }
                               error={
@@ -1387,7 +1397,7 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                     </Group>
                     <p className="text-[11px] leading-[1.5] text-muted-foreground">
                       Everything above lives in{" "}
-                      <span className="font-mono">{config?.output_dir ?? "the notes folder"}</span>{" "}
+                      <span className="font-mono">{config ? displayPath(config.output_dir) : "the notes folder"}</span>{" "}
                       and is yours to move, sync or delete.
                     </p>
                   </div>
@@ -1397,11 +1407,26 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                     <ul className="flex flex-col divide-y divide-border border-y border-border">
                       {models.filter((model) => model.downloaded).map((model) => {
                         const busy = busyIds.has(model.id);
+                        // Away from its own page a meta-name needs its role
+                        // spelled out ("Balanced" alone says nothing here);
+                        // retired rows keep their self-describing engine
+                        // name, and the local summary row carries the same
+                        // provider name as the Summaries page.
+                        const storageName = model.retired
+                          ? model.name
+                          : model.role === "retranscribe"
+                            ? `Accurate pass · ${model.name}`
+                            : model.role === "summary"
+                              ? `Summaries · ${
+                                  enhanceProviders.find((provider) => provider.id === "local")?.name
+                                    ?? model.name
+                                }`
+                              : model.name;
                         return (
                           <li key={model.id} className="flex flex-col gap-2 px-0.5 py-3.5">
                             <div className="flex items-center justify-between gap-3">
                               <ModelName
-                                name={model.name}
+                                name={storageName}
                                 technicalName={model.technical_name}
                                 detail={model.retired ? "(no longer offered)" : undefined}
                                 mutedName={model.retired}

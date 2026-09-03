@@ -343,8 +343,8 @@ describe("SettingsDialog: auto re-transcribe and audio cleanup toggles (stage 0.
     expect(autoCheckbox).toBeDisabled();
     expect(deleteCheckbox).not.toBeDisabled();
 
-    // Exactly one "Needs call audio" note -- on the auto row only.
-    const notes = screen.getAllByText(/needs kept audio/i);
+    // Exactly one keep-audio hint -- on the auto row only.
+    const notes = screen.getAllByText(/turn on "keep audio files" first/i);
     expect(notes).toHaveLength(1);
   });
 
@@ -359,7 +359,7 @@ describe("SettingsDialog: auto re-transcribe and audio cleanup toggles (stage 0.
     });
     expect(autoCheckbox).not.toBeDisabled();
     expect(deleteCheckbox).not.toBeDisabled();
-    expect(screen.queryByText(/needs kept audio/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/turn on "keep audio files" first/i)).not.toBeInTheDocument();
   });
 
   it("keeps the delete toggle enabled even when keep_audio is off, so an old session's audio can still be deleted after a manual re-transcribe", async () => {
@@ -379,7 +379,7 @@ describe("SettingsDialog: whisper model row (stage 0.7 Task 5)", () => {
   const models: ModelInfo[] = [
     {
       id: "parakeet-tdt-0.6b-v3-int8",
-      name: "Transcription model",
+      name: "Live transcription",
       technical_name: "Parakeet TDT 0.6B v3 (int8)",
       tagline: "required for recording",
       size_mb: 671,
@@ -412,7 +412,7 @@ describe("SettingsDialog: whisper model row (stage 0.7 Task 5)", () => {
     await within(transcription).findByText("Balanced");
 
     // The live-engine row still gets its normal Active affordance.
-    const parakeetRow = within(transcription).getByText("Transcription model").closest("li")!;
+    const parakeetRow = within(transcription).getByText("Live transcription").closest("li")!;
     expect(within(parakeetRow).getByText(/active/i)).toBeInTheDocument();
 
     // Whisper is downloaded but must never show Use or Active: it can't
@@ -424,7 +424,7 @@ describe("SettingsDialog: whisper model row (stage 0.7 Task 5)", () => {
     expect(within(whisperRow).getByRole("radio")).toBeInTheDocument();
     expect(within(whisperRow).queryByRole("button", { name: /delete/i })).not.toBeInTheDocument();
 
-    const storageRow = within(section("settings-storage")).getByText("Balanced").closest("li")!;
+    const storageRow = within(section("settings-storage")).getByText("Accurate pass · Balanced").closest("li")!;
     expect(within(storageRow).getByRole("button", { name: /delete/i })).toBeInTheDocument();
   });
 
@@ -443,7 +443,7 @@ describe("SettingsDialog: whisper model row (stage 0.7 Task 5)", () => {
 describe("SettingsDialog: model manager (stage 0.8 Task 2)", () => {
   const parakeet: ModelInfo = {
     id: "parakeet-tdt-0.6b-v3-int8",
-    name: "Transcription model",
+    name: "Live transcription",
     technical_name: "Parakeet TDT 0.6B v3 (int8)",
     tagline: "required for recording",
     size_mb: 671,
@@ -560,7 +560,7 @@ describe("SettingsDialog: model manager (stage 0.8 Task 2)", () => {
 
     render(<SettingsDialog open onOpenChange={() => {}} />);
 
-    const row = (await within(section("settings-storage")).findByText("Balanced")).closest("li")!;
+    const row = (await within(section("settings-storage")).findByText("Accurate pass · Balanced")).closest("li")!;
     const deleteButton = within(row).getByRole("button", { name: /delete balanced/i });
 
     fireEvent.click(deleteButton);
@@ -580,7 +580,7 @@ describe("SettingsDialog: model manager (stage 0.8 Task 2)", () => {
     render(<SettingsDialog open onOpenChange={() => {}} />);
 
     const parakeetRow = (
-      await within(section("settings-storage")).findByText("Transcription model")
+      await within(section("settings-storage")).findByText("Live transcription")
     ).closest("li")!;
     expect(within(parakeetRow).queryByRole("button", { name: /delete/i })).not.toBeInTheDocument();
   });
@@ -613,7 +613,7 @@ describe("SettingsDialog: model manager (stage 0.8 Task 2)", () => {
 
     render(<SettingsDialog open onOpenChange={() => {}} />);
 
-    const row = (await within(section("settings-storage")).findByText("Balanced")).closest("li")!;
+    const row = (await within(section("settings-storage")).findByText("Accurate pass · Balanced")).closest("li")!;
     fireEvent.click(within(row).getByRole("button", { name: /delete balanced/i }));
     fireEvent.click(await within(row).findByRole("button", { name: /delete 874 mb\?/i }));
 
@@ -621,7 +621,7 @@ describe("SettingsDialog: model manager (stage 0.8 Task 2)", () => {
     await waitFor(() => {
       // Gone from Storage (only downloaded models weigh anything there),
       // back to a Download offer on Transcription.
-      expect(within(section("settings-storage")).queryByText("Balanced")).not.toBeInTheDocument();
+      expect(within(section("settings-storage")).queryByText("Accurate pass · Balanced")).not.toBeInTheDocument();
       const refreshedRow = within(section("settings-transcription"))
         .getByText("Balanced")
         .closest("li")!;
@@ -706,7 +706,7 @@ describe("SettingsDialog: model manager (stage 0.8 Task 2)", () => {
 
     const { rerender } = render(<SettingsDialog open onOpenChange={() => {}} />);
 
-    const row = (await within(section("settings-storage")).findByText("Balanced")).closest("li")!;
+    const row = (await within(section("settings-storage")).findByText("Accurate pass · Balanced")).closest("li")!;
     fireEvent.click(within(row).getByRole("button", { name: /delete balanced/i }));
     await within(row).findByRole("button", { name: /delete 874 mb\?/i });
 
@@ -714,7 +714,7 @@ describe("SettingsDialog: model manager (stage 0.8 Task 2)", () => {
     rerender(<SettingsDialog open onOpenChange={() => {}} />);
 
     const reopenedRow = (
-      await within(section("settings-storage")).findByText("Balanced")
+      await within(section("settings-storage")).findByText("Accurate pass · Balanced")
     ).closest("li")!;
     // Back to the trash icon, not the armed "Delete 874 MB?" button.
     const trashButton = await within(reopenedRow).findByRole("button", {
@@ -761,7 +761,7 @@ describe("SettingsDialog: AI enhance provider (stage 0.11)", () => {
     vi.mocked(ipc.listModels).mockResolvedValue([qwen]);
     await openSummariesSection();
 
-    await screen.findByText("2.0.0 (Claude Code)");
+    await screen.findByText("2.0.0");
     expect(screen.getByText(/not installed \(no `codex` CLI found\)/i)).toBeInTheDocument();
 
     const claudeRadio = screen.getByRole("radio", { name: "Claude Code" });
@@ -801,7 +801,7 @@ describe("SettingsDialog: AI enhance provider (stage 0.11)", () => {
     expect(within(row).getByRole("radio", { name: "On this Mac" })).not.toBeDisabled();
 
     const storageRow = within(section("settings-storage"))
-      .getByText("Local summary model")
+      .getByText("Summaries · On this Mac")
       .closest("li")!;
     expect(
       within(storageRow).getByRole("button", { name: /delete local summary model/i }),

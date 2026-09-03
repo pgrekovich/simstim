@@ -705,7 +705,7 @@ describe("SessionView: transcript find (stage 2.1)", () => {
 });
 
 describe("SessionView: enhance (stage 0.11)", () => {
-  it("runs enhance from the toolbar pill and shows the working chip while the click is in flight", async () => {
+  it("runs enhance from the toolbar pill and spins the Summary tab while the click is in flight", async () => {
     let resolveEnhance: (value: string) => void = () => {};
     vi.mocked(ipc.enhanceSession).mockImplementation(
       () => new Promise<string>((resolve) => { resolveEnhance = resolve; })
@@ -726,17 +726,20 @@ describe("SessionView: enhance (stage 0.11)", () => {
     fireEvent.click(screen.getByRole("button", { name: /^enhance$/i }));
     await waitFor(() => expect(ipc.enhanceSession).toHaveBeenCalledExactlyOnceWith("/tmp/call.md"));
 
-    // While the command is in flight the pill is replaced in the same slot
-    // by the indeterminate work chip -- the refreshed summary itself arrives
-    // later via App (enhance-progress "done" refetches and remounts).
-    expect(screen.getByTestId("enhance-working")).toHaveTextContent("Summarizing...");
+    // While the command is in flight the pill disappears and a disabled
+    // Summary tab appears with a spinner (stage 4.1 polish: the old work
+    // chip clipped against the toolbar) -- the refreshed summary itself
+    // arrives later via App (enhance-progress "done" refetches and remounts).
+    const summaryTab = screen.getByRole("tab", { name: /summary/i });
+    expect(summaryTab).toBeDisabled();
+    expect(screen.getByTestId("summary-tab-spinner")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^enhance$/i })).toBeNull();
 
     resolveEnhance("- **ship v2 friday**");
-    await waitFor(() => expect(screen.queryByTestId("enhance-working")).toBeNull());
+    await waitFor(() => expect(screen.queryByTestId("summary-tab-spinner")).toBeNull());
   });
 
-  it("shows the working chip whenever App reports a running enhance for this path", () => {
+  it("spins the Summary tab whenever App reports a running enhance for this path", () => {
     render(
       <SessionView
         path="/tmp/call.md"
@@ -749,7 +752,8 @@ describe("SessionView: enhance (stage 0.11)", () => {
         enhanceRunning
       />
     );
-    expect(screen.getByTestId("enhance-working")).toHaveTextContent("Summarizing...");
+    expect(screen.getByTestId("summary-tab-spinner")).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /summary/i })).toBeDisabled();
     expect(screen.queryByRole("button", { name: /^enhance$/i })).toBeNull();
   });
 

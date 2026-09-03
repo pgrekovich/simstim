@@ -649,8 +649,14 @@ drawer gained its visible toolbar button from artboard 8c; both side
 panes are drag-resizable with persisted widths; the note pane keeps a
 360px minimum through any resize and the window gained minWidth 800, so
 the toolbar cannot be crumpled; chat answers render as compact UI sans
-(.chat-answer) instead of the Summary's 15px reading serif. Owner e2e
-continues.
+(.chat-answer) instead of the Summary's 15px reading serif; both side
+panes became drag-resizable and the note pane's 640px toolbar minimum
+plus the window's new minWidth keep the toolbar intact through any
+resize. Owner ruling during the same e2e: ONE AI choice powers both
+summaries and chat -- the separate `chat_provider`/`chat_model` settings
+were removed, chat reads `enhance_provider` and its model override, and
+picking "On this Mac" makes an ask explain that questions need a cloud
+provider (retired config keys are ignored on load). Owner e2e continues.
 
 ## Milestones after MVP-0
 

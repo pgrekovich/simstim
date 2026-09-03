@@ -21,8 +21,6 @@ import {
   setDetectCalls,
   setDeleteAudioAfterRetranscribe,
   setAutoEnhance,
-  setChatModel,
-  setChatProvider,
   setEnhanceModel,
   setEnhanceProvider,
   setEnhanceRenameTitle,
@@ -360,7 +358,6 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
   const [autoEnhanceError, setAutoEnhanceError] = useState<string | null>(null);
   const [renameTitleError, setRenameTitleError] = useState<string | null>(null);
   const [useCalendarError, setUseCalendarError] = useState<string | null>(null);
-  const [chatError, setChatError] = useState<string | null>(null);
   const [choosingDir, setChoosingDir] = useState(false);
   const [themeError, setThemeError] = useState<string | null>(null);
   const [showInDockError, setShowInDockError] = useState<string | null>(null);
@@ -509,46 +506,10 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
   }
 
   /**
-   * Picks which CLI answers chat questions (stage 4.2). Optimistic with
-   * rollback. Also clears the model override: `chat_model` is one shared
-   * field, and a model id from the previous CLI ("opus") would just error
-   * on the other one.
-   */
-  async function handleSetChatProvider(provider: string) {
-    const previous = config?.chat_provider;
-    const previousModel = config?.chat_model ?? "";
-    if (provider === previous || previous === undefined) return;
-    setChatError(null);
-    setConfig((prev) => (prev ? { ...prev, chat_provider: provider, chat_model: "" } : prev));
-    try {
-      await setChatProvider(provider);
-      if (previousModel !== "") await setChatModel("");
-    } catch (err) {
-      setConfig((prev) =>
-        prev ? { ...prev, chat_provider: previous, chat_model: previousModel } : prev
-      );
-      setChatError(String(err));
-    }
-  }
-
-  /** Persists chat's model override (stage 4.2). Optimistic with rollback. */
-  async function handleSetChatModel(model: string) {
-    const previous = config?.chat_model ?? "";
-    const next = model.trim();
-    if (previous === next || !config) return;
-    setChatError(null);
-    setConfig((prev) => (prev ? { ...prev, chat_model: next } : prev));
-    try {
-      await setChatModel(next);
-    } catch (err) {
-      setConfig((prev) => (prev ? { ...prev, chat_model: previous } : prev));
-      setChatError(String(err));
-    }
-  }
-
-  /**
-   * Picks which CLI `enhanceSession` runs (stage 0.11). Optimistic with
-   * rollback, same as every other row here.
+   * Picks which CLI `enhanceSession` runs (stage 0.11) -- and, since the
+   * owner's one-AI-choice ruling (stage 4.2 e2e), which one answers Ask
+   * your notes / Ask this call too. Optimistic with rollback, same as
+   * every other row here.
    */
   async function handleSetEnhanceProvider(provider: string) {
     const previous = config?.enhance_provider;
@@ -1246,7 +1207,8 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                     <p className="max-w-[62ch] text-[11.5px] leading-[1.55] text-muted-foreground">
                       Cloud models write noticeably better summaries; the on-device model keeps
                       everything on this Mac. Cloud providers get the note's text and
-                      transcript, never audio.
+                      transcript, never audio. The same choice answers Ask your notes
+                      (⌘L) and Ask this call (⌘J); asking needs a cloud provider.
                     </p>
                     <ul className="flex flex-col divide-y divide-border border-y border-border">
                       {summaryModels.map((model) => {
@@ -1395,73 +1357,6 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                       />
                     </Row>
                   </Group>
-
-                  {/* Ask your notes (stage 4.2): chat's own provider, CLI
-                      only -- the on-device model can't search the folder and
-                      would compete with live transcription mid-call. */}
-                  <div className="flex flex-col gap-1.5">
-                    <GroupHeading>Ask your notes</GroupHeading>
-                    <p className="max-w-[62ch] text-[11.5px] leading-[1.55] text-muted-foreground">
-                      Questions about your calls (⌘L, and ⌘J on an open note) run through
-                      your own AI CLI, which reads the notes folder directly. Cloud only,
-                      text only, and only when you ask.
-                    </p>
-                    <ul className="flex flex-col divide-y divide-border border-y border-border">
-                      {enhanceProviders
-                        .filter((provider) => provider.id !== "local")
-                        .map((provider) => (
-                          <li key={provider.id}>
-                            <Row
-                              label={provider.name}
-                              description={
-                                provider.available
-                                  ? undefined
-                                  : // Worded differently from the summary row
-                                    // above on purpose: same fact, but two
-                                    // identical strings on one page read like
-                                    // a rendering bug (and break text queries).
-                                    `needs the \`${provider.id}\` CLI installed`
-                              }
-                              error={config?.chat_provider === provider.id ? chatError : null}
-                            >
-                              {provider.available && config?.chat_provider === provider.id && (
-                                <select
-                                  aria-label={`${provider.name} chat model`}
-                                  value={config?.chat_model ?? ""}
-                                  onChange={(e) => handleSetChatModel(e.target.value)}
-                                  className="h-7 rounded-md border border-input bg-transparent px-2 text-xs outline-none focus-visible:border-ring"
-                                >
-                                  {(ENHANCE_MODEL_OPTIONS[provider.id] ?? [{ value: "", label: "Default" }]).map(
-                                    (option) => (
-                                      <option key={option.value} value={option.value}>
-                                        {option.label}
-                                      </option>
-                                    )
-                                  )}
-                                </select>
-                              )}
-                              <input
-                                type="radio"
-                                name="chat-provider"
-                                aria-label={`Ask with ${provider.name}`}
-                                checked={config?.chat_provider === provider.id}
-                                disabled={!provider.available}
-                                onChange={() => handleSetChatProvider(provider.id)}
-                                className={RADIO_CLASS}
-                              />
-                            </Row>
-                          </li>
-                        ))}
-                      {enhanceProviders.length === 0 && (
-                        <li>
-                          <Row
-                            label="Cloud providers not probed yet"
-                            description="Reopen Settings to check for the claude and codex CLIs."
-                          />
-                        </li>
-                      )}
-                    </ul>
-                  </div>
                 </section>
 
                 {/* Storage (stage 4.1): what everything weighs. The user's

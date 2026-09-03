@@ -90,14 +90,6 @@ export interface AppConfig {
    * all. Defaults to `false`.
    */
   enhance_use_calendar: boolean;
-  /**
-   * Which cloud CLI answers Ask your notes / Ask this call (stage 4.2):
-   * `"claude" | "codex"`. Deliberately separate from `enhance_provider`
-   * (summaries may stay local; chat requires a CLI).
-   */
-  chat_provider: string;
-  /** Chat's model override; empty means the CLI's own default. */
-  chat_model: string;
   /** Whether known mic-using call apps may surface a recording suggestion. */
   detect_calls: boolean;
   /** Whether an associated recording stops after app I/O release and remote-channel silence. */
@@ -589,16 +581,6 @@ export function chatClear(path: string | null): Promise<void> {
 /** Cancels the scope's in-flight ask, if any (kills the CLI subprocess). */
 export function chatCancel(path: string | null): Promise<void> {
   return invoke("chat_cancel", { path });
-}
-
-/** Sets and persists which cloud CLI answers chat questions (stage 4.2). */
-export function setChatProvider(provider: string): Promise<void> {
-  return invoke("set_chat_provider", { provider });
-}
-
-/** Sets chat's model override; an empty string restores the CLI default. */
-export function setChatModel(model: string): Promise<void> {
-  return invoke("set_chat_model", { model });
 }
 
 /** Mirrors `sessions::SearchSnippet`: one matching line inside a SearchHit. */

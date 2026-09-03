@@ -679,8 +679,6 @@ pub fn run() {
             config::set_auto_enhance,
             config::set_enhance_rename_title,
             config::set_enhance_use_calendar,
-            config::set_chat_provider,
-            config::set_chat_model,
             enhance::list_enhance_providers,
             enhance::enhance_session,
             chat::chat_ask,

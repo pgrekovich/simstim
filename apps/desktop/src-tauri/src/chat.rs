@@ -459,13 +459,22 @@ fn validate_ask(
     question: &str,
     already_running: bool,
 ) -> Result<(), String> {
-    if !crate::config::VALID_CHAT_PROVIDERS.contains(&provider) {
-        return Err(format!("unknown chat provider: {provider}"));
+    // One AI choice powers summaries AND chat (owner ruling, stage 4.2
+    // e2e) -- but chat can only run on the cloud CLIs: the on-device model
+    // cannot search the folder and would fight live ASR for the GPU.
+    if provider == "local" {
+        return Err(
+            "the on-device model can't search your notes; pick Claude Code or Codex under Settings > Summaries to ask questions"
+                .to_string(),
+        );
+    }
+    if !matches!(provider, "claude" | "codex") {
+        return Err(format!("unknown AI provider: {provider}"));
     }
     if !provider_available {
         let name = if provider == "claude" { "Claude Code" } else { "Codex" };
         return Err(format!(
-            "{name} isn't installed (no `{provider}` on this Mac); pick a chat provider in Settings"
+            "{name} isn't installed (no `{provider}` on this Mac); pick a provider in Settings"
         ));
     }
     if question.trim().is_empty() {
@@ -639,13 +648,17 @@ fn ask_inner<R: tauri::Runtime>(
     question: &str,
     asked_at: Option<String>,
 ) -> Result<(), String> {
+    // The ONE AI choice, shared with summaries (owner ruling): provider and
+    // its per-provider model override both come from the enhance settings.
     let cfg = Config::load();
-    let provider = cfg.chat_provider.clone();
+    let provider = cfg.enhance_provider.clone();
     let binary = crate::enhance::resolve_binary(&provider);
-    let model = {
-        let m = cfg.chat_model.trim();
-        (!m.is_empty()).then(|| m.to_string())
-    };
+    let model = cfg
+        .enhance_models
+        .get(&provider)
+        .map(|m| m.trim())
+        .filter(|m| !m.is_empty())
+        .map(str::to_string);
 
     let state = app.state::<ChatState>();
     // Claim the slot and snapshot the history under one lock.
@@ -1092,10 +1105,15 @@ mod tests {
     mod validation {
         use super::*;
 
+        /// The shared provider can legitimately be "local" (summaries run
+        /// there); chat must explain itself rather than error cryptically.
         #[test]
-        fn rejects_the_local_provider_and_unknown_ids() {
+        fn rejects_the_local_provider_with_guidance_and_unknown_ids() {
             let err = validate_ask("local", true, "q", false).unwrap_err();
-            assert!(err.contains("unknown chat provider"), "{err}");
+            assert!(err.contains("on-device model can't search"), "{err}");
+            assert!(err.contains("Settings"), "{err}");
+            let err = validate_ask("no-such", true, "q", false).unwrap_err();
+            assert!(err.contains("unknown AI provider"), "{err}");
             assert!(validate_ask("claude", true, "q", false).is_ok());
             assert!(validate_ask("codex", true, "q", false).is_ok());
         }

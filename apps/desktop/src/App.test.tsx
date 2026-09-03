@@ -81,6 +81,10 @@ vi.mock("@/lib/ipc", () => ({
     audio_bytes: 0,
     audio_secs: 0,
   }),
+  chatAsk: vi.fn().mockResolvedValue(undefined),
+  chatCancel: vi.fn().mockResolvedValue(undefined),
+  chatClear: vi.fn().mockResolvedValue(undefined),
+  chatHistory: vi.fn().mockResolvedValue({ messages: [], running: false }),
   showMainWindow: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -381,6 +385,30 @@ describe("App: menu-bar recording toggle (stage 3)", () => {
     await emitMenuBarToggle();
     await waitFor(() => expect(ipc.startRecording).toHaveBeenCalledTimes(1));
     expect(ipc.startRecording).toHaveBeenCalledWith(null);
+  });
+
+  it("opens the Ask this call drawer from its toolbar button (stage 4.2)", async () => {
+    vi.mocked(ipc.listSessions).mockResolvedValueOnce([
+      {
+        path: "/tmp/old.md",
+        title: "Old note",
+        date: "2026-08-27T10:00:00+02:00",
+        duration_secs: 10,
+      },
+    ]);
+    render(<App />);
+    // No note on screen: no drawer entry point.
+    expect(screen.queryByRole("button", { name: "Ask this call" })).toBeNull();
+
+    fireEvent.click(await screen.findByText("Old note"));
+    fireEvent.click(await screen.findByRole("button", { name: "Ask this call" }));
+
+    expect(await screen.findByRole("complementary", { name: "Ask this call" })).toBeVisible();
+    await waitFor(() => expect(ipc.chatHistory).toHaveBeenCalledWith("/tmp/old.md"));
+
+    // The same button closes it again (it mirrors ⌘J).
+    fireEvent.click(screen.getByRole("button", { name: "Ask this call" }));
+    expect(screen.queryByRole("complementary", { name: "Ask this call" })).toBeNull();
   });
 
   it("stops the active session through the normal stop path", async () => {

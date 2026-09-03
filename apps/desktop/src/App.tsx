@@ -7,6 +7,7 @@ import {
   Ellipsis,
   FileText,
   Folder,
+  MessageCircleQuestion,
   PanelLeftOpen,
   Search,
   Settings,
@@ -1247,6 +1248,23 @@ function App() {
             startedAt={recordingStartedAt}
             onClick={sessionActive ? handleStop : () => void handleStart()}
           />}
+
+          {/* Ask this call (stage 4.2, design 8c): the drawer's visible
+              entry point, right of Record like the mockup; ⌘J is the
+              shortcut, not the only way in. Filled while the drawer is
+              open, mirroring the mockup's dark chat square. */}
+          {showTopbar && selectedPath !== null && !askNotesOpen && (
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label="Ask this call"
+              title="Ask this call (⌘J)"
+              className={askCallOpen ? "bg-foreground text-background hover:bg-foreground/90 hover:text-background" : undefined}
+              onClick={() => setAskCallOpen((open) => !open)}
+            >
+              <MessageCircleQuestion className="size-4" />
+            </Button>
+          )}
 
           {/* Global actions always live in overflow. Note-specific actions
               only appear while the selected note owns the main pane. */}

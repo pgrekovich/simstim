@@ -658,6 +658,12 @@ were removed, chat reads `enhance_provider` and its model override, and
 picking "On this Mac" makes an ask explain that questions need a cloud
 provider (retired config keys are ignored on load). Owner e2e continues.
 
+Status (2026-09-04): owner e2e passed and the stage merged. His review
+drove seven follow-up commits on top of the base implementation, all
+recorded in the status lines above; the largest rulings were exact model
+labels on every answer, the one-AI-choice settings unification, and the
+resizable panes with the 640px toolbar minimum.
+
 ## Milestones after MVP-0
 
 1. Audio file kept next to the .md; re-transcribe command (whisper turbo).

@@ -280,11 +280,11 @@ export function ChatConversation({
                       </span>
                     )}
                   </div>
+                  {/* `chat-answer` (index.css) wins over .markdown-content's
+                      serif/15px; the surface sets the size via the var. */}
                   <MarkdownContent
-                    className={cn(
-                      "text-quiet-foreground",
-                      pane ? "text-[13.5px] leading-[1.65]" : "text-[12.5px] leading-[1.6]",
-                    )}
+                    className="chat-answer"
+                    style={{ "--chat-answer-size": pane ? "13.5px" : "12px" } as React.CSSProperties}
                   >
                     {message.text}
                   </MarkdownContent>

@@ -24,6 +24,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { RecordButton } from "@/components/RecordButton";
+import { ResizeHandle } from "@/components/ResizeHandle";
 import { EmptyState } from "@/components/EmptyState";
 import { AskCallDrawer } from "@/components/AskCallDrawer";
 import { AskNotesView } from "@/components/AskNotesView";
@@ -84,6 +85,62 @@ function initialSidebarCollapsed(): boolean {
     return window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "true";
   } catch {
     return false;
+  }
+}
+
+/**
+ * Resizable pane widths (stage 4.2 polish, owner request): the sidebar and
+ * the Ask-this-call drawer are dragged at their shared border, persisted per
+ * pane, and double-click restores the design default. Bounds keep either
+ * pane from being dragged into uselessness or swallowing the note.
+ */
+export interface PaneWidthSpec {
+  key: string;
+  default: number;
+  min: number;
+  max: number;
+}
+
+export const SIDEBAR_WIDTH: PaneWidthSpec = {
+  key: "simstim.sidebar-width",
+  default: 224,
+  min: 180,
+  max: 400,
+};
+
+export const ASK_CALL_WIDTH: PaneWidthSpec = {
+  key: "simstim.ask-call-width",
+  default: 300,
+  min: 260,
+  max: 520,
+};
+
+/** The note pane must stay usable no matter how the side panes are dragged. */
+const MAIN_PANE_MIN = 360;
+
+/**
+ * `maxOverride` tightens (never widens) the spec's own ceiling: drags pass
+ * the space actually available in the window so a side pane can't crush the
+ * note below [`MAIN_PANE_MIN`]; the minimum still wins over it, so a tiny
+ * window degrades to overlap rather than an unusably thin pane.
+ */
+export function clampPaneWidth(
+  spec: PaneWidthSpec,
+  width: number,
+  maxOverride?: number,
+): number {
+  if (!Number.isFinite(width)) return spec.default;
+  const max = Math.max(spec.min, Math.min(spec.max, maxOverride ?? spec.max));
+  return Math.min(max, Math.max(spec.min, Math.round(width)));
+}
+
+function initialPaneWidth(spec: PaneWidthSpec): number {
+  try {
+    const stored = window.localStorage.getItem(spec.key);
+    if (stored === null) return spec.default;
+    return clampPaneWidth(spec, Number(stored));
+  } catch {
+    return spec.default;
   }
 }
 
@@ -153,6 +210,11 @@ function App() {
   >(null);
   const transcriptFindRequestIdRef = useRef(0);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(initialSidebarCollapsed);
+  const [sidebarWidth, setSidebarWidth] = useState(() => initialPaneWidth(SIDEBAR_WIDTH));
+  const [askCallWidth, setAskCallWidth] = useState(() => initialPaneWidth(ASK_CALL_WIDTH));
+  // Width of the pane being dragged, snapshotted at drag start; each drag
+  // event applies the pointer's total travel to this base.
+  const dragBaseWidthRef = useRef(0);
   const [autoStopAfterCall, setAutoStopAfterCall] = useState(false);
   const loadingFallbackRef = useRef<number | null>(null);
   const callLifecycleRef = useRef({
@@ -325,6 +387,47 @@ function App() {
       // A blocked localStorage should not make the application unusable.
     }
   }, [sidebarCollapsed]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(SIDEBAR_WIDTH.key, String(sidebarWidth));
+      window.localStorage.setItem(ASK_CALL_WIDTH.key, String(askCallWidth));
+    } catch {
+      // Same tolerance as the collapsed flag above.
+    }
+  }, [sidebarWidth, askCallWidth]);
+
+  // The note pane's MAIN_PANE_MIN invariant must hold through window
+  // resizes, restored widths and pane toggles -- not just drags (owner
+  // request: the toolbar must never crumple, however the user resizes).
+  // The drawer, the secondary pane, gives way first; then the sidebar. At
+  // the window's own minWidth (800, tauri.conf.json) the invariant is
+  // exactly satisfiable with both panes at their minimums. The setters
+  // bail out on unchanged values, so this effect (which depends on what it
+  // sets) settles instead of looping.
+  const drawerVisible = askCallOpen && selectedPath !== null && !askNotesOpen;
+  useEffect(() => {
+    function reclamp() {
+      const available = window.innerWidth - MAIN_PANE_MIN;
+      let drawer = askCallWidth;
+      if (drawerVisible) {
+        drawer = clampPaneWidth(
+          ASK_CALL_WIDTH,
+          askCallWidth,
+          available - (sidebarCollapsed ? 0 : sidebarWidth),
+        );
+        setAskCallWidth(drawer);
+      }
+      if (!sidebarCollapsed) {
+        setSidebarWidth(
+          clampPaneWidth(SIDEBAR_WIDTH, sidebarWidth, available - (drawerVisible ? drawer : 0)),
+        );
+      }
+    }
+    reclamp();
+    window.addEventListener("resize", reclamp);
+    return () => window.removeEventListener("resize", reclamp);
+  }, [sidebarCollapsed, sidebarWidth, drawerVisible, askCallWidth]);
 
   // The floating banner window (stage 1.1) owns rendering call
   // suggestions; its clicks forward here so recording keeps its single
@@ -1159,6 +1262,7 @@ function App() {
   return (
     <div className="flex h-screen bg-background text-foreground">
       {!sidebarCollapsed && <Sidebar
+        width={sidebarWidth}
         sessions={sessions}
         selectedPath={selectedPath}
         activePath={activePath}
@@ -1174,6 +1278,22 @@ function App() {
         askActive={askNotesOpen}
         onDelete={handleDeleteSession}
       />}
+      {!sidebarCollapsed && (
+        <ResizeHandle
+          label="Resize sidebar"
+          onDragStart={() => { dragBaseWidthRef.current = sidebarWidth; }}
+          onDrag={(deltaX) =>
+            setSidebarWidth(
+              clampPaneWidth(
+                SIDEBAR_WIDTH,
+                dragBaseWidthRef.current + deltaX,
+                window.innerWidth - MAIN_PANE_MIN - (askCallOpen ? askCallWidth : 0),
+              ),
+            )
+          }
+          onReset={() => setSidebarWidth(SIDEBAR_WIDTH.default)}
+        />
+      )}
 
       <div className="relative flex min-w-0 flex-1 flex-col">
         {!showTopbar && !sidebarCollapsed && <div data-tauri-drag-region className="h-11 shrink-0" />}
@@ -1446,14 +1566,33 @@ function App() {
       {/* Ask this call (stage 4.2): the drawer converses with the OPEN note,
           recording or not; chat is CLI-only, so a mid-call ask never touches
           the live pipeline. Hidden while Ask your notes owns the main pane. */}
-      {askCallOpen && selectedPath !== null && !askNotesOpen && (
-        <AskCallDrawer
-          path={selectedPath}
-          sessions={sessions}
-          recordingStartedAt={selectedPath === activePath ? recordingStartedAt : null}
-          onClose={() => setAskCallOpen(false)}
-          onOpenCitation={(source) => handleOpenCitation(source, selectedPath)}
-        />
+      {drawerVisible && selectedPath !== null && (
+        <>
+          <ResizeHandle
+            label="Resize Ask this call"
+            onDragStart={() => { dragBaseWidthRef.current = askCallWidth; }}
+            // The drawer sits on the RIGHT: dragging its left edge leftward
+            // (negative delta) makes it wider.
+            onDrag={(deltaX) =>
+              setAskCallWidth(
+                clampPaneWidth(
+                  ASK_CALL_WIDTH,
+                  dragBaseWidthRef.current - deltaX,
+                  window.innerWidth - MAIN_PANE_MIN - (sidebarCollapsed ? 0 : sidebarWidth),
+                ),
+              )
+            }
+            onReset={() => setAskCallWidth(ASK_CALL_WIDTH.default)}
+          />
+          <AskCallDrawer
+            width={askCallWidth}
+            path={selectedPath}
+            sessions={sessions}
+            recordingStartedAt={selectedPath === activePath ? recordingStartedAt : null}
+            onClose={() => setAskCallOpen(false)}
+            onOpenCitation={(source) => handleOpenCitation(source, selectedPath)}
+          />
+        </>
       )}
 
       <SettingsDialog

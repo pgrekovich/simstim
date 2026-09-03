@@ -4,6 +4,8 @@ import { ChatConversation } from "@/components/Chat";
 import type { ChatSource, SessionMeta } from "@/lib/ipc";
 
 interface AskCallDrawerProps {
+  /** Pane width in px, owned (and persisted) by App's resize handling. */
+  width?: number;
   /** The open note this drawer converses with (its chat scope). */
   path: string;
   sessions: SessionMeta[];
@@ -34,6 +36,7 @@ export function recordingClock(startedAt: number, now = Date.now()): string {
  * is CLI-only, so a mid-call ask never touches the live pipeline).
  */
 export function AskCallDrawer({
+  width = 300,
   path,
   sessions,
   recordingStartedAt,
@@ -43,7 +46,8 @@ export function AskCallDrawer({
   return (
     <aside
       aria-label="Ask this call"
-      className="flex h-full w-[300px] shrink-0 flex-col border-l border-foreground/[0.12] bg-sidebar"
+      style={{ width }}
+      className="flex h-full shrink-0 flex-col border-l border-foreground/[0.12] bg-sidebar"
     >
       <div className="flex h-14 shrink-0 items-center justify-between border-b border-foreground/[0.09] pl-[18px] pr-3">
         <div className="flex items-center gap-2">

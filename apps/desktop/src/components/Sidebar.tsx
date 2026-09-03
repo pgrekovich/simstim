@@ -4,6 +4,8 @@ import { cn } from "@/lib/utils";
 import type { SessionMeta } from "@/lib/ipc";
 
 interface SidebarProps {
+  /** Pane width in px, owned (and persisted) by App's resize handling. */
+  width?: number;
   sessions: SessionMeta[];
   selectedPath: string | null;
   /** The path currently being recorded, if any; shows a pulsing dot next to that row's title. */
@@ -90,6 +92,7 @@ function groupSessions(sessions: SessionMeta[]): SessionGroup[] {
 }
 
 export function Sidebar({
+  width = 224,
   sessions,
   selectedPath,
   activePath,
@@ -105,7 +108,10 @@ export function Sidebar({
   const groups = groupSessions(sessions);
 
   return (
-    <aside className="flex h-full w-56 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground">
+    <aside
+      style={{ width }}
+      className="flex h-full shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground"
+    >
       {/* The window's title bar is an overlay (tauri.conf.json
           `titleBarStyle: Overlay`), so the sidebar background runs to the
           very top and the traffic lights float over this strip. It doubles

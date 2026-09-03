@@ -387,6 +387,88 @@ describe("App: menu-bar recording toggle (stage 3)", () => {
     expect(ipc.startRecording).toHaveBeenCalledWith(null);
   });
 
+  it("resizes the sidebar by dragging its border and resets on double-click", async () => {
+    render(<App />);
+    const sidebar = (await screen.findByRole("button", { name: /ask your notes/i })).closest("aside")!;
+    expect(sidebar).toHaveStyle({ width: "224px" });
+
+    const handle = screen.getByRole("separator", { name: "Resize sidebar" });
+    fireEvent.pointerDown(handle, { clientX: 224, button: 0 });
+    fireEvent.pointerMove(window, { clientX: 304 });
+    fireEvent.pointerUp(window);
+    expect(sidebar).toHaveStyle({ width: "304px" });
+    expect(window.localStorage.getItem("simstim.sidebar-width")).toBe("304");
+
+    // Bounds: a drag far past the minimum clamps instead of collapsing.
+    fireEvent.pointerDown(handle, { clientX: 304, button: 0 });
+    fireEvent.pointerMove(window, { clientX: 0 });
+    fireEvent.pointerUp(window);
+    expect(sidebar).toHaveStyle({ width: "180px" });
+
+    fireEvent.doubleClick(handle);
+    expect(sidebar).toHaveStyle({ width: "224px" });
+  });
+
+  it("resizes the Ask this call drawer, wider toward the left", async () => {
+    vi.mocked(ipc.listSessions).mockResolvedValueOnce([
+      {
+        path: "/tmp/old.md",
+        title: "Old note",
+        date: "2026-08-27T10:00:00+02:00",
+        duration_secs: 10,
+      },
+    ]);
+    render(<App />);
+    fireEvent.click(await screen.findByText("Old note"));
+    fireEvent.click(await screen.findByRole("button", { name: "Ask this call" }));
+    const drawer = await screen.findByRole("complementary", { name: "Ask this call" });
+    expect(drawer).toHaveStyle({ width: "300px" });
+
+    const handle = screen.getByRole("separator", { name: "Resize Ask this call" });
+    fireEvent.pointerDown(handle, { clientX: 500, button: 0 });
+    fireEvent.pointerMove(window, { clientX: 440 });
+    fireEvent.pointerUp(window);
+    expect(drawer).toHaveStyle({ width: "360px" });
+    expect(window.localStorage.getItem("simstim.ask-call-width")).toBe("360");
+  });
+
+  it("gives the panes way on window resize so the note keeps its minimum", async () => {
+    // Width keys persist across tests in this file's jsdom; start clean.
+    window.localStorage.removeItem("simstim.sidebar-width");
+    window.localStorage.removeItem("simstim.ask-call-width");
+    vi.mocked(ipc.listSessions).mockResolvedValueOnce([
+      {
+        path: "/tmp/old.md",
+        title: "Old note",
+        date: "2026-08-27T10:00:00+02:00",
+        duration_secs: 10,
+      },
+    ]);
+    render(<App />);
+    fireEvent.click(await screen.findByText("Old note"));
+    fireEvent.click(await screen.findByRole("button", { name: "Ask this call" }));
+    const drawer = await screen.findByRole("complementary", { name: "Ask this call" });
+    const sidebar = screen
+      .getByRole("button", { name: /ask your notes/i })
+      .closest("aside")!;
+
+    // Widen the drawer, then shrink the window to the app's minimum: the
+    // drawer gives way first, then the sidebar, and both land on their
+    // minimums (800 = 180 sidebar + 360 note + 260 drawer exactly).
+    const handle = screen.getByRole("separator", { name: "Resize Ask this call" });
+    fireEvent.pointerDown(handle, { clientX: 600, button: 0 });
+    fireEvent.pointerMove(window, { clientX: 480 });
+    fireEvent.pointerUp(window);
+    expect(drawer).toHaveStyle({ width: "420px" });
+
+    const originalWidth = window.innerWidth;
+    Object.defineProperty(window, "innerWidth", { value: 800, configurable: true });
+    fireEvent(window, new Event("resize"));
+    expect(drawer).toHaveStyle({ width: "260px" });
+    expect(sidebar).toHaveStyle({ width: "180px" });
+    Object.defineProperty(window, "innerWidth", { value: originalWidth, configurable: true });
+  });
+
   it("opens the Ask this call drawer from its toolbar button (stage 4.2)", async () => {
     vi.mocked(ipc.listSessions).mockResolvedValueOnce([
       {

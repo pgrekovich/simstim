@@ -163,6 +163,19 @@
     letter-spacing: 0.04em;
 }
 
+/* Chat answers (stage 4.2, design 8b/8c): machine material reads as compact
+   UI sans, unlike the Summary's 15px reading serif -- and it must win over
+   .markdown-content's own font rules above, hence the dedicated variants
+   (a Tailwind text-[..] on the same element ties on specificity and loses
+   on order). Headings scale via em; --chat-answer-size lets each surface
+   set its size. */
+.markdown-content.chat-answer {
+    font-family: var(--font-ui);
+    font-size: var(--chat-answer-size, 13px);
+    line-height: 1.62;
+    color: var(--quiet-foreground);
+}
+
 @font-face {
     font-family: "Source Serif 4";
     src: url("./assets/fonts/SourceSerif4-Variable.ttf") format("truetype");

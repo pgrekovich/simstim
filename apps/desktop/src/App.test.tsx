@@ -73,6 +73,12 @@ vi.mock("@/lib/ipc", () => ({
   setEnhanceRenameTitle: vi.fn().mockResolvedValue(undefined),
   setEnhanceUseCalendar: vi.fn().mockResolvedValue(undefined),
   listEnhanceProviders: vi.fn().mockResolvedValue([]),
+  storageStats: vi.fn().mockResolvedValue({
+    note_count: 0,
+    notes_bytes: 0,
+    audio_bytes: 0,
+    audio_secs: 0,
+  }),
   showMainWindow: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -1482,8 +1488,11 @@ describe("App: enhance progress (stage 0.11)", () => {
     await waitFor(() => expect(document.body.textContent).toContain("hi"));
 
     emit("enhance-progress", { path: "/tmp/sync.md", phase: "running", provider: "local", message: null });
-    const chip = await screen.findByTestId("enhance-working");
-    expect(chip.textContent).toContain("Summarizing...");
+    // The Summary tab appears with a spinner (stage 4.1: no more toolbar
+    // chip); the step detail rides in its tooltip.
+    const tab = await screen.findByRole("tab", { name: /summary/i });
+    expect(screen.getByTestId("summary-tab-spinner")).toBeInTheDocument();
+    expect(tab).toHaveAttribute("title", "Summarizing...");
 
     emit("enhance-progress", {
       path: "/tmp/sync.md",
@@ -1491,10 +1500,10 @@ describe("App: enhance progress (stage 0.11)", () => {
       provider: "local",
       message: "Summarizing part 2 of 7...",
     });
-    await waitFor(() => expect(chip.textContent).toContain("part 2 of 7"));
+    await waitFor(() => expect(tab).toHaveAttribute("title", "Summarizing part 2 of 7..."));
 
     emit("enhance-progress", { path: "/tmp/sync.md", phase: "done", provider: "local", message: null });
-    await waitFor(() => expect(screen.queryByTestId("enhance-working")).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByTestId("summary-tab-spinner")).not.toBeInTheDocument());
   });
 
   it("offers Re-enhance in the overflow menu and runs it for the open note", async () => {

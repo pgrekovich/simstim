@@ -418,6 +418,22 @@ export function listSessions(): Promise<SessionMeta[]> {
 }
 
 /**
+ * Mirrors `sessions::StorageStats`: what the notes folder weighs, split into
+ * notes vs audio, for the Settings Storage page (stage 4.1). `audio_secs`
+ * sums only sessions that actually have an audio file.
+ */
+export interface StorageStats {
+  note_count: number;
+  notes_bytes: number;
+  audio_bytes: number;
+  audio_secs: number;
+}
+
+export function storageStats(): Promise<StorageStats> {
+  return invoke("storage_stats");
+}
+
+/**
  * Enhances a note with the configured AI CLI (stage 0.11): the user's rough
  * notes lead, the transcript backs them, and the result replaces the note's
  * `## Summary` section (never the notes). Mirrors `enhance::enhance_session`.

@@ -69,14 +69,14 @@ interface SessionViewProps {
    * (its `enhance-progress` listener), for exactly the reason
    * `retranscribingJob` is: the backend job survives this component's
    * remount, so a local boolean would silently re-enable the control
-   * mid-job. Drives the toolbar "Summarizing..." chip and disables Enhance
-   * and re-run. Optional so tests exercising unrelated behavior can omit it.
+   * mid-job. Drives the Summary tab's spinner and disables Enhance and
+   * re-run. Optional so tests exercising unrelated behavior can omit it.
    */
   enhanceRunning?: boolean;
   /**
    * The running job's step message ("Summarizing part 2 of 7..."), when the
-   * local provider reports map/reduce progress; null shows the plain
-   * "Summarizing..." chip. Owned by App's `enhance-progress` listener too.
+   * local provider reports map/reduce progress; shown as the spinning
+   * Summary tab's tooltip. Owned by App's `enhance-progress` listener too.
    */
   enhanceProgress?: string | null;
   /** Notifies the caller after a title save resolves, so it can refresh the sidebar. */
@@ -772,18 +772,11 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
   // (the note's one command strip), not at the bottom of the notes pane: a
   // compact bordered pill in the design language (mono label, ochre AI
   // mark). While a job runs -- started here, from re-run, or automatically
-  // -- the same slot shows the indeterminate work chip, so processing is
-  // visible from every tab. Once a summary exists the pill retires; re-runs
+  // -- the pill yields to a spinner ON the Summary tab itself (the old
+  // separate work chip clipped against the toolbar's find slot and read as
+  // a second control). Once a summary exists the pill retires; re-runs
   // live in the Summary tab's provenance line.
-  const enhanceControl = enhanceBusy ? (
-    <span
-      data-testid="enhance-working"
-      className="ml-3 inline-flex h-[30px] shrink-0 items-center gap-2 rounded-full border border-input bg-foreground/[0.04] px-[15px] font-mono text-[11px] font-medium tracking-[0.04em] text-muted-foreground"
-    >
-      <span aria-hidden="true" className="working-spinner size-3.5" />
-      {enhanceProgress ?? "Summarizing..."}
-    </span>
-  ) : canEnhance && !summary ? (
+  const enhanceControl = enhanceBusy ? null : canEnhance && !summary ? (
     <Button
       type="button"
       variant="outline"
@@ -804,11 +797,20 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
       >
         Notes
       </TabsTrigger>
-      {summary && (
+      {/* The tab appears as soon as a summary exists OR one is being
+          written: during a first run it sits disabled with a spinner (the
+          material is on its way), during a re-run it stays clickable. The
+          step detail ("Summarizing part 2 of 7...") lives in the tooltip. */}
+      {(summary || enhanceBusy) && (
         <TabsTrigger
           className="h-7 gap-[7px] rounded-full px-[13px] font-mono text-[11px] font-normal hover:bg-foreground/[0.05] data-[state=active]:bg-background data-[state=active]:font-semibold data-[state=active]:tracking-[0.04em] data-[state=active]:shadow-[0_1px_2px_rgb(30_27_22/0.14)] dark:data-[state=active]:bg-foreground/[0.14]"
           value="summary"
+          disabled={!summary}
+          title={enhanceBusy ? enhanceProgress ?? "Summarizing..." : undefined}
         >
+          {enhanceBusy && (
+            <span data-testid="summary-tab-spinner" aria-hidden="true" className="working-spinner size-3" />
+          )}
           Summary
         </TabsTrigger>
       )}
@@ -879,7 +881,8 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
                       {" · "}
                       {/* The regenerate affordance is plain text in the
                           provenance line (design 3b): quiet, next to what it
-                          replaces. The toolbar chip shows the running state. */}
+                          replaces. The Summary tab's spinner shows the
+                          running state. */}
                       <button
                         type="button"
                         disabled={enhanceBusy}

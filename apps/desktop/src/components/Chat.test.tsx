@@ -141,6 +141,20 @@ describe("ChatConversation", () => {
     expect(screen.getByRole("button", { name: "What changed since June?" })).toBeInTheDocument();
   });
 
+  it("focuses the input on mount so opening the surface means typing", async () => {
+    render(
+      <ChatConversation
+        scopePath={null}
+        variant="pane"
+        sessions={sessions}
+        placeholder="Ask anything..."
+        onOpenCitation={vi.fn()}
+      />,
+    );
+    const input = screen.getByRole("textbox", { name: "Ask anything..." });
+    await waitFor(() => expect(input).toHaveFocus());
+  });
+
   it("sends a question with Enter and shows it as pending", async () => {
     render(
       <ChatConversation

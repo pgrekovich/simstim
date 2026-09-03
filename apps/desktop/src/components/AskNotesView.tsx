@@ -90,7 +90,6 @@ export function AskNotesView({ sessions, askRequest, onOpenCitation }: AskNotesV
         variant="pane"
         sessions={sessions}
         placeholder={noteCount ? `Ask anything about ${noteCount}...` : "Ask anything about your notes..."}
-        footerHint="answers cite the note and the second"
         askRequest={askRequest}
         onOpenCitation={onOpenCitation}
         emptyState={

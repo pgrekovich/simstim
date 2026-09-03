@@ -41,7 +41,6 @@ describe("AskNotesView", () => {
 
     expect(await screen.findByText("184 notes · 61 h")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Ask your notes" })).toBeInTheDocument();
-    expect(screen.getByText("answers cite the note and the second")).toBeInTheDocument();
     // The conversation is folder-scoped: seeded with the null path.
     await waitFor(() => expect(chatHistory).toHaveBeenCalledWith(null));
   });

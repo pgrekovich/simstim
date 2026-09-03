@@ -51,8 +51,6 @@ interface ChatConversationProps {
   askRequest?: ChatAskRequest | null;
   /** Rendered when the conversation is still empty (the quiet hint). */
   emptyState?: React.ReactNode;
-  /** Quiet mono note next to the pane's input ("answers cite the note..."). */
-  footerHint?: string;
 }
 
 /** "00:04:30" -> "04:30" for chip labels; hour-long timestamps stay whole. */
@@ -111,7 +109,6 @@ export function ChatConversation({
   askedAt,
   askRequest,
   emptyState,
-  footerHint,
 }: ChatConversationProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [running, setRunning] = useState(false);
@@ -131,6 +128,13 @@ export function ChatConversation({
   const handledAskRequestRef = useRef(0);
   // The scope string `chat-progress` events carry for this conversation.
   const scope = scopePath ?? "all";
+
+  // Opening the surface means the user wants to type: focus immediately
+  // (the rAF matches GlobalSearch -- the element must be laid out first).
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => inputRef.current?.focus());
+    return () => window.cancelAnimationFrame(frame);
+  }, [scopePath]);
 
   useEffect(() => {
     let cancelled = false;
@@ -401,9 +405,6 @@ export function ChatConversation({
             <CornerDownLeft className="size-2.5" />
           </button>
         </div>
-        {pane && footerHint && (
-          <span className="shrink-0 font-mono text-[10px] text-muted-foreground">{footerHint}</span>
-        )}
       </div>
     </div>
   );

@@ -933,7 +933,13 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
             onSeek={audioPath ? handleSeek : undefined}
             matches={transcriptMatches}
             activeMatchIndex={findOpen ? activeFindIndex : -1}
-            jumpRequest={transcriptJumpRequest}
+            // Withheld until the transcript tab is actually the visible one:
+            // the tab contents are force-mounted and CSS-hidden, and
+            // scrollIntoView inside a display:none container is a silent
+            // no-op -- the jump effect above switches the tab, and only the
+            // re-render that shows it may deliver the request (owner bug
+            // report: chip click opened the transcript but never scrolled).
+            jumpRequest={activeTab === "transcript" ? transcriptJumpRequest : null}
           />
 
           {retranscribeStatusText && (

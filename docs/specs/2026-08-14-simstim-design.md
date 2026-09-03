@@ -550,6 +550,13 @@ Status (2026-09-02): implemented on `stage-4.1`. All four gates green;
 verified visually in a browser (all five pages, sub-row dimming, dark theme,
 Storage figures). Awaiting owner e2e.
 
+Status (2026-09-03): owner e2e passed and the stage merged. Two additions
+during his review: the polish pass (Live transcription naming, the
+While-you-talk/After-the-call heading pair, role-prefixed Storage rows, "~"
+paths, de-duplicated provider version) and the Summarizing indicator moving
+from a toolbar chip (it clipped against the find slot) onto the Summary tab
+itself as a spinner, with step detail in the tooltip.
+
 ## Milestones after MVP-0
 
 1. Audio file kept next to the .md; re-transcribe command (whisper turbo).

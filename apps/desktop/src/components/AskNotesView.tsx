@@ -95,7 +95,7 @@ export function AskNotesView({ sessions, askRequest, onOpenCitation }: AskNotesV
         emptyState={
           <div className="flex h-full items-center justify-center">
             <p className="max-w-sm text-center font-serif text-[14px] leading-[1.6] text-muted-foreground">
-              Ask across every call you've recorded — decisions, promises,
+              Ask across every call you've recorded: decisions, promises,
               numbers, who said what. Answers cite the note and the second.
             </p>
           </div>

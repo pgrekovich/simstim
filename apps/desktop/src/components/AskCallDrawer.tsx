@@ -77,7 +77,7 @@ export function AskCallDrawer({
         emptyState={
           <p className="pt-6 text-center font-serif text-[13px] leading-[1.6] text-muted-foreground">
             {recordingStartedAt !== null
-              ? "Catch up without stopping the call — what was decided, what you missed, what to have ready."
+              ? "Catch up without stopping the call: what was decided, what you missed, what to have ready."
               : "Ask what was agreed, promised or numbered in this call."}
           </p>
         }

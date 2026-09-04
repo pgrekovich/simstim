@@ -100,6 +100,30 @@ pub(crate) struct RecordingStatus {
     pub(crate) remote_silent_for: Duration,
 }
 
+/// `recording_activity`'s reply: milliseconds since speech was last heard on
+/// each channel (since the recording started, if never). Mirrors
+/// `HearingStatus` in `ipc.ts`.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct HearingStatus {
+    pub me_silent_ms: u64,
+    pub them_silent_ms: u64,
+}
+
+/// The live "hearing you / hearing them" readout for the toolbar, polled
+/// while a recording runs. `None` when nothing is recording. Reads the
+/// worker's existing per-channel VAD clock; no audio is analyzed twice.
+#[tauri::command]
+fn recording_activity(state: tauri::State<'_, AppState>) -> Option<HearingStatus> {
+    let activity = {
+        let guard = state.recording.lock().unwrap();
+        guard.as_ref()?.activity.clone()
+    };
+    Some(HearingStatus {
+        me_silent_ms: activity.silent_for(simstim_capture::Channel::Me).as_millis() as u64,
+        them_silent_ms: activity.silent_for(simstim_capture::Channel::Them).as_millis() as u64,
+    })
+}
+
 /// Keeps `finalizing` accurate even if the async IPC request is cancelled.
 /// The blocking task owns this guard, so dropping the request future cannot
 /// expose a still-being-written audio file as complete.
@@ -661,6 +685,7 @@ pub fn run() {
             onboarding::check_audio_permissions,
             onboarding::complete_onboarding,
             stop_recording,
+            recording_activity,
             update_active_session,
             get_config,
             set_output_dir,

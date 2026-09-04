@@ -26,6 +26,7 @@ import {
 import { RecordButton } from "@/components/RecordButton";
 import { ResizeHandle } from "@/components/ResizeHandle";
 import { EmptyState } from "@/components/EmptyState";
+import { HearingIndicator } from "@/components/HearingIndicator";
 import { AskCallDrawer } from "@/components/AskCallDrawer";
 import { AskNotesView } from "@/components/AskNotesView";
 import { type ChatAskRequest } from "@/components/Chat";
@@ -45,6 +46,7 @@ import {
   getConfig,
   listSessions,
   readSession,
+  recordingActivity,
   showMainWindow,
   startRecording,
   stopRecording,
@@ -53,6 +55,7 @@ import {
   type CallEndedPayload,
   type ChatSource,
   type EnhanceProgress,
+  type HearingStatus,
   type ModelInfo,
   type RetranscribeProgress,
   type SessionData,
@@ -196,6 +199,9 @@ function App() {
   const [interimMe, setInterimMe] = useState("");
   const [interimThem, setInterimThem] = useState("");
   const [recordingStartedAt, setRecordingStartedAt] = useState<number | null>(null);
+  // Who is being heard right now, polled once a second while recording
+  // (see HearingIndicator); `null` between recordings.
+  const [hearing, setHearing] = useState<HearingStatus | null>(null);
   const [modelReady, setModelReady] = useState(true);
   const [appConfig, setAppConfig] = useState<AppConfig | null>(null);
   const [models, setModels] = useState<ModelInfo[]>([]);
@@ -210,6 +216,9 @@ function App() {
   const askNotesRequestIdRef = useRef(0);
   // Ask this call (stage 4.2): the right-hand drawer over the open note.
   const [askCallOpen, setAskCallOpen] = useState(false);
+  // A question handed to the drawer from the ⌘K palette's "Ask this call" row.
+  const [askCallRequest, setAskCallRequest] = useState<ChatAskRequest | null>(null);
+  const askCallRequestIdRef = useRef(0);
   // A clicked citation chip's jump target, keyed by path so it only reaches
   // the SessionView for that note (same recipe as transcriptFindRequest).
   const [transcriptJumpRequest, setTranscriptJumpRequest] = useState<
@@ -773,6 +782,30 @@ function App() {
     prevStatusKindRef.current = status.kind;
   }, [status.kind, refreshSessions]);
 
+  // The hearing indicator's clock: one cheap IPC read per second while a
+  // recording runs, nothing at all otherwise. Errors leave the last reading
+  // in place rather than flickering the dots.
+  useEffect(() => {
+    if (activePath === null) {
+      setHearing(null);
+      return;
+    }
+    let cancelled = false;
+    const poll = () => {
+      recordingActivity()
+        .then((status) => {
+          if (!cancelled) setHearing(status);
+        })
+        .catch(() => {});
+    };
+    poll();
+    const timer = window.setInterval(poll, 1000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [activePath]);
+
   // "saved" is a confirmation, not a state the user lives in: it dissolves
   // back to idle after a beat instead of sitting in the toolbar until some
   // unrelated status happens to replace it. Identity-compared so a newer
@@ -1202,6 +1235,15 @@ function App() {
     setAskNotesRequest({ id: ++askNotesRequestIdRef.current, question });
   }
 
+  // The palette's "Ask this call" row: opens the drawer over the open note
+  // with the question already sent (one field reaches every scope).
+  function handleAskThisCall(question: string) {
+    if (selectedPath === null) return;
+    setAskNotesOpen(false);
+    setAskCallOpen(true);
+    setAskCallRequest({ id: ++askCallRequestIdRef.current, question });
+  }
+
   async function handleNewSession() {
     if (!appConfig?.onboarding_complete || busy) return;
     setBusy(true);
@@ -1240,22 +1282,22 @@ function App() {
   // hides the topbar entirely. A lone Record button floating over the
   // shortcut menu reads as clutter, so its branch renders a bare drag strip.
   const showTopbar = sessionActive || selectedPath !== null || askNotesOpen;
-  // Sidebar rows with machine work in flight, path -> the lowercase status
-  // word shown under the title (design language: quiet mono status).
-  // Enhance is written first so a same-path overlap shows the newer
-  // re-transcribe instead.
+  // Sidebar rows with work in flight, path -> the lowercase status word
+  // shown under the title (design language: quiet mono status). One word
+  // for every stage of the pipeline: the person doesn't care whether the
+  // note is being transcribed or summarized, only that it isn't done yet.
   const busyPaths: Record<string, string> = {};
-  if (enhancingPath !== null) busyPaths[enhancingPath] = "summarizing";
-  if (retranscribingJob) busyPaths[retranscribingJob.path] = "transcribing";
+  if (enhancingPath !== null) busyPaths[enhancingPath] = "finishing";
+  if (retranscribingJob) busyPaths[retranscribingJob.path] = "finishing";
+  // The "recording" state has no word of its own: the hearing indicator
+  // and the red Stop button carry it.
   const statusText = status.kind === "loading-model"
-    ? "loading model"
-    : status.kind === "recording"
-      ? "recording"
-      : status.kind === "saving"
-        ? "saving"
-        : status.kind === "saved"
-          ? "saved"
-          : "";
+    ? "starting"
+    : status.kind === "saving"
+      ? "finishing"
+      : status.kind === "saved"
+        ? "saved"
+        : "";
 
   if (appConfig === null) {
     return (
@@ -1298,8 +1340,6 @@ function App() {
         onNewSession={handleNewSession}
         onCollapse={() => setSidebarCollapsed(true)}
         onOpenSearch={() => setSearchOpen(true)}
-        onOpenAsk={() => setAskNotesOpen(true)}
-        askActive={askNotesOpen}
         onDelete={handleDeleteSession}
         onOpenFile={(path) => void openPath(path)}
         onRevealInFinder={(path) => void revealItemInDir(path)}
@@ -1387,6 +1427,10 @@ function App() {
             </span>
           )}
 
+          {showTopbar && sessionActive && status.kind === "recording" && (
+            <HearingIndicator status={hearing} />
+          )}
+
           {showTopbar && showModelHint && (
             <Button variant="outline" size="sm" onClick={() => setSettingsOpen(true)}>
               Open settings
@@ -1451,8 +1495,8 @@ function App() {
                     {enhancingPath !== null
                       ? "Summarizing..."
                       : sessionData?.summary
-                        ? "Re-enhance"
-                        : "Enhance"}
+                        ? "Summarize again"
+                        : "Summarize"}
                   </DropdownMenuItem>
                   <DropdownMenuItem onSelect={() => void openPath(selectedPath)}>
                     <FileText />
@@ -1517,7 +1561,7 @@ function App() {
               onStartRecording={() => void handleStart()}
               onOpenSettings={() => setSettingsOpen(true)}
               recordingDisabled={busy || sessionActive || !modelReady}
-              recordingHint={showModelHint ? "model not downloaded" : undefined}
+              recordingHint={showModelHint ? "speech recognition is still downloading" : undefined}
             />
           ) : viewingActiveSession ? (
             <SessionView
@@ -1633,6 +1677,7 @@ function App() {
             path={selectedPath}
             sessions={sessions}
             recordingStartedAt={selectedPath === activePath ? recordingStartedAt : null}
+            askRequest={askCallRequest}
             onClose={() => setAskCallOpen(false)}
             onOpenCitation={(source) => handleOpenCitation(source, selectedPath)}
           />
@@ -1659,6 +1704,7 @@ function App() {
           });
         }}
         onAskAllNotes={handleAskAllNotes}
+        onAskThisCall={selectedPath !== null && !askNotesOpen ? handleAskThisCall : undefined}
       />
     </div>
   );

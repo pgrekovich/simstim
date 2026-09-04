@@ -130,6 +130,23 @@ export function showMainWindow(): Promise<void> {
   return invoke("show_main_window");
 }
 
+/**
+ * Mirrors `HearingStatus` (lib.rs): milliseconds since speech was last
+ * heard on each channel, since the recording started if never.
+ */
+export interface HearingStatus {
+  me_silent_ms: number;
+  them_silent_ms: number;
+}
+
+/**
+ * The live "hearing you / hearing them" readout, polled by the toolbar while
+ * a recording runs; `null` when nothing is recording.
+ */
+export function recordingActivity(): Promise<HearingStatus | null> {
+  return invoke("recording_activity");
+}
+
 export interface CallEndedPayload {
   bundle_id: string;
   recording_id: string;

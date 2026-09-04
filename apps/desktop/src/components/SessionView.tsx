@@ -301,6 +301,15 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
   // covers the instants before the backend's `enhance-progress` "running"
   // event lands and flips the `enhanceRunning` prop.
   const [enhanceClicking, setEnhanceClicking] = useState(false);
+  // "copied" flashes in the provenance line for a beat after Copy summary.
+  const [summaryCopied, setSummaryCopied] = useState(false);
+  const copiedTimerRef = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (copiedTimerRef.current !== null) window.clearTimeout(copiedTimerRef.current);
+    },
+    [],
+  );
   // Local-only optimistic flag: disables the button the instant it's
   // clicked, before the backend's first `retranscribe-progress` event has
   // had a chance to land and update `retranscribingJob` (a window of at
@@ -608,6 +617,24 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
   // through the backend's `enhance-progress` events (App's listener), which
   // this command also emits for its own run -- so the rejection here is
   // deliberately not shown a second time.
+  /**
+   * Copies the summary as the Markdown it is (owner-shareable in one paste).
+   * The clipboard API is user-gesture gated, and this only ever runs from a
+   * click; a rejection just leaves the label as "copy".
+   */
+  function handleCopySummary() {
+    const text = summary.trim();
+    if (!text) return;
+    void navigator.clipboard
+      ?.writeText(text)
+      .then(() => {
+        setSummaryCopied(true);
+        if (copiedTimerRef.current !== null) window.clearTimeout(copiedTimerRef.current);
+        copiedTimerRef.current = window.setTimeout(() => setSummaryCopied(false), 1500);
+      })
+      .catch(() => {});
+  }
+
   async function handleEnhance() {
     if (isActive || enhanceBusy) return;
     setEnhanceClicking(true);
@@ -847,7 +874,7 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
       onClick={handleEnhance}
     >
       <Sparkles className="size-3.5 text-[var(--voice-remote)]" />
-      Enhance
+      Summarize
     </Button>
   ) : null;
 
@@ -945,6 +972,18 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
               {summaryModel && (
                 <p className="mb-4 font-mono text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
                   by {summaryModel}
+                  {" · "}
+                  {/* Sharing is the point of a summary: one word away from
+                      the clipboard as Markdown, ready for the person you
+                      just talked to. */}
+                  <button
+                    type="button"
+                    onClick={handleCopySummary}
+                    aria-label="Copy summary"
+                    className="font-mono uppercase tracking-[0.08em] underline-offset-2 hover:text-foreground hover:underline"
+                  >
+                    {summaryCopied ? "copied" : "copy"}
+                  </button>
                   {canEnhance && (
                     <>
                       {" · "}
@@ -958,7 +997,7 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
                         onClick={handleEnhance}
                         className="font-mono uppercase tracking-[0.08em] underline-offset-2 hover:text-foreground hover:underline disabled:pointer-events-none disabled:opacity-50"
                       >
-                        {enhanceBusy ? "summarizing..." : "re-run"}
+                        {enhanceBusy ? "summarizing..." : "again"}
                       </button>
                     </>
                   )}
@@ -1014,7 +1053,7 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
                   disabled={isActive || retranscribeBusy}
                   onClick={handleRetranscribe}
                 >
-                  {retranscribeBusy ? "Re-transcribing..." : "Re-transcribe"}
+                  {retranscribeBusy ? "Improving..." : "Improve transcript"}
                 </Button>
               }
             />

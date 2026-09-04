@@ -20,6 +20,13 @@ interface GlobalSearchProps {
    * and directly via ⌘↵ from the input. Absent, the row doesn't render.
    */
   onAskAllNotes?: (question: string) => void;
+  /**
+   * Hands the typed query to the Ask this call drawer for the OPEN note
+   * (2026-09-04 ruling: one field reaches everything; the sidebar's own
+   * ask row is gone). Absent when no note is open, and the row doesn't
+   * render.
+   */
+  onAskThisCall?: (question: string) => void;
 }
 
 export interface SpokenSearchTarget {
@@ -157,6 +164,7 @@ export function GlobalSearch({
   sessions,
   onOpenSession,
   onAskAllNotes,
+  onAskThisCall,
 }: GlobalSearchProps) {
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<SearchHit[]>([]);
@@ -211,14 +219,25 @@ export function GlobalSearch({
   const rows = useMemo(() => rowsFromHits(hits, query), [hits, query]);
   const noteRows = rows.filter((row) => row.kind === "note");
   const spokenRows = rows.filter((row) => row.kind === "spoken");
-  // The ask row is navigable like a result but isn't a SearchRow: it sits
-  // at index `rows.length`, always last, only with a non-blank query.
+  // The ask rows are navigable like results but aren't SearchRows: they sit
+  // after the results, only with a non-blank query -- "this call" first
+  // (the narrower, usually intended scope when a note is open), then "all
+  // notes" last.
+  const askCallAvailable = onAskThisCall !== undefined && query.trim() !== "";
   const askAvailable = onAskAllNotes !== undefined && query.trim() !== "";
-  const navigableCount = rows.length + (askAvailable ? 1 : 0);
+  const askCallIndex = rows.length;
+  const askAllIndex = rows.length + (askCallAvailable ? 1 : 0);
+  const navigableCount = rows.length + (askCallAvailable ? 1 : 0) + (askAvailable ? 1 : 0);
 
   function askAll() {
     if (!askAvailable) return;
     onAskAllNotes?.(query.trim());
+    handleOpenChange(false);
+  }
+
+  function askThisCall() {
+    if (!askCallAvailable) return;
+    onAskThisCall?.(query.trim());
     handleOpenChange(false);
   }
   const resultCount = query.trim() === ""
@@ -271,10 +290,48 @@ export function GlobalSearch({
       event.preventDefault();
       if (rows[activeIndex]) {
         openRow(rows[activeIndex]);
-      } else if (activeIndex === rows.length) {
+      } else if (askCallAvailable && activeIndex === askCallIndex) {
+        askThisCall();
+      } else if (askAvailable && activeIndex === askAllIndex) {
         askAll();
       }
     }
+  }
+
+  /** One of the two ask rows at the list's tail (same look, different scope). */
+  function renderAskRow(index: number, label: string, ariaLabel: string, hint: string, onPick: () => void) {
+    const active = activeIndex === index;
+    return (
+      <button
+        type="button"
+        role="option"
+        id={`global-search-result-${index}`}
+        aria-label={ariaLabel}
+        aria-selected={active}
+        onMouseMove={() => setActiveIndex(index)}
+        onClick={onPick}
+        className={cn(
+          "flex w-full items-center gap-3 rounded-[7px] px-3 py-2.5 text-left",
+          active ? "bg-foreground text-background" : "hover:bg-foreground/[0.05]",
+        )}
+      >
+        <MessageCircleQuestion
+          aria-hidden="true"
+          className={cn("size-[15px] shrink-0", active ? "text-background/80" : "text-muted-foreground")}
+        />
+        <span className="min-w-0 flex-1 truncate text-[13.5px]">
+          {label}: <span className="italic">“{query.trim()}”</span>
+        </span>
+        <span
+          className={cn(
+            "inline-flex h-[17px] shrink-0 items-center rounded-[4px] px-[5px] font-mono text-[10.5px]",
+            active ? "bg-background/20 text-background" : "bg-foreground/[0.07] text-quiet-foreground",
+          )}
+        >
+          {hint}
+        </span>
+      </button>
+    );
   }
 
   function renderRow(row: SearchRow) {
@@ -410,43 +467,25 @@ export function GlobalSearch({
               )}
             </>
           )}
-          {askAvailable && !error && (
-            <button
-              type="button"
-              role="option"
-              id={`global-search-result-${rows.length}`}
-              aria-label={`Ask across all notes: ${query.trim()}`}
-              aria-selected={activeIndex === rows.length}
-              onMouseMove={() => setActiveIndex(rows.length)}
-              onClick={askAll}
-              className={cn(
-                "mt-2 flex w-full items-center gap-3 rounded-[7px] border-t border-foreground/[0.09] px-3 py-2.5 text-left",
-                activeIndex === rows.length
-                  ? "bg-foreground text-background"
-                  : "hover:bg-foreground/[0.05]",
-              )}
-            >
-              <MessageCircleQuestion
-                aria-hidden="true"
-                className={cn(
-                  "size-[15px] shrink-0",
-                  activeIndex === rows.length ? "text-background/80" : "text-muted-foreground",
+          {(askCallAvailable || askAvailable) && !error && (
+            <div className="mt-2 flex flex-col gap-px border-t border-foreground/[0.09] pt-1.5">
+              {askCallAvailable &&
+                renderAskRow(
+                  askCallIndex,
+                  "Ask this call",
+                  `Ask this call: ${query.trim()}`,
+                  "↵",
+                  askThisCall,
                 )}
-              />
-              <span className="min-w-0 flex-1 truncate text-[13.5px]">
-                Ask across all notes: <span className="italic">“{query.trim()}”</span>
-              </span>
-              <span
-                className={cn(
-                  "inline-flex h-[17px] shrink-0 items-center rounded-[4px] px-[5px] font-mono text-[10.5px]",
-                  activeIndex === rows.length
-                    ? "bg-background/20 text-background"
-                    : "bg-foreground/[0.07] text-quiet-foreground",
+              {askAvailable &&
+                renderAskRow(
+                  askAllIndex,
+                  "Ask across all notes",
+                  `Ask across all notes: ${query.trim()}`,
+                  "⌘↵",
+                  askAll,
                 )}
-              >
-                ⌘↵
-              </span>
-            </button>
+            </div>
           )}
         </div>
 

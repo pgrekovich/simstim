@@ -271,8 +271,8 @@ export function ChatConversation({
                   <div className="flex items-baseline justify-between gap-3">
                     <span className="font-mono text-[9.5px] font-medium uppercase tracking-[0.1em] text-muted-foreground">
                       {distinctSourceCount(message.sources) > 0
-                        ? `From ${distinctSourceCount(message.sources)} ${distinctSourceCount(message.sources) === 1 ? "note" : "notes"} · machine`
-                        : "Machine"}
+                        ? `From ${distinctSourceCount(message.sources)} ${distinctSourceCount(message.sources) === 1 ? "note" : "notes"}`
+                        : "Answer"}
                     </span>
                     {message.label && (
                       <span className="shrink-0 font-mono text-[10px] text-muted-foreground">

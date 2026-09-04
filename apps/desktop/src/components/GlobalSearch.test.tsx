@@ -225,3 +225,51 @@ describe("GlobalSearch: ask across all notes (stage 4.2)", () => {
     expect(onOpenSession).not.toHaveBeenCalled();
   });
 });
+
+describe("GlobalSearch: ask this call (one field, 2026-09-04)", () => {
+  it("offers 'Ask this call' above 'Ask across all notes' when a note is open, and hands the question over", async () => {
+    const onAskThisCall = vi.fn();
+    const onAskAllNotes = vi.fn();
+    const onOpenChange = vi.fn();
+    render(
+      <GlobalSearch
+        open
+        onOpenChange={onOpenChange}
+        sessions={sessions}
+        onOpenSession={vi.fn()}
+        onAskAllNotes={onAskAllNotes}
+        onAskThisCall={onAskThisCall}
+      />,
+    );
+
+    expect(screen.queryByRole("option", { name: /ask this call/i })).toBeNull();
+    fireEvent.change(screen.getByRole("searchbox", { name: /search all notes/i }), {
+      target: { value: "what did I promise" },
+    });
+    const thisCall = await screen.findByRole("option", { name: /ask this call/i });
+    const allNotes = screen.getByRole("option", { name: /ask across all notes/i });
+    expect(thisCall.compareDocumentPosition(allNotes) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    fireEvent.click(thisCall);
+    expect(onAskThisCall).toHaveBeenCalledExactlyOnceWith("what did I promise");
+    expect(onAskAllNotes).not.toHaveBeenCalled();
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it("renders no 'Ask this call' row without an open note", async () => {
+    render(
+      <GlobalSearch
+        open
+        onOpenChange={vi.fn()}
+        sessions={sessions}
+        onOpenSession={vi.fn()}
+        onAskAllNotes={vi.fn()}
+      />,
+    );
+    fireEvent.change(screen.getByRole("searchbox", { name: /search all notes/i }), {
+      target: { value: "berlin" },
+    });
+    await screen.findByRole("option", { name: /ask across all notes/i });
+    expect(screen.queryByRole("option", { name: /ask this call/i })).toBeNull();
+  });
+});

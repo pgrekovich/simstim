@@ -132,7 +132,7 @@ describe("ChatConversation", () => {
     // The answer body renders through the lazy Markdown renderer: await it.
     expect(await screen.findByText(/hold Berlin until legal clears/)).toBeInTheDocument();
     // Machine material is labeled with its evidence count and provider.
-    expect(screen.getByText(/From 2 notes · machine/i)).toBeInTheDocument();
+    expect(screen.getByText(/^From 2 notes$/i)).toBeInTheDocument();
     expect(screen.getByText("claude/opus")).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "Berlin rollout — legal review · 21:44" }),

@@ -664,6 +664,51 @@ recorded in the status lines above; the largest rulings were exact model
 labels on every answer, the one-AI-choice settings unification, and the
 resizable panes with the 640px toolbar minimum.
 
+## Product review: the cut (2026-09-04)
+
+The owner asked for an unsparing whole-product review ("Steve Jobs in his
+prime, our lives depend on it") and then ruled: do everything. Rulings, all
+implemented the same day and binding from here on:
+
+- **Out of the box, the finished note is the default.** `auto_retranscribe`,
+  `auto_enhance`, `enhance_rename_title` and `enhance_use_calendar` default
+  on. Automation skips quietly while the whisper model is still downloading
+  or no CLI is installed; it never toasts after every call. Rule 2 (cloud is
+  opt-in) is honored by the onboarding screen showing the summaries switch,
+  on, before the first call.
+- **The on-device summarizer is retired.** Its 4B summaries could change
+  what a call decided (measured, see stage 3.1), and a wrong action item
+  poisons trust in the whole note. Summaries come from Claude Code or Codex
+  only; without either, the product is notes + accurate transcript + search
+  and says so. The registry keeps the entry retired so a downloaded copy can
+  be deleted from Storage. Reconsider only with an on-device model that is
+  indistinguishable from the CLIs on real calls (Apple Foundation Models are
+  the obvious candidate: zero download).
+- **Onboarding is one screen**: promise, folder, the two permissions, the
+  summaries switch, and the speech models downloading on their own. No
+  engine names or sizes anywhere on it.
+- **Settings is one page.** Gone from the UI (kept in config.toml for the
+  owner): audio format, the auto-pass toggle, delete-audio-after-pass. The
+  live model only appears while missing. Two whisper choices stay (large-v3
+  is materially better on Russian). No quantization suffix on screen.
+- **One field.** The command-K palette searches, asks the open call and asks
+  every note (two rows at its tail). The sidebar's pinned Ask your notes row
+  is gone; command-L and command-J remain as shortcuts to the surfaces.
+- **Trust while recording**: two dots, you and them, lit while Silero heard
+  speech on that channel within six seconds. Reads the worker's existing VAD
+  clock through `recording_activity`.
+- **Words**: Summarize (not Enhance), Improve transcript (not
+  Re-transcribe), "again" (not re-run), answer cards without the "machine"
+  label, and one status word, "finishing", for every pipeline stage.
+- **The empty pane is the Record button.** Copy summary lives in the
+  Summary tab's provenance line. `people:` frontmatter (the calendar event's
+  attendees) is saved, searched, shown under the title and given to the
+  call chat.
+
+Not done, still owed to the review: a shared "Finishing your note" status
+in the note itself, naming "Them" from `people:` on 1:1 calls, a Share
+affordance beyond the clipboard.
+
 ## Milestones after MVP-0
 
 1. Audio file kept next to the .md; re-transcribe command (whisper turbo).

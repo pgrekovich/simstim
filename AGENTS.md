@@ -127,6 +127,9 @@ section replaced.
 
 ## Current state
 
-Stages MVP-0 through 4.0 are shipped and merged. Read the status lines and
-Known issues in the spec for exactly where things stand and what is
-deliberately unfixed.
+Stages MVP-0 through 4.2 are shipped and merged, followed by the 2026-09-04
+product review ("Product review: the cut" in the spec): no on-device
+summarizer, one-screen onboarding, one-page settings, automation on by
+default, one search-and-ask field. Read that section before reintroducing
+any of what it removed. Read the status lines and Known issues in the spec
+for exactly where things stand and what is deliberately unfixed.

@@ -29,7 +29,7 @@ Download the [latest release][releases], open the disk image, drag simstim
 to Applications, launch. Signed with a Developer ID and notarized. Requires
 macOS 14.2+ on Apple Silicon.
 
-ASR models download inside the app on first run (Settings > Transcription), into
+Speech models download inside the app on first run, into
 `~/Library/Application Support/simstim/models/` (or via
 `./scripts/download-models.sh` from a checkout).
 
@@ -71,11 +71,13 @@ auto_stop_after_call = false
 ```
 
 `retranscribe_model` may also be `whisper-large-v3`. Model selection in the
-file does not download a model. The required transcription model downloads
-automatically during onboarding; optional models stay explicit in Settings.
+file does not download a model; onboarding downloads the live model and the
+default whisper model on its own. `audio_format`, `auto_retranscribe` and
+`delete_audio_after_retranscribe` are file-only since the 2026-09-04 review
+(the UI no longer offers them; the accurate pass runs after every call).
 `delete_audio_after_retranscribe = true` is irreversible after a successful
-pass. `onboarding_complete` becomes true after the guided permissions, transcription
-model and optional summary setup; advanced users may also set it by hand.
+pass. `onboarding_complete` becomes true after the one-screen setup (folder,
+permissions, summaries switch); advanced users may also set it by hand.
 
 ## Why not Granola, Anarlog or Meetily
 
@@ -128,23 +130,24 @@ mixes into them. Recording into an existing note continues its audio and
 timestamps instead of starting over. Deleting a note from the sidebar moves
 it and its audio to the Trash, never a hard delete.
 
-## Re-transcribe
+## The accurate transcript
 
 Parakeet's live transcript can be rough, especially on non-English speech.
-Open a session that has audio, press Re-transcribe, and the selected whisper
-model replaces the transcript outright (title, notes, date, duration stay).
-Two models are offered in Settings > Transcription:
+A few minutes after a call ends the app re-reads the saved audio with the
+selected whisper model and replaces the transcript outright (title, notes,
+date, duration stay); "Improve transcript" under the player runs it by hand.
+Two models are offered in Settings:
 
 * **Balanced** (Whisper large-v3-turbo, 874 MB, default): ~12x realtime, a
   30-minute call takes ~2.5 minutes.
 * **Best quality** (Whisper large-v3, 3.1 GB): strongest on non-English,
   slower.
 
-Two opt-in settings next to the model choice (Settings > Transcription):
-re-transcribe automatically after
-every stop, and delete the audio once a re-transcribe succeeds (irreversible:
-without audio a call can never be re-transcribed again). Jobs queue FIFO;
-a second request never gets rejected, it waits its turn.
+The pass runs automatically after every stop (config: `auto_retranscribe`);
+`delete_audio_after_retranscribe` in the config file deletes the audio once a
+pass succeeds (irreversible: without audio a call can never be re-transcribed
+again). Jobs queue FIFO; a second request never gets rejected, it waits its
+turn.
 
 ## Call detection
 

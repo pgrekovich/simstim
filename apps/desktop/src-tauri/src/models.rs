@@ -229,7 +229,7 @@ pub static REGISTRY: &[ModelSpec] = &[
         // decided. Kept in the registry only so an already-downloaded copy
         // stays visible in Storage for deletion; never offered again.
         id: "qwen3.5-4b-q4-k-m",
-        name: "Local summary model (no longer used)",
+        name: "Local summary model",
         technical_name: Some("Qwen3.5 4B (Q4_K_M)"),
         tagline: None,
         size_mb: 2740,

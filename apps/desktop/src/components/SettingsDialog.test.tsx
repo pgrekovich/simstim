@@ -108,7 +108,7 @@ const whisperLargeQ5Retired: ModelInfo = {
 
 const qwenRetired: ModelInfo = {
   id: "qwen3.5-4b-q4-k-m",
-  name: "Local summary model (no longer used)",
+  name: "Local summary model",
   technical_name: "Qwen3.5 4B (Q4_K_M)",
   tagline: null,
   size_mb: 2740,

@@ -1,15 +1,15 @@
 //! AI enhance (stage 0.11): Granola's core mechanic on our terms.
 //!
 //! The user's rough notes are the primary signal; the transcript is backing
-//! material. `enhance_session` feeds both either to the embedded local Qwen
-//! model or to a locally-installed AI CLI (`claude` or `codex`) and writes
-//! the result into the note's `## Summary` section, labeled with the exact
+//! material. `enhance_session` feeds both to a locally-installed AI CLI
+//! (`claude` or `codex`, the user's own subscription) and writes the result
+//! into the note's `## Summary` section, labeled with the exact
 //! provider/model.
 //!
 //! Product rules honored here:
-//! - The local provider sends nothing anywhere. With a cloud CLI, text-only
-//!   leaves the machine and only on an explicit click or explicit automatic
-//!   summary opt-in (rule 2). Audio never goes anywhere.
+//! - Text-only leaves the machine, never audio (rule 2). The onboarding
+//!   screen shows the summaries choice explicitly before the first call, and
+//!   Settings can turn it off in one switch.
 //! - The user's words are sacred (rule 6): output lands in `## Summary`,
 //!   never inside `## Notes`. Re-enhancing replaces only the summary.
 //! - Single writer (rule 5): the currently-recording or finalizing session
@@ -42,36 +42,27 @@ use crate::AppState;
 /// transcript is a big prompt, and subscription CLIs can queue.
 const ENHANCE_TIMEOUT: Duration = Duration::from_secs(300);
 
-/// One runnable provider: either the embedded local model or a cloud CLI.
-#[derive(Clone, Copy)]
-enum ProviderKind {
-    Local { model_id: &'static str },
-    Cli { binary: &'static str },
-}
-
+/// One runnable provider: a CLI the user already has a subscription for.
+/// The embedded on-device model was retired on 2026-09-04 (product ruling:
+/// its summaries could change what was decided on a call, which poisons
+/// trust in the whole note; the audio-stays-local promise is about audio,
+/// and both CLIs only ever receive text).
 struct ProviderSpec {
     id: &'static str,
     name: &'static str,
-    kind: ProviderKind,
+    binary: &'static str,
 }
 
 const PROVIDERS: &[ProviderSpec] = &[
     ProviderSpec {
-        id: "local",
-        name: "On this Mac",
-        kind: ProviderKind::Local {
-            model_id: crate::local_ai::MODEL_ID,
-        },
-    },
-    ProviderSpec {
         id: "claude",
         name: "Claude Code",
-        kind: ProviderKind::Cli { binary: "claude" },
+        binary: "claude",
     },
     ProviderSpec {
         id: "codex",
         name: "Codex",
-        kind: ProviderKind::Cli { binary: "codex" },
+        binary: "codex",
     },
 ];
 
@@ -99,8 +90,8 @@ impl EnhanceState {
 
 /// Clears the enhance slot when dropped, so a panic anywhere inside the
 /// pipeline (which unwinds through `spawn_blocking`) can't leave the slot
-/// occupied forever -- that would refuse every future enhance AND block
-/// deleting the local model until restart (review finding).
+/// occupied forever -- that would refuse every future enhance until restart
+/// (review finding).
 struct SlotGuard<'a>(&'a EnhanceState);
 
 impl Drop for SlotGuard<'_> {
@@ -112,7 +103,7 @@ impl Drop for SlotGuard<'_> {
 /// `enhance-progress` event payload: one job's lifecycle, for BOTH manual
 /// and automatic runs (they share `enhance_path_blocking`). Mirrors
 /// `EnhanceProgress` in `ipc.ts`. `running` fires once the slot is claimed,
-/// then again per local map/reduce step with a progress `message`;
+/// (`message` is reserved for step progress);
 /// `done`/`error` fire after the slot is released, so a listener reacting to
 /// a terminal phase can immediately start another enhance.
 #[derive(Debug, Clone, Serialize)]
@@ -120,7 +111,7 @@ struct EnhanceProgressPayload {
     path: String,
     /// `"running" | "done" | "error"`.
     phase: &'static str,
-    /// The provider id that ran (`"local"`, `"claude"`, `"codex"`).
+    /// The provider id that ran (`"claude"`, `"codex"`).
     provider: String,
     message: Option<String>,
 }
@@ -187,22 +178,13 @@ pub async fn list_enhance_providers() -> Vec<EnhanceProviderInfo> {
     tauri::async_runtime::spawn_blocking(|| {
         PROVIDERS
             .iter()
-            .map(|spec| match spec.kind {
-                ProviderKind::Local { model_id } => EnhanceProviderInfo {
+            .map(|spec| {
+                let version = probe_version(spec.binary);
+                EnhanceProviderInfo {
                     id: spec.id.to_string(),
                     name: spec.name.to_string(),
-                    available: crate::models::model_ready(model_id),
-                    version: crate::models::model_ready(model_id)
-                        .then(|| "on-device · Metal".to_string()),
-                },
-                ProviderKind::Cli { binary } => {
-                    let version = probe_version(binary);
-                    EnhanceProviderInfo {
-                        id: spec.id.to_string(),
-                        name: spec.name.to_string(),
-                        available: version.is_some(),
-                        version,
-                    }
+                    available: version.is_some(),
+                    version,
                 }
             })
             .collect()
@@ -658,9 +640,6 @@ fn output_language_rule(cyrillic_output: bool) -> &'static str {
 /// id on the CLI's default model, `provider/model` with an override -- the
 /// user asked to always be able to tell WHAT generated a summary.
 fn summary_label(spec: &ProviderSpec, model: Option<&str>) -> String {
-    if let ProviderKind::Local { model_id } = spec.kind {
-        return format!("local/{model_id}");
-    }
     match model {
         Some(m) => format!("{}/{}", spec.id, m),
         None => spec.id.to_string(),
@@ -767,13 +746,10 @@ fn normalize_server_name(name: &str) -> String {
 /// never allowlisted here: calendar work happens in the dedicated
 /// `lookup_calendar_event` call, and the summarizer runs on text alone.
 fn run_provider(spec: &ProviderSpec, model: Option<&str>, prompt: &str) -> Result<String, String> {
-    let ProviderKind::Cli { binary } = spec.kind else {
-        return Err("the local provider must run through the embedded model".to_string());
-    };
-    let binary = resolve_binary(binary).ok_or_else(|| {
+    let binary = resolve_binary(spec.binary).ok_or_else(|| {
         format!(
             "{} isn't installed (no `{}` on this Mac)",
-            spec.name, binary
+            spec.name, spec.binary
         )
     })?;
     // A fresh, empty working dir: both CLIs are agentic and would otherwise
@@ -881,21 +857,10 @@ fn validate_enhance(
     finalizing: Option<&Path>,
     already_running: Option<&str>,
     retranscribe_involves: bool,
-    provider_is_local: bool,
     transcript: &str,
 ) -> Result<(), String> {
     if active == Some(md_path) {
         return Err("this session is currently recording; stop it before enhancing".to_string());
-    }
-    // The local model shares the GPU with live transcription, and the live
-    // path is the one that loses data when starved (research ruling: the
-    // summary model must not compete with live ASR). Cloud providers cost
-    // no local compute worth blocking over.
-    if provider_is_local && active.is_some() {
-        return Err(
-            "a recording is live; the local model would compete with live transcription. Enhance after the call or use a cloud provider"
-                .to_string(),
-        );
     }
     if finalizing == Some(md_path) {
         return Err("this call is still being saved, try again in a moment".to_string());
@@ -993,10 +958,8 @@ fn enhance_path_inner<R: tauri::Runtime>(
     // The calendar lookup always runs through the claude CLI (codex's
     // non-interactive sandbox cancels MCP tool calls, so it cannot do its
     // own lookup) -- but since the summarizer only receives the found event
-    // as text, ANY cloud provider can use it. The local provider stays
-    // excluded on purpose: "local" promises the note involves no cloud call
-    // at all, and even a timestamp-only lookup would break that promise.
-    let calendar_enabled = cfg.enhance_use_calendar && spec.id != "local";
+    // as text, either provider can use it.
+    let calendar_enabled = cfg.enhance_use_calendar;
     let duration_secs = simstim_transcript::parse_meta(md_path)
         .ok()
         .and_then(|meta| meta.duration_secs);
@@ -1009,7 +972,6 @@ fn enhance_path_inner<R: tauri::Runtime>(
             running.as_deref(),
             app.state::<crate::retranscribe::RetranscribeState>()
                 .involves(path),
-            matches!(spec.kind, ProviderKind::Local { .. }),
             &existing.transcript,
         )?;
         *running = Some(path.to_string());
@@ -1048,36 +1010,7 @@ fn enhance_path_inner<R: tauri::Runtime>(
             compose_title,
             event.as_ref(),
         );
-        let raw = match spec.kind {
-            ProviderKind::Local { model_id } => {
-                let model_path = crate::models::model_file_path(model_id)?;
-                crate::local_ai::summarize(
-                    &model_path,
-                    &existing.title,
-                    &existing.notes,
-                    &existing.transcript,
-                    &prompt,
-                    compose_title,
-                    // Long calls run map/reduce for many minutes; each step
-                    // re-emits `running` with a message so the chip shows
-                    // real progress instead of an indeterminate spinner.
-                    &|part, total| {
-                        emit_progress(
-                            app,
-                            path,
-                            "running",
-                            spec.id,
-                            Some(format!("Summarizing part {part} of {total}...")),
-                        );
-                    },
-                    // The entry guard above rejects a live recording, but a
-                    // generation can run for minutes; a recording that
-                    // starts mid-run must still win the GPU immediately.
-                    &|| state.active_output_path().is_some(),
-                )?
-            }
-            ProviderKind::Cli { .. } => run_provider(spec, model.as_deref(), &prompt)?,
-        };
+        let raw = run_provider(spec, model.as_deref(), &prompt)?;
         let (composed_title, summary) = if compose_title {
             split_title_line(&raw)
         } else {
@@ -1141,6 +1074,17 @@ fn enhance_path_inner<R: tauri::Runtime>(
 pub(crate) fn maybe_auto_enhance<R: tauri::Runtime>(app: tauri::AppHandle<R>, path: String) {
     let cfg = Config::load();
     if !cfg.auto_enhance {
+        return;
+    }
+    // Automation is on by default now, so "no CLI on this Mac" is an
+    // ordinary state, not a failure to toast after every single call: skip
+    // quietly. Settings still shows what's missing, and a manual Summarize
+    // reports the real error.
+    let installed = PROVIDERS
+        .iter()
+        .find(|spec| spec.id == cfg.enhance_provider)
+        .is_some_and(|spec| resolve_binary(spec.binary).is_some());
+    if !installed {
         return;
     }
     if app
@@ -1431,7 +1375,6 @@ mod tests {
                 None,
                 None,
                 false,
-                false,
                 "[00:00:01] Me: hi",
             )
             .unwrap_err();
@@ -1445,7 +1388,6 @@ mod tests {
                 None,
                 Some(Path::new("/tmp/a.md")),
                 None,
-                false,
                 false,
                 "[00:00:01] Me: hi",
             )
@@ -1461,7 +1403,6 @@ mod tests {
                 None,
                 Some("/tmp/b.md"),
                 false,
-                false,
                 "[00:00:01] Me: hi",
             )
             .unwrap_err();
@@ -1473,7 +1414,6 @@ mod tests {
                 None,
                 Some("/tmp/a.md"),
                 false,
-                false,
                 "[00:00:01] Me: hi",
             )
             .unwrap_err();
@@ -1483,7 +1423,7 @@ mod tests {
         #[test]
         fn rejects_an_empty_transcript() {
             let err =
-                validate_enhance(Path::new("/tmp/a.md"), None, None, None, false, false, "  \n ").unwrap_err();
+                validate_enhance(Path::new("/tmp/a.md"), None, None, None, false, "  \n ").unwrap_err();
             assert!(err.contains("no transcript"), "{err}");
         }
 
@@ -1495,7 +1435,6 @@ mod tests {
                 None,
                 None,
                 true,
-                false,
                 "[00:00:01] Me: hi",
             )
             .unwrap_err();
@@ -1510,49 +1449,11 @@ mod tests {
                 None,
                 None,
                 false,
-                false,
                 "[00:00:01] Me: hi",
             )
             .is_ok());
         }
 
-        /// The local model must never compete with live ASR (research
-        /// ruling), so a live recording blocks it even for a DIFFERENT
-        /// note -- while a cloud provider stays allowed (the case above).
-        #[test]
-        fn rejects_the_local_provider_while_any_recording_is_live() {
-            let err = validate_enhance(
-                Path::new("/tmp/a.md"),
-                Some(Path::new("/tmp/other.md")),
-                None,
-                None,
-                false,
-                true,
-                "[00:00:01] Me: hi",
-            )
-            .unwrap_err();
-            assert!(err.contains("compete with live transcription"), "{err}");
-        }
-
-        #[test]
-        fn accepts_the_local_provider_when_nothing_records() {
-            assert!(validate_enhance(
-                Path::new("/tmp/a.md"),
-                None,
-                None,
-                None,
-                false,
-                true,
-                "[00:00:01] Me: hi",
-            )
-            .is_ok());
-        }
-    }
-
-    #[test]
-    fn local_summary_label_records_the_exact_model() {
-        let spec = PROVIDERS.iter().find(|spec| spec.id == "local").unwrap();
-        assert_eq!(summary_label(spec, None), "local/qwen3.5-4b-q4-k-m");
     }
 
     /// Manual e2e: runs the REAL configured provider CLI over a tiny fake
@@ -1575,34 +1476,4 @@ mod tests {
         assert!(!summary.is_empty());
     }
 
-    /// Manual local quality regression over an owner-selected real note. Run
-    /// with both paths set; the source note is read-only and never rewritten:
-    /// `SIMSTIM_LOCAL_AI_E2E_NOTE=/path/call.md \
-    ///  SIMSTIM_LOCAL_AI_E2E_MODEL=/path/model.gguf \
-    ///  cargo test -p desktop --lib enhance_manual_local -- --ignored --nocapture`
-    #[test]
-    #[ignore = "loads the real local model and an owner-selected note"]
-    fn enhance_manual_local_real_call() {
-        let note_path = std::env::var("SIMSTIM_LOCAL_AI_E2E_NOTE")
-            .expect("SIMSTIM_LOCAL_AI_E2E_NOTE is required");
-        let model_path = std::env::var("SIMSTIM_LOCAL_AI_E2E_MODEL")
-            .expect("SIMSTIM_LOCAL_AI_E2E_MODEL is required");
-        let session = simstim_transcript::parse_session(Path::new(&note_path))
-            .expect("couldn't parse the test note");
-        let prompt = build_prompt(&session.title, &session.notes, &session.transcript, false, None);
-        let started = Instant::now();
-        let summary = crate::local_ai::summarize(
-            Path::new(&model_path),
-            &session.title,
-            &session.notes,
-            &session.transcript,
-            &prompt,
-            false,
-            &|part, total| eprintln!("progress: part {part} of {total}"),
-            &|| false,
-        )
-        .expect("local summary failed");
-        eprintln!("local summary in {:?}:\n{summary}", started.elapsed());
-        assert!(!summary.is_empty());
-    }
 }

@@ -11,7 +11,6 @@ use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, State};
 
 use crate::config::Config;
-use crate::enhance::EnhanceState;
 use crate::retranscribe::RetranscribeState;
 
 /// Where a model's primary payload comes from and how it lives on disk once
@@ -225,12 +224,14 @@ pub static REGISTRY: &[ModelSpec] = &[
         retired: false,
     },
     ModelSpec {
+        // RETIRED (2026-09-04 product ruling): the on-device summarizer was
+        // measurably weaker than the cloud CLIs and could change what a call
+        // decided. Kept in the registry only so an already-downloaded copy
+        // stays visible in Storage for deletion; never offered again.
         id: "qwen3.5-4b-q4-k-m",
-        name: "Local summary model",
+        name: "Local summary model (no longer used)",
         technical_name: Some("Qwen3.5 4B (Q4_K_M)"),
-        // Honest ranking (stage 4.1, owner request): private AND plainly
-        // weaker than the cloud rows next to it.
-        tagline: Some("nothing leaves this Mac, simpler summaries"),
+        tagline: None,
         size_mb: 2740,
         layout: ModelLayout::File {
             url: "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf",
@@ -238,7 +239,7 @@ pub static REGISTRY: &[ModelSpec] = &[
         },
         extra_files: &[],
         role: ModelRole::Summary,
-        retired: false,
+        retired: true,
     },
 ];
 
@@ -535,7 +536,6 @@ fn validate_delete(
     id: &str,
     downloading: bool,
     retranscribing: bool,
-    enhancing: bool,
 ) -> Result<&'static ModelSpec, String> {
     let spec = find(id).ok_or_else(|| format!("unknown model id: {id}"))?;
 
@@ -554,12 +554,6 @@ fn validate_delete(
     if spec.role == ModelRole::Retranscribe && retranscribing {
         return Err(
             "a re-transcribe is currently running or queued; wait for it to finish before deleting a model"
-                .to_string(),
-        );
-    }
-    if spec.role == ModelRole::Summary && enhancing {
-        return Err(
-            "a summary is currently being generated; wait for it to finish before deleting the local model"
                 .to_string(),
         );
     }
@@ -600,9 +594,8 @@ fn delete_model_at(
     models_dir: &Path,
     downloading: bool,
     retranscribing: bool,
-    enhancing: bool,
 ) -> Result<(), String> {
-    let spec = validate_delete(id, downloading, retranscribing, enhancing)?;
+    let spec = validate_delete(id, downloading, retranscribing)?;
     remove_model_files(spec, models_dir)?;
     remove_tmp_download_file(id, models_dir)
 }
@@ -612,7 +605,6 @@ pub fn delete_model(
     id: String,
     downloads: State<'_, DownloadState>,
     jobs: State<'_, RetranscribeState>,
-    enhancements: State<'_, EnhanceState>,
 ) -> Result<(), String> {
     let downloading = downloads.0.lock().unwrap().contains(&id);
     // Important fix-review finding, stage 0.9: a job merely QUEUED (not yet
@@ -624,7 +616,6 @@ pub fn delete_model(
         &simstim_engine::models_dir(),
         downloading,
         retranscribing,
-        enhancements.is_running(),
     )
 }
 
@@ -851,16 +842,16 @@ mod tests {
     }
 
     #[test]
-    fn registry_has_exactly_four_non_retired_entries() {
-        // Stage 0.8.x curation, owner's ruling: Parakeet (live) plus exactly
-        // two whisper options (turbo, large-v3) plus one live and one summary
-        // model. Retired whisper entries remain resolvable for deletion.
+    fn registry_has_exactly_three_non_retired_entries() {
+        // Parakeet (live) plus exactly two whisper options (turbo, large-v3).
+        // The on-device summary model joined the retired set on 2026-09-04;
+        // retired entries remain resolvable for deletion.
         let non_retired = REGISTRY.iter().filter(|spec| !spec.retired).count();
-        assert_eq!(non_retired, 4);
+        assert_eq!(non_retired, 3);
     }
 
     #[test]
-    fn retired_entries_are_exactly_the_two_curated_out_whisper_ids() {
+    fn retired_entries_are_the_two_curated_out_whisper_ids_and_the_local_summarizer() {
         let retired_ids: Vec<&str> = REGISTRY
             .iter()
             .filter(|spec| spec.retired)
@@ -868,7 +859,7 @@ mod tests {
             .collect();
         assert_eq!(
             retired_ids,
-            vec!["whisper-large-v3-turbo-q5", "whisper-large-v3-q5"]
+            vec!["whisper-large-v3-turbo-q5", "whisper-large-v3-q5", "qwen3.5-4b-q4-k-m"]
         );
     }
 
@@ -877,7 +868,8 @@ mod tests {
         assert!(validate_not_retired(find("whisper-large-v3-turbo-q8").unwrap()).is_ok());
         assert!(validate_not_retired(find("whisper-large-v3").unwrap()).is_ok());
         assert!(validate_not_retired(find("parakeet-tdt-0.6b-v3-int8").unwrap()).is_ok());
-        assert!(validate_not_retired(find("qwen3.5-4b-q4-k-m").unwrap()).is_ok());
+        // The retired on-device summarizer can never be downloaded again.
+        assert!(validate_not_retired(find("qwen3.5-4b-q4-k-m").unwrap()).is_err());
     }
 
     #[test]
@@ -944,7 +936,6 @@ mod tests {
                 "parakeet-tdt-0.6b-v3-int8",
                 "whisper-large-v3-turbo-q8",
                 "whisper-large-v3",
-                "qwen3.5-4b-q4-k-m",
             ] {
                 let m = models.iter().find(|m| m.id == id).expect(id);
                 assert!(!m.retired, "{id}");
@@ -965,12 +956,6 @@ mod tests {
                 parakeet.technical_name.as_deref(),
                 Some("Parakeet TDT 0.6B v3 (int8)")
             );
-
-            let qwen = models
-                .iter()
-                .find(|model| model.id == "qwen3.5-4b-q4-k-m")
-                .unwrap();
-            assert_eq!(qwen.technical_name.as_deref(), Some("Qwen3.5 4B (Q4_K_M)"));
         }
     }
 
@@ -1118,12 +1103,8 @@ mod tests {
             .find(|m| m.id == "whisper-large-v3-turbo-q8")
             .unwrap();
         assert_eq!(whisper.role, "retranscribe");
-
-        let qwen = models
-            .iter()
-            .find(|m| m.id == "qwen3.5-4b-q4-k-m")
-            .unwrap();
-        assert_eq!(qwen.role, "summary");
+        // Retired and not on disk: the summarizer must not surface at all.
+        assert!(models.iter().all(|m| m.id != "qwen3.5-4b-q4-k-m"));
     }
 
     #[test]
@@ -1283,7 +1264,7 @@ mod tests {
 
         #[test]
         fn validate_delete_rejects_an_unknown_id() {
-            let err = validate_delete("no-such-model", false, false, false).unwrap_err();
+            let err = validate_delete("no-such-model", false, false).unwrap_err();
             assert!(err.contains("no-such-model"));
         }
 
@@ -1291,34 +1272,27 @@ mod tests {
         fn validate_delete_refuses_the_live_model() {
             // Global Constraints: deleting Parakeet would break recording.
             let err =
-                validate_delete("parakeet-tdt-0.6b-v3-int8", false, false, false).unwrap_err();
+                validate_delete("parakeet-tdt-0.6b-v3-int8", false, false).unwrap_err();
             assert!(err.contains("can't be deleted"), "{err}");
         }
 
         #[test]
         fn validate_delete_refuses_while_a_download_of_that_id_is_in_flight() {
             let err =
-                validate_delete("whisper-large-v3-turbo-q8", true, false, false).unwrap_err();
+                validate_delete("whisper-large-v3-turbo-q8", true, false).unwrap_err();
             assert!(err.contains("downloading"), "{err}");
         }
 
         #[test]
         fn validate_delete_refuses_while_a_retranscribe_job_is_running() {
             let err =
-                validate_delete("whisper-large-v3-turbo-q8", false, true, false).unwrap_err();
+                validate_delete("whisper-large-v3-turbo-q8", false, true).unwrap_err();
             assert!(err.contains("re-transcribe"), "{err}");
         }
 
         #[test]
         fn validate_delete_allows_an_idle_retranscribe_model() {
-            assert!(validate_delete("whisper-large-v3-turbo-q8", false, false, false).is_ok());
-        }
-
-        #[test]
-        fn validate_delete_refuses_the_summary_model_while_enhancing() {
-            let err =
-                validate_delete("qwen3.5-4b-q4-k-m", false, false, true).unwrap_err();
-            assert!(err.contains("summary"), "{err}");
+            assert!(validate_delete("whisper-large-v3-turbo-q8", false, false).is_ok());
         }
 
         #[test]
@@ -1327,7 +1301,7 @@ mod tests {
             let file_path = dir.path().join("ggml-large-v3-turbo-q8_0.bin");
             std::fs::write(&file_path, b"x").unwrap();
 
-            delete_model_at("whisper-large-v3-turbo-q8", dir.path(), false, false, false).unwrap();
+            delete_model_at("whisper-large-v3-turbo-q8", dir.path(), false, false).unwrap();
 
             assert!(!file_path.exists());
         }
@@ -1339,7 +1313,7 @@ mod tests {
             std::fs::create_dir_all(&model_dir).unwrap();
             std::fs::write(model_dir.join("tokens.txt"), b"x").unwrap();
 
-            let err = delete_model_at("parakeet-tdt-0.6b-v3-int8", dir.path(), false, false, false)
+            let err = delete_model_at("parakeet-tdt-0.6b-v3-int8", dir.path(), false, false)
                 .unwrap_err();
 
             assert!(err.contains("can't be deleted"), "{err}");
@@ -1352,7 +1326,7 @@ mod tests {
             let file_path = dir.path().join("ggml-large-v3-turbo-q8_0.bin");
             std::fs::write(&file_path, b"x").unwrap();
 
-            let err = delete_model_at("whisper-large-v3-turbo-q8", dir.path(), true, false, false)
+            let err = delete_model_at("whisper-large-v3-turbo-q8", dir.path(), true, false)
                 .unwrap_err();
 
             assert!(err.contains("downloading"), "{err}");
@@ -1365,7 +1339,7 @@ mod tests {
             let file_path = dir.path().join("ggml-large-v3-turbo-q8_0.bin");
             std::fs::write(&file_path, b"x").unwrap();
 
-            let err = delete_model_at("whisper-large-v3-turbo-q8", dir.path(), false, true, false)
+            let err = delete_model_at("whisper-large-v3-turbo-q8", dir.path(), false, true)
                 .unwrap_err();
 
             assert!(err.contains("re-transcribe"), "{err}");
@@ -1383,7 +1357,7 @@ mod tests {
             let tmp_path = dir.path().join(".download-whisper-large-v3-turbo-q8.tmp");
             std::fs::write(&tmp_path, vec![0u8; 1024]).unwrap();
 
-            delete_model_at("whisper-large-v3-turbo-q8", dir.path(), false, false, false).unwrap();
+            delete_model_at("whisper-large-v3-turbo-q8", dir.path(), false, false).unwrap();
 
             assert!(!tmp_path.exists(), "the stale tmp file must be removed");
         }
@@ -1395,7 +1369,7 @@ mod tests {
             std::fs::create_dir_all(&tmp_path).unwrap();
             std::fs::write(tmp_path.join("partial.gguf"), b"partial").unwrap();
 
-            delete_model_at("qwen3.5-4b-q4-k-m", dir.path(), false, false, false).unwrap();
+            delete_model_at("qwen3.5-4b-q4-k-m", dir.path(), false, false).unwrap();
 
             assert!(!tmp_path.exists(), "the stale tmp directory must be removed");
         }
@@ -1408,7 +1382,7 @@ mod tests {
             let other_tmp_path = dir.path().join(".download-whisper-large-v3.tmp");
             std::fs::write(&other_tmp_path, vec![0u8; 1024]).unwrap();
 
-            delete_model_at("whisper-large-v3-turbo-q8", dir.path(), false, false, false).unwrap();
+            delete_model_at("whisper-large-v3-turbo-q8", dir.path(), false, false).unwrap();
 
             assert!(
                 other_tmp_path.exists(),

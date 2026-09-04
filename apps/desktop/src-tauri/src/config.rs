@@ -55,11 +55,12 @@ fn default_retranscribe_model() -> String {
     DEFAULT_RETRANSCRIBE_MODEL.to_string()
 }
 
-/// Default for `auto_retranscribe` (stage 0.9 Global Constraints: off).
-/// `stop_recording` must behave exactly as it does today unless the owner
-/// explicitly opts in from Settings.
+/// Default for `auto_retranscribe`: ON (2026-09-04 product ruling: a call
+/// that ends must become a finished note with zero clicks). It only ever
+/// acts when the accurate model is downloaded and audio was kept; see
+/// `retranscribe::maybe_auto_retranscribe`.
 fn default_auto_retranscribe() -> bool {
-    false
+    true
 }
 
 /// Default for `delete_audio_after_retranscribe` (stage 0.9 Global
@@ -70,11 +71,13 @@ fn default_delete_audio_after_retranscribe() -> bool {
 }
 
 /// These are the enhance provider ids `enhance::PROVIDERS` knows how to run.
-pub const VALID_ENHANCE_PROVIDERS: &[&str] = &["local", "claude", "codex"];
+pub const VALID_ENHANCE_PROVIDERS: &[&str] = &["claude", "codex"];
 
-/// Local first so summaries stay on the machine unless explicitly opted in.
+/// The on-device summary model was retired (2026-09-04 product ruling: a
+/// summary that can change what was decided is worse than none). A config
+/// still naming `local` is migrated to this default by `Config::normalize`.
 fn default_enhance_provider() -> String {
-    "local".to_string()
+    "claude".to_string()
 }
 
 /// Call detection only suggests recording and therefore defaults on.
@@ -175,9 +178,9 @@ impl Default for Config {
             delete_audio_after_retranscribe: default_delete_audio_after_retranscribe(),
             enhance_provider: default_enhance_provider(),
             enhance_models: Default::default(),
-            auto_enhance: false,
-            enhance_rename_title: false,
-            enhance_use_calendar: false,
+            auto_enhance: true,
+            enhance_rename_title: true,
+            enhance_use_calendar: true,
             detect_calls: default_detect_calls(),
             auto_stop_after_call: default_auto_stop_after_call(),
         }
@@ -438,6 +441,11 @@ impl Config {
         if let Some(home) = dirs::home_dir() {
             config.output_dir = expand_home(&config.output_dir, &home);
         }
+        // The retired on-device provider: an older config still naming it
+        // must load (and re-save) as the current default, not fail validation.
+        if config.enhance_provider == "local" {
+            config.enhance_provider = default_enhance_provider();
+        }
         config
     }
 
@@ -543,8 +551,12 @@ mod tests {
     }
 
     #[test]
-    fn summaries_default_to_the_private_local_provider() {
-        assert_eq!(Config::default().enhance_provider, "local");
+    fn summaries_default_to_claude_code_and_a_retired_local_choice_migrates() {
+        assert_eq!(Config::default().enhance_provider, "claude");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "enhance_provider = \"local\"\n").unwrap();
+        assert_eq!(Config::load_from(&path).enhance_provider, "claude");
     }
 
     /// Owner ruling (stage 4.2 e2e): ONE AI choice powers both summaries
@@ -591,8 +603,8 @@ mod tests {
     }
 
     #[test]
-    fn auto_retranscribe_defaults_to_false() {
-        assert!(!Config::default().auto_retranscribe);
+    fn auto_retranscribe_defaults_to_true() {
+        assert!(Config::default().auto_retranscribe);
     }
 
     #[test]
@@ -606,12 +618,14 @@ mod tests {
         assert!(!Config::default().auto_stop_after_call);
     }
 
-    /// Both title renaming and calendar access widen what generated output
-    /// or a cloud CLI may do, so they require an explicit opt-in.
+    /// 2026-09-04 product ruling: the finished note is the default, not a
+    /// reward for finding five toggles. The onboarding screen shows the
+    /// summaries choice explicitly, so cloud text stays a visible decision.
     #[test]
-    fn enhance_title_and_calendar_default_off() {
-        assert!(!Config::default().enhance_rename_title);
-        assert!(!Config::default().enhance_use_calendar);
+    fn enhance_automation_defaults_on() {
+        assert!(Config::default().auto_enhance);
+        assert!(Config::default().enhance_rename_title);
+        assert!(Config::default().enhance_use_calendar);
     }
 
     #[test]

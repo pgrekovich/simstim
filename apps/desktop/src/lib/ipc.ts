@@ -59,8 +59,8 @@ export interface AppConfig {
    */
   delete_audio_after_retranscribe: boolean;
   /**
-   * Which summary provider `enhance_session` runs: built-in `"local"`, or
-   * the opt-in cloud CLIs `"claude" | "codex"`.
+   * Which AI CLI `enhance_session` runs: `"claude" | "codex"` (the user's
+   * own subscription, text only). The on-device provider was retired.
    */
   enhance_provider: string;
   /**
@@ -71,23 +71,23 @@ export interface AppConfig {
   /**
    * Whether a finished recording auto-enhances (stage 0.11): fires after
    * the call stops (after the auto re-transcribe when that's on) and after
-   * any successful re-transcribe. Defaults to `false`.
+   * any successful re-transcribe. Defaults to `true`; the onboarding screen
+   * shows it as one visible switch.
    */
   auto_enhance: boolean;
   /**
    * Whether an enhance may replace an AUTOMATIC title ("Untitled", or the
    * detected "Zoom call 14:03" shape) with one proposed by the summary
    * model. A title the user typed themselves is never touched, regardless
-   * of this setting. Defaults to `false`.
+   * of this setting. Defaults to `true`.
    */
   enhance_rename_title: boolean;
   /**
    * Whether an enhance may look up the calendar event that overlapped the
    * call through the user's own connectors. The lookup itself always runs
    * through the Claude Code CLI (codex's non-interactive sandbox cannot run
-   * MCP tools); the found event feeds any CLOUD summary provider as text.
-   * Never offered for the local provider: local promises no cloud call at
-   * all. Defaults to `false`.
+   * MCP tools); the found event feeds either provider as text. Defaults to
+   * `true`.
    */
   enhance_use_calendar: boolean;
   /** Whether known mic-using call apps may surface a recording suggestion. */

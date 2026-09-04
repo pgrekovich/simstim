@@ -477,14 +477,13 @@ enum AutoTriggerDecision {
     /// audio -- nothing to do, and nothing to report either (this is the
     /// ordinary, expected case on most stops).
     Skip,
-    /// The selected model is retired or not downloaded: report `.0` once
+    /// The selected model is retired (a misconfiguration): report `.0` once
     /// through the usual `retranscribe-progress` error phase and drop the
-    /// job outright -- Global Constraints: "must not spam errors... rather
-    /// than retrying". There is nothing to retry until the owner acts in
-    /// Settings, and a future stop will report the same thing again then,
-    /// which is fine -- what must NOT happen is queueing a job that's
-    /// doomed to fail the exact same way, or silently trying again on every
-    /// subsequent stop without ever telling the owner why.
+    /// job outright -- what must NOT happen is queueing a job that's doomed
+    /// to fail the exact same way. A model that simply isn't downloaded yet
+    /// is `Skip`, not this: automation is on by default since 2026-09-04,
+    /// so "still downloading" is the ordinary state of a fresh install, not
+    /// an error to toast after every call.
     ReportAndDrop(String),
     /// Everything checks out: go ahead and enqueue/run.
     Enqueue,
@@ -511,8 +510,8 @@ fn decide_auto_trigger(
     if let Err(message) = check_model_not_retired(selected_spec) {
         return AutoTriggerDecision::ReportAndDrop(message);
     }
-    if let Err(message) = check_model_ready(model_path, model_name) {
-        return AutoTriggerDecision::ReportAndDrop(message);
+    if check_model_ready(model_path, model_name).is_err() {
+        return AutoTriggerDecision::Skip;
     }
     AutoTriggerDecision::Enqueue
 }
@@ -2201,7 +2200,9 @@ mod tests {
         }
 
         #[test]
-        fn reports_and_drops_when_the_selected_model_is_not_downloaded() {
+        /// Automation is on by default, so a model that isn't downloaded yet
+        /// is the ordinary state of a fresh install: skip quietly, never toast.
+        fn skips_quietly_when_the_selected_model_is_not_downloaded() {
             let decision = decide_auto_trigger(
                 true,
                 true,
@@ -2210,12 +2211,7 @@ mod tests {
                 "Whisper large-v3",
                 Some(Path::new("/no/such/model.bin")),
             );
-            match decision {
-                AutoTriggerDecision::ReportAndDrop(message) => {
-                    assert!(message.contains("downloaded"), "{message}");
-                }
-                other => panic!("expected ReportAndDrop, got {other:?}"),
-            }
+            assert_eq!(decision, AutoTriggerDecision::Skip);
         }
 
         #[test]

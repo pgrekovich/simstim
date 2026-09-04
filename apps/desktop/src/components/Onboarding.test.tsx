@@ -14,10 +14,7 @@ vi.mock("@/lib/ipc", () => ({
   listEnhanceProviders: vi.fn(),
   listModels: vi.fn(),
   setAutoEnhance: vi.fn().mockResolvedValue(undefined),
-  setEnhanceModel: vi.fn().mockResolvedValue(undefined),
   setEnhanceProvider: vi.fn().mockResolvedValue(undefined),
-  setEnhanceRenameTitle: vi.fn().mockResolvedValue(undefined),
-  setEnhanceUseCalendar: vi.fn().mockResolvedValue(undefined),
   setOutputDir: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -38,18 +35,18 @@ const config: AppConfig = {
   keep_audio: true,
   audio_format: "aac",
   retranscribe_model: "whisper",
-  auto_retranscribe: false,
+  auto_retranscribe: true,
   delete_audio_after_retranscribe: false,
-  enhance_provider: "local",
+  enhance_provider: "claude",
   enhance_models: {},
-  auto_enhance: false,
-  enhance_rename_title: false,
-  enhance_use_calendar: false,
+  auto_enhance: true,
+  enhance_rename_title: true,
+  enhance_use_calendar: true,
   detect_calls: true,
   auto_stop_after_call: false,
 };
 
-function model(downloaded: boolean): ModelInfo {
+function liveModel(downloaded: boolean): ModelInfo {
   return {
     id: "live",
     name: "Live transcription",
@@ -60,6 +57,21 @@ function model(downloaded: boolean): ModelInfo {
     active: true,
     role: "live",
     size_on_disk_bytes: downloaded ? 500_000_000 : null,
+    retired: false,
+  };
+}
+
+function whisperModel(downloaded: boolean): ModelInfo {
+  return {
+    id: "whisper",
+    name: "Balanced",
+    technical_name: "Whisper large-v3-turbo (q8)",
+    tagline: null,
+    size_mb: 874,
+    downloaded,
+    active: false,
+    role: "retranscribe",
+    size_on_disk_bytes: downloaded ? 900_000_000 : null,
     retired: false,
   };
 }
@@ -79,48 +91,48 @@ function emitDownload(payload: ipc.DownloadProgress) {
   });
 }
 
+function renderOnboarding(models: ModelInfo[], onComplete = () => {}) {
+  return render(
+    <Onboarding config={config} models={models} onOpenSettings={() => {}} onComplete={onComplete} />,
+  );
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(listen).mockImplementation(() => Promise.resolve(() => {}));
   vi.mocked(ipc.getConfig).mockResolvedValue(config);
-  vi.mocked(ipc.listModels).mockResolvedValue([model(false)]);
+  vi.mocked(ipc.listModels).mockResolvedValue([liveModel(false), whisperModel(false)]);
   vi.mocked(open).mockResolvedValue(null);
+  vi.mocked(ipc.checkAudioPermissions).mockResolvedValue(permissions(true, true));
   vi.mocked(ipc.listEnhanceProviders).mockResolvedValue([
-    { id: "local", name: "On this Mac", available: false, version: null },
     { id: "claude", name: "Claude Code", available: false, version: null },
     { id: "codex", name: "Codex", available: false, version: null },
   ]);
 });
 
-describe("Onboarding", () => {
-  it("checks permissions automatically on entry and supports retry", async () => {
+describe("Onboarding (one screen)", () => {
+  it("asks macOS for both permissions on entry and offers a retry until both pass", async () => {
     vi.mocked(ipc.checkAudioPermissions)
       .mockResolvedValueOnce(permissions(true, false))
       .mockResolvedValueOnce(permissions(true, true));
-    render(
-      <Onboarding config={config} models={[model(false)]} onOpenSettings={() => {}} onComplete={() => {}} />,
-    );
+    renderOnboarding([liveModel(true), whisperModel(true)]);
 
-    expect(screen.getByRole("button", { name: /settings/i })).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: /^continue$/i }));
     expect(await screen.findByText("Needs permission")).toBeVisible();
     expect(ipc.checkAudioPermissions).toHaveBeenCalledTimes(1);
-    expect(screen.getByRole("button", { name: /continue/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /^start$/i })).toBeDisabled();
 
     fireEvent.click(screen.getByRole("button", { name: /check again/i }));
     await waitFor(() => expect(screen.getAllByText("Allowed")).toHaveLength(2));
-    expect(screen.getByRole("button", { name: /continue/i })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /^start$/i })).toBeEnabled();
   });
 
-  it("lets the user choose the notes folder before continuing", async () => {
+  it("lets the user choose the notes folder", async () => {
     vi.mocked(open).mockResolvedValue("/Users/pavel/Documents/simstim");
     vi.mocked(ipc.getConfig).mockResolvedValue({
       ...config,
       output_dir: "/Users/pavel/Documents/simstim",
     });
-    render(
-      <Onboarding config={config} models={[model(false)]} onOpenSettings={() => {}} onComplete={() => {}} />,
-    );
+    renderOnboarding([liveModel(true), whisperModel(true)]);
 
     fireEvent.click(screen.getByRole("button", { name: /choose/i }));
 
@@ -130,104 +142,74 @@ describe("Onboarding", () => {
     expect(await screen.findByText("/Users/pavel/Documents/simstim")).toBeVisible();
   });
 
-  it("uses the shared model download and completes after its done event", async () => {
-    vi.mocked(ipc.checkAudioPermissions).mockResolvedValue(permissions(true, true));
-    vi.mocked(ipc.listModels).mockResolvedValue([model(true)]);
+  it("downloads both speech models on its own, without naming them, and completes once the live one lands", async () => {
+    vi.mocked(ipc.listModels).mockResolvedValue([liveModel(true), whisperModel(false)]);
     vi.mocked(ipc.getConfig)
       .mockResolvedValueOnce(config)
       .mockResolvedValue({ ...config, onboarding_complete: true });
     const onComplete = vi.fn();
-    render(
-      <Onboarding config={config} models={[model(false)]} onOpenSettings={() => {}} onComplete={onComplete} />,
-    );
+    renderOnboarding([liveModel(false), whisperModel(false)], onComplete);
 
-    fireEvent.click(screen.getByRole("button", { name: /^continue$/i }));
-    await waitFor(() => expect(screen.getAllByText("Allowed")).toHaveLength(2));
-    fireEvent.click(screen.getByRole("button", { name: /continue/i }));
     await waitFor(() => expect(ipc.downloadModel).toHaveBeenCalledWith("live"));
-    expect(screen.getByText("Live transcription")).toBeVisible();
-    const technicalName = screen.getByText("Parakeet TDT 0.6B v3 (int8)");
-    expect(technicalName).toHaveClass("text-[10px]", "text-muted-foreground/55");
+    await waitFor(() => expect(ipc.downloadModel).toHaveBeenCalledWith("whisper"));
+    // No engine names or sizes on the first screen: one quiet progress line.
+    expect(screen.queryByText(/parakeet/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/whisper/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/preparing speech recognition/i)).toBeVisible();
+    expect(screen.getByRole("button", { name: /^start$/i })).toBeDisabled();
 
-    emitDownload({ id: "live", phase: "done", received: 1, total: 1 });
-    const continueButton = await screen.findByRole("button", { name: /continue/i });
-    await waitFor(() => expect(continueButton).toBeEnabled());
-    fireEvent.click(continueButton);
-    const finish = await screen.findByRole("button", { name: "Start using Simstim" });
-    fireEvent.click(finish);
+    emitDownload({ id: "live", phase: "download", received: 50, total: 100 });
+    emitDownload({ id: "whisper", phase: "download", received: 0, total: 100 });
+    expect(await screen.findByText(/preparing speech recognition · 25%/i)).toBeVisible();
+
+    // The live model is enough to start; the accurate pass's model may
+    // keep downloading behind the main window.
+    emitDownload({ id: "live", phase: "done", received: 100, total: 100 });
+    const start = screen.getByRole("button", { name: /^start$/i });
+    await waitFor(() => expect(start).toBeEnabled());
+    fireEvent.click(start);
 
     await waitFor(() => expect(ipc.completeOnboarding).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(onComplete).toHaveBeenCalled());
   });
 
-  it("keeps a manual retry only after the automatic transcription download fails", async () => {
-    vi.mocked(ipc.checkAudioPermissions).mockResolvedValue(permissions(true, true));
+  it("offers a retry when a download fails", async () => {
     vi.mocked(ipc.downloadModel)
       .mockRejectedValueOnce(new Error("network unavailable"))
-      .mockResolvedValueOnce(undefined);
-    render(
-      <Onboarding config={config} models={[model(false)]} onOpenSettings={() => {}} onComplete={() => {}} />,
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: /^continue$/i }));
-    await waitFor(() => expect(screen.getAllByText("Allowed")).toHaveLength(2));
-    fireEvent.click(screen.getByRole("button", { name: /continue/i }));
+      .mockResolvedValue(undefined);
+    renderOnboarding([liveModel(false), whisperModel(true)]);
 
     const retry = await screen.findByRole("button", { name: /retry/i });
-    expect(ipc.downloadModel).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("alert")).toHaveTextContent("network unavailable");
     fireEvent.click(retry);
     await waitFor(() => expect(ipc.downloadModel).toHaveBeenCalledTimes(2));
   });
 
-  it("configures the summary provider and opt-in behavior", async () => {
-    let persisted = { ...config };
-    vi.mocked(ipc.getConfig).mockImplementation(async () => ({ ...persisted }));
-    vi.mocked(ipc.checkAudioPermissions).mockResolvedValue(permissions(true, true));
+  it("shows the installed assistant as one switch that is on by default, and follows what is installed", async () => {
     vi.mocked(ipc.listEnhanceProviders).mockResolvedValue([
-      { id: "local", name: "On this Mac", available: false, version: null },
-      { id: "claude", name: "Claude Code", available: true, version: "2.1.0" },
-      { id: "codex", name: "Codex", available: false, version: null },
+      { id: "claude", name: "Claude Code", available: false, version: null },
+      { id: "codex", name: "Codex", available: true, version: "0.9.0" },
     ]);
-    vi.mocked(ipc.setEnhanceProvider).mockImplementation(async (provider: string) => {
-      persisted = { ...persisted, enhance_provider: provider };
-    });
-    vi.mocked(ipc.setEnhanceModel).mockImplementation(async (provider: string, value: string) => {
-      persisted = {
-        ...persisted,
-        enhance_models: { ...persisted.enhance_models, [provider]: value },
-      };
-    });
-    vi.mocked(ipc.setAutoEnhance).mockImplementation(async (enabled: boolean) => {
-      persisted = { ...persisted, auto_enhance: enabled };
-    });
-    vi.mocked(ipc.setEnhanceRenameTitle).mockImplementation(async (enabled: boolean) => {
-      persisted = { ...persisted, enhance_rename_title: enabled };
-    });
-    vi.mocked(ipc.setEnhanceUseCalendar).mockImplementation(async (enabled: boolean) => {
-      persisted = { ...persisted, enhance_use_calendar: enabled };
-    });
+    renderOnboarding([liveModel(true), whisperModel(true)]);
 
-    render(
-      <Onboarding config={config} models={[model(true)]} onOpenSettings={() => {}} onComplete={() => {}} />,
-    );
-    fireEvent.click(screen.getByRole("button", { name: /^continue$/i }));
-    await waitFor(() => expect(screen.getAllByText("Allowed")).toHaveLength(2));
-    fireEvent.click(screen.getByRole("button", { name: /continue/i }));
-    fireEvent.click(screen.getByRole("button", { name: /continue/i }));
+    const toggle = await screen.findByRole("checkbox", { name: /summaries by codex/i });
+    expect(toggle).toBeChecked();
+    // The saved provider was claude; only codex is here, so the config follows.
+    await waitFor(() => expect(ipc.setEnhanceProvider).toHaveBeenCalledWith("codex"));
+    expect(screen.getByText(/text only, never audio/i)).toBeVisible();
 
-    const claude = await screen.findByRole("radio", { name: "Claude Code" });
-    fireEvent.click(claude);
-    await waitFor(() => expect(ipc.setEnhanceProvider).toHaveBeenCalledWith("claude"));
-    fireEvent.change(screen.getByRole("combobox", { name: "Claude Code model" }), {
-      target: { value: "sonnet" },
-    });
-    fireEvent.click(screen.getByRole("checkbox", { name: /summarize automatically/i }));
-    fireEvent.click(screen.getByRole("checkbox", { name: /let summaries title notes/i }));
-    fireEvent.click(screen.getByRole("checkbox", { name: /use calendar context/i }));
+    fireEvent.click(toggle);
+    await waitFor(() => expect(ipc.setAutoEnhance).toHaveBeenCalledWith(false));
+    // No radios, no model menus, no extra toggles on the first screen.
+    expect(screen.queryByRole("radio")).not.toBeInTheDocument();
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+  });
 
-    await waitFor(() => expect(ipc.setEnhanceModel).toHaveBeenCalledWith("claude", "sonnet"));
-    await waitFor(() => expect(ipc.setAutoEnhance).toHaveBeenCalledWith(true));
-    await waitFor(() => expect(ipc.setEnhanceRenameTitle).toHaveBeenCalledWith(true));
-    await waitFor(() => expect(ipc.setEnhanceUseCalendar).toHaveBeenCalledWith(true));
+  it("explains summaries plainly when no assistant is installed, without a switch", async () => {
+    renderOnboarding([liveModel(true), whisperModel(true)]);
+
+    expect(await screen.findByText(/summaries need claude code or codex/i)).toBeVisible();
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+    expect(ipc.setEnhanceProvider).not.toHaveBeenCalled();
   });
 });

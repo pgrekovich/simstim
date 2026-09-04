@@ -737,7 +737,15 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
       ? "starting..."
       : null;
 
-  const sessionMeta = formatSessionMeta(initialData.date, durationSecs);
+  // The date/duration meta plus who was on the call (`people:` frontmatter,
+  // saved by the enhance calendar lookup). One quiet line; a long roster
+  // truncates rather than wraps under the title.
+  const sessionMeta = [
+    formatSessionMeta(initialData.date, durationSecs),
+    initialData.people.length > 0 ? `with ${initialData.people.join(", ")}` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
 
   const titleInput = (
     <textarea
@@ -909,7 +917,7 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
           {/* Hidden while recording: the live clock is in the Stop button,
               and the placeholder date is blank anyway. */}
           {!isActive && sessionMeta && (
-            <p className="mt-1 font-mono text-[10.5px] text-muted-foreground">{sessionMeta}</p>
+            <p className="mt-1 truncate font-mono text-[10.5px] text-muted-foreground">{sessionMeta}</p>
           )}
         </div>
 

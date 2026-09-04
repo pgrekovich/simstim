@@ -37,7 +37,7 @@ vi.mock("@/lib/ipc", () => ({
   listSessions: vi.fn().mockResolvedValue([]),
   readSession: vi
     .fn()
-    .mockResolvedValue({ title: "", date: "", notes: "", transcript: "", audio_path: null, summary: "", summary_model: null }),
+    .mockResolvedValue({ title: "", date: "", notes: "", transcript: "", audio_path: null, summary: "", summary_model: null, people: [] }),
   startRecording: vi.fn().mockResolvedValue("/tmp/active.md"),
   stopRecording: vi.fn().mockResolvedValue("/tmp/active.md"),
   saveSession: vi.fn().mockResolvedValue(undefined),
@@ -724,9 +724,10 @@ describe("App: active-session notes survive a switch-away-and-back (final review
           audio_path: null,
           summary: "",
           summary_model: null,
+          people: [],
         };
       }
-      return { title: "Untitled", date: "", notes: "", transcript: "", audio_path: null, summary: "", summary_model: null };
+      return { title: "Untitled", date: "", notes: "", transcript: "", audio_path: null, summary: "", summary_model: null, people: [] };
     });
 
     render(<App />);
@@ -782,6 +783,7 @@ describe("App: record continues into the open note (behavior fix)", () => {
       audio_path: null,
       summary: "",
       summary_model: null,
+      people: [],
     });
     vi.mocked(ipc.startRecording).mockResolvedValue("/tmp/other.md");
 
@@ -826,6 +828,7 @@ describe("App: record continues into the open note (behavior fix)", () => {
       audio_path: null,
       summary: "",
       summary_model: null,
+      people: [],
     });
     vi.mocked(ipc.startRecording).mockResolvedValue("/tmp/other.md");
 
@@ -880,6 +883,7 @@ describe("App: refreshes a re-transcribed session after a background done event 
       audio_path: null,
       summary: "",
       summary_model: null,
+      people: [],
     });
 
     render(<App />);
@@ -899,6 +903,7 @@ describe("App: refreshes a re-transcribed session after a background done event 
       audio_path: null,
       summary: "",
       summary_model: null,
+      people: [],
     });
 
     emit("retranscribe-progress", {
@@ -925,6 +930,7 @@ describe("App: refreshes a re-transcribed session after a background done event 
       audio_path: null,
       summary: "",
       summary_model: null,
+      people: [],
     });
 
     render(<App />);
@@ -966,6 +972,7 @@ describe("App: refreshes a re-transcribed session after a background done event 
       audio_path: "/tmp/other.flac",
       summary: "",
       summary_model: null,
+      people: [],
     });
 
     render(<App />);
@@ -982,6 +989,7 @@ describe("App: refreshes a re-transcribed session after a background done event 
       audio_path: "/tmp/other.flac",
       summary: "",
       summary_model: null,
+      people: [],
     });
 
     emit("retranscribe-progress", {
@@ -1008,6 +1016,7 @@ describe("App: refreshes a re-transcribed session after a background done event 
       audio_path: "/tmp/other.flac",
       summary: "",
       summary_model: null,
+      people: [],
     });
 
     render(<App />);
@@ -1051,6 +1060,7 @@ describe("App: surfaces terminal re-transcribe errors from background jobs (stag
       audio_path: null,
       summary: "",
       summary_model: null,
+      people: [],
     });
 
     render(<App />);
@@ -1092,6 +1102,7 @@ describe("App: surfaces terminal re-transcribe errors from background jobs (stag
       audio_path: null,
       summary: "",
       summary_model: null,
+      people: [],
     });
 
     render(<App />);
@@ -1127,6 +1138,7 @@ describe("App: surfaces terminal re-transcribe errors from background jobs (stag
       audio_path: "/tmp/viewed.flac",
       summary: "",
       summary_model: null,
+      people: [],
     });
     // Never resolves: mirrors the real backend, where the promise only
     // settles once the job's own terminal event has already been decided --
@@ -1176,6 +1188,7 @@ describe("App: surfaces terminal re-transcribe errors from background jobs (stag
       audio_path: "/tmp/viewed.flac",
       summary: "",
       summary_model: null,
+      people: [],
     });
     // Rejects immediately, exactly like one of the up-front validation
     // checks -- no progress event ever accompanies this.
@@ -1295,6 +1308,7 @@ describe("App: deleting a note from the sidebar (stage 0.10)", () => {
       audio_path: null,
       summary: "",
       summary_model: null,
+      people: [],
     });
 
     render(<App />);
@@ -1394,6 +1408,7 @@ describe("App: global search (stage 2.0)", () => {
       audio_path: null,
       summary: "",
       summary_model: null,
+      people: [],
     });
 
     render(<App />);
@@ -1424,6 +1439,7 @@ describe("App: global search (stage 2.0)", () => {
       audio_path: null,
       summary: "",
       summary_model: null,
+      people: [],
     });
 
     render(<App />);
@@ -1501,6 +1517,7 @@ describe("App: empty state and active-window shortcuts (stage 0.10)", () => {
       audio_path: null,
       summary: "",
       summary_model: null,
+      people: [],
     });
 
     render(<App />);
@@ -1592,7 +1609,7 @@ describe("App: enhance progress (stage 0.11)", () => {
     vi.mocked(ipc.listSessions).mockResolvedValue(one);
     vi.mocked(ipc.readSession).mockResolvedValue({
       title: "Weekly sync", date: "", notes: "", transcript: "[00:00:01] Me: hi",
-      audio_path: null, summary: "", summary_model: null,
+      audio_path: null, summary: "", summary_model: null, people: [],
     });
 
     render(<App />);
@@ -1601,7 +1618,7 @@ describe("App: enhance progress (stage 0.11)", () => {
 
     vi.mocked(ipc.readSession).mockResolvedValue({
       title: "Weekly sync", date: "", notes: "", transcript: "[00:00:01] Me: hi",
-      audio_path: null, summary: "- fresh auto summary", summary_model: "claude",
+      audio_path: null, summary: "- fresh auto summary", summary_model: "claude", people: [],
     });
     emit("enhance-progress", { path: "/tmp/sync.md", phase: "done", provider: "claude", message: null });
 
@@ -1626,7 +1643,7 @@ describe("App: enhance progress (stage 0.11)", () => {
     vi.mocked(ipc.listSessions).mockResolvedValue(one);
     vi.mocked(ipc.readSession).mockResolvedValue({
       title: "Weekly sync", date: "", notes: "", transcript: "[00:00:01] Me: hi",
-      audio_path: null, summary: "", summary_model: null,
+      audio_path: null, summary: "", summary_model: null, people: [],
     });
 
     render(<App />);
@@ -1656,7 +1673,7 @@ describe("App: enhance progress (stage 0.11)", () => {
     vi.mocked(ipc.listSessions).mockResolvedValue(one);
     vi.mocked(ipc.readSession).mockResolvedValue({
       title: "Weekly sync", date: "", notes: "", transcript: "[00:00:01] Me: hi",
-      audio_path: null, summary: "- old summary", summary_model: "claude",
+      audio_path: null, summary: "- old summary", summary_model: "claude", people: [],
     });
     vi.mocked(ipc.enhanceSession).mockClear().mockResolvedValue("- new");
 
@@ -1679,7 +1696,7 @@ describe("App: enhance progress (stage 0.11)", () => {
     vi.mocked(ipc.listSessions).mockResolvedValue(one);
     vi.mocked(ipc.readSession).mockResolvedValue({
       title: "Weekly sync", date: "", notes: "", transcript: "[00:00:01] Me: hi",
-      audio_path: null, summary: "", summary_model: null,
+      audio_path: null, summary: "", summary_model: null, people: [],
     });
 
     render(<App />);

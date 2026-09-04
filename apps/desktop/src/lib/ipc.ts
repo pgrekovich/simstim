@@ -174,6 +174,11 @@ export interface SessionData {
   summary: string;
   /** What generated `summary` ("claude" / "codex"), `null` without one. */
   summary_model: string | null;
+  /**
+   * Who was on the call: the `people:` frontmatter list, written from the
+   * calendar event the enhance lookup matched. `[]` without one.
+   */
+  people: string[];
 }
 
 /** Mirrors `enhance::EnhanceProviderInfo`: one row of the Settings AI section. */

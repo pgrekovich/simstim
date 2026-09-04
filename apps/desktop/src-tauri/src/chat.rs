@@ -245,6 +245,10 @@ pub(crate) struct CallPromptInput<'a> {
     pub file_name: &'a str,
     pub title: &'a str,
     pub date: &'a str,
+    /// The `people:` roster, joined for display; empty when the note has
+    /// none. Inline like title/date: "who said that" questions shouldn't
+    /// depend on the model re-reading its own file for the header.
+    pub people: &'a str,
     pub notes: &'a str,
     pub transcript: &'a str,
     pub live: bool,
@@ -263,6 +267,7 @@ pub(crate) fn build_this_call_prompt(
         file_name,
         title,
         date,
+        people,
         notes,
         transcript,
         live,
@@ -285,6 +290,13 @@ pub(crate) fn build_this_call_prompt(
     } else {
         transcript.trim().to_string()
     };
+    // Only rendered when the note actually carries a roster: an empty
+    // "People on the call:" line would read as "nobody was there".
+    let people_line = if people.trim().is_empty() {
+        String::new()
+    } else {
+        format!("People on the call: {}\n", people.trim())
+    };
     let contract = reply_contract(
         "SOURCE: <hh:mm:ss>\n\
          for evidence from THIS call (the timestamp of the strongest \
@@ -304,6 +316,7 @@ pub(crate) fn build_this_call_prompt(
          \n\
          Call title: {title}\n\
          Call date: {date}\n\
+         {people_line}\
          \n\
          === USER'S NOTES ===\n\
          {notes_block}\n\
@@ -720,6 +733,7 @@ fn ask_inner<R: tauri::Runtime>(
                         summary_model: None,
                         title_by: None,
                         audio_from_secs: None,
+                        people: Vec::new(),
                     }
                 });
                 build_this_call_prompt(
@@ -727,6 +741,7 @@ fn ask_inner<R: tauri::Runtime>(
                         file_name: &file_name,
                         title: &session.title,
                         date: &session.date,
+                        people: &session.people.join(", "),
                         notes: &session.notes,
                         transcript: &session.transcript,
                         live,
@@ -910,6 +925,7 @@ mod tests {
                     file_name: "2026-09-03 call.md",
                     title: "Pricing forum",
                     date: "2026-09-03T13:01:00+02:00",
+                    people: "Anna Berg, Marek",
                     notes: "- berlin open",
                     transcript: "[00:04:30] Them: Berlin is the open question.",
                     live: false,
@@ -918,6 +934,7 @@ mod tests {
                 "what did we agree on pricing?",
             );
             assert!(p.contains("Call title: Pricing forum"));
+            assert!(p.contains("People on the call: Anna Berg, Marek"));
             assert!(p.contains("- berlin open"));
             assert!(p.contains("[00:04:30] Them: Berlin is the open question."));
             assert!(p.contains("`2026-09-03 call.md`"));
@@ -933,6 +950,7 @@ mod tests {
                     file_name: "a.md",
                     title: "Untitled",
                     date: "",
+                    people: "",
                     notes: "",
                     transcript: "",
                     live: true,
@@ -943,6 +961,7 @@ mod tests {
             assert!(p.contains("BEING RECORDED RIGHT NOW"));
             assert!(p.contains("(nothing transcribed yet)"));
             assert!(p.contains("(the user took no notes)"));
+            assert!(!p.contains("People on the call:"), "no roster line without a roster");
         }
 
         #[test]

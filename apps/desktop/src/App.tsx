@@ -1533,6 +1533,7 @@ function App() {
                 audio_path: null,
                 summary: "",
                 summary_model: null,
+                people: [],
               }}
               liveLines={lines}
               interimMe={interimMe}

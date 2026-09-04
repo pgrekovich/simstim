@@ -21,6 +21,7 @@ vi.mock("@/lib/ipc", () => ({
     audio_path: null,
     summary: "",
     summary_model: null,
+    people: [],
   }),
   retranscribeSession: vi.fn().mockResolvedValue(undefined),
   enhanceSession: vi.fn().mockResolvedValue(""),
@@ -42,6 +43,7 @@ const baseData: SessionData = {
   audio_path: null,
   summary: "",
   summary_model: null,
+  people: [],
 };
 
 beforeEach(() => {
@@ -255,6 +257,7 @@ describe("SessionView: audio playback and re-transcribe (Task 4, stage-0.7)", ()
           audio_path: "/tmp/call.flac",
           summary: "",
           summary_model: null,
+          people: [],
           transcript: "[00:01:05] Me: hello there\n",
         }}
         liveLines={[]}
@@ -409,6 +412,7 @@ describe("SessionView: audio playback and re-transcribe (Task 4, stage-0.7)", ()
       audio_path: "/tmp/call.flac",
       summary: "",
       summary_model: null,
+      people: [],
     });
     render(
       <SessionView
@@ -419,6 +423,7 @@ describe("SessionView: audio playback and re-transcribe (Task 4, stage-0.7)", ()
           audio_path: "/tmp/call.flac",
           summary: "",
           summary_model: null,
+          people: [],
           transcript: "[00:00:03] Me: old parakeet text\n",
         }}
         liveLines={[]}
@@ -446,6 +451,7 @@ describe("SessionView: audio playback and re-transcribe (Task 4, stage-0.7)", ()
       audio_path: "/tmp/call.flac",
       summary: "",
       summary_model: null,
+      people: [],
     });
     render(
       <SessionView
@@ -456,6 +462,7 @@ describe("SessionView: audio playback and re-transcribe (Task 4, stage-0.7)", ()
           audio_path: "/tmp/call.flac",
           summary: "",
           summary_model: null,
+          people: [],
           transcript: "[00:00:03] Me: old parakeet text\n",
         }}
         liveLines={[]}
@@ -485,6 +492,7 @@ describe("SessionView: notes/transcript tabs (stage 0.10)", () => {
           notes: "## Decisions\n\n- Ship **Friday**",
           summary: "> Generated **brief**",
           summary_model: "local/qwen",
+          people: [],
         }}
         liveLines={[]}
         interimMe=""
@@ -601,6 +609,7 @@ describe("SessionView: notes/transcript tabs (stage 0.10)", () => {
           notes: "keep Notes primary",
           summary: "A concise summary",
           summary_model: "local/qwen",
+          people: [],
           transcript: "[00:00:03] Me: hello tabs\n",
         }}
         liveLines={[]}
@@ -631,6 +640,7 @@ describe("SessionView: notes/transcript tabs (stage 0.10)", () => {
           notes: "   ",
           summary: "A concise summary",
           summary_model: "local/qwen",
+          people: [],
         }}
         liveLines={[]}
         interimMe=""
@@ -797,6 +807,7 @@ describe("SessionView: enhance (stage 0.11)", () => {
           transcript: "[00:00:01] Me: hi",
           summary: "- **ship v2 friday**",
           summary_model: "claude",
+          people: [],
         }}
         liveLines={[]}
         interimMe=""
@@ -851,6 +862,28 @@ describe("SessionView: title meta line (date and duration)", () => {
     expect(
       screen.getByText(formatSessionMeta("2026-09-02T14:03:52", 611)!),
     ).toBeVisible();
+  });
+
+  it("appends who was on the call after the date and duration", () => {
+    render(
+      <SessionView
+        path="/tmp/call.md"
+        isActive={false}
+        initialData={{
+          ...baseData,
+          date: "2026-09-02T14:03:52",
+          people: ["Anna Berg", "Mark"],
+        }}
+        durationSecs={611}
+        liveLines={[]}
+        interimMe=""
+        interimThem=""
+        retranscribingJob={null}
+      />
+    );
+
+    const expected = `${formatSessionMeta("2026-09-02T14:03:52", 611)!} · with Anna Berg, Mark`;
+    expect(screen.getByText(expected)).toBeVisible();
   });
 
   it("shows no meta line while the session is being recorded", () => {

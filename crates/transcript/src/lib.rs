@@ -71,6 +71,13 @@ pub struct Transcript {
     /// Cleared by `sessions::rewrite_session` the moment the user saves a
     /// different title themselves.
     title_by: Option<String>,
+    /// Who was on the call, rendered as a `people: a, b, c` frontmatter
+    /// line (empty = no line at all, keeping pre-existing files
+    /// byte-identical across a rewrite). Written from the calendar event's
+    /// attendee list when the opt-in calendar lookup matches one; plain
+    /// text in the user's file, so search, chat and any outside tool (grep,
+    /// Obsidian) see it for free.
+    people: Vec<String>,
 }
 
 impl Transcript {
@@ -89,6 +96,7 @@ impl Transcript {
             summary: String::new(),
             summary_model: None,
             title_by: None,
+            people: Vec::new(),
         }
     }
 
@@ -112,6 +120,28 @@ impl Transcript {
 
     pub fn set_notes(&mut self, notes: String) {
         self.notes = notes;
+    }
+
+    /// Sets the `people:` frontmatter list (see the field's doc comment).
+    /// Names are sanitized for the line-oriented, comma-separated format:
+    /// inner whitespace collapses to single spaces, commas (the list
+    /// separator) are dropped, a runaway length is capped, and empty
+    /// results are skipped -- so one hostile calendar entry can't corrupt
+    /// the frontmatter block.
+    pub fn set_people(&mut self, people: Vec<String>) {
+        const MAX_NAME_CHARS: usize = 120;
+        self.people = people
+            .iter()
+            .map(|name| {
+                let cleaned = name.replace(',', " ");
+                let mut cleaned = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
+                if cleaned.chars().count() > MAX_NAME_CHARS {
+                    cleaned = cleaned.chars().take(MAX_NAME_CHARS).collect::<String>().trim_end().to_string();
+                }
+                cleaned
+            })
+            .filter(|name| !name.is_empty())
+            .collect();
     }
 
     /// Overrides the rendered `asr:` frontmatter value, which model produced
@@ -252,6 +282,9 @@ impl Transcript {
         );
         if let Some(title_by) = &self.title_by {
             out.push_str(&format!("title_by: {title_by}\n"));
+        }
+        if !self.people.is_empty() {
+            out.push_str(&format!("people: {}\n", self.people.join(", ")));
         }
         if let Some(secs) = self.duration_secs {
             out.push_str(&format!("duration: {}m\n", secs / 60));
@@ -434,6 +467,9 @@ pub struct SessionData {
     /// timeline), `Some(secs)` only for a session continued after its audio
     /// was deleted.
     pub audio_from_secs: Option<u64>,
+    /// The `people:` frontmatter list (comma-separated on disk), empty when
+    /// the file has none. See [`Transcript::set_people`].
+    pub people: Vec<String>,
 }
 
 /// Frontmatter-only view of a session file, for the sidebar's session list.
@@ -481,6 +517,10 @@ pub fn parse_session(path: &Path) -> Result<SessionData> {
         .cloned()
         .unwrap_or_else(|| ASR_MODEL_ID.to_string());
     let audio_from_secs = fields.get("audio_from").and_then(|s| s.parse::<u64>().ok());
+    let people = fields
+        .get("people")
+        .map(|line| parse_people_field(line))
+        .unwrap_or_default();
 
     let (transcript_line_start, transcript_content_start) =
         find_last_exact_line(body, "## Transcript")
@@ -526,7 +566,18 @@ pub fn parse_session(path: &Path) -> Result<SessionData> {
         audio_from_secs,
         summary,
         summary_model,
+        people,
     })
+}
+
+/// Splits a `people:` frontmatter value back into names: the inverse of
+/// `render`'s `", "` join, tolerant of hand-edited spacing and stray empty
+/// entries ("a,, b" parses as two names).
+pub fn parse_people_field(line: &str) -> Vec<String> {
+    line.split(',')
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty())
+        .collect()
 }
 
 /// Cheap frontmatter-only read for listing: stops as soon as the closing
@@ -674,6 +725,63 @@ mod tests {
             let parsed = parse_session(&plain).unwrap();
             assert_eq!(parsed.title_by, None);
             assert!(!std::fs::read_to_string(&plain).unwrap().contains("title_by"));
+        }
+    }
+
+    mod people_field {
+        use super::*;
+
+        /// `people:` round-trips, and a file without it (every pre-existing
+        /// note) parses to an empty list and renders with no `people:` line
+        /// at all -- same byte-stability promise `title_by:` makes.
+        #[test]
+        fn round_trips_people_and_stays_absent_for_old_files() {
+            let dir = tempfile::tempdir().unwrap();
+
+            let with = dir.path().join("with.md");
+            let mut t = Transcript::new(t0());
+            t.set_people(vec!["Anna Berg".into(), "Mark".into()]);
+            t.add(Speaker::Me, 3.0, "hi".into());
+            t.save(&with).unwrap();
+            assert!(std::fs::read_to_string(&with)
+                .unwrap()
+                .contains("people: Anna Berg, Mark\n"));
+            let parsed = parse_session(&with).unwrap();
+            assert_eq!(parsed.people, vec!["Anna Berg", "Mark"]);
+
+            let plain = dir.path().join("plain.md");
+            let mut t = Transcript::new(t0());
+            t.add(Speaker::Me, 3.0, "hi".into());
+            t.save(&plain).unwrap();
+            assert!(!std::fs::read_to_string(&plain).unwrap().contains("people"));
+            assert_eq!(parse_session(&plain).unwrap().people, Vec::<String>::new());
+        }
+
+        /// One hostile calendar entry can't corrupt the line-oriented
+        /// frontmatter: newlines collapse, commas (the separator) drop,
+        /// blanks are skipped -- and what was written parses back cleanly.
+        #[test]
+        fn sanitizes_names_for_the_line_oriented_format() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("call.md");
+            let mut t = Transcript::new(t0());
+            t.set_people(vec![
+                "Berg, Anna\n---\ndate: evil".into(),
+                "   ".into(),
+                "Mark".into(),
+            ]);
+            t.add(Speaker::Me, 3.0, "hi".into());
+            t.save(&path).unwrap();
+
+            let parsed = parse_session(&path).unwrap();
+            assert_eq!(parsed.people, vec!["Berg Anna --- date: evil", "Mark"]);
+            assert_eq!(parsed.date, t0().to_rfc3339_opts(chrono::SecondsFormat::Secs, false));
+        }
+
+        #[test]
+        fn parse_people_field_tolerates_hand_edited_spacing() {
+            assert_eq!(parse_people_field("a ,  b,, c "), vec!["a", "b", "c"]);
+            assert_eq!(parse_people_field("  "), Vec::<String>::new());
         }
     }
 

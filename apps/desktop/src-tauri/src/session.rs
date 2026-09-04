@@ -248,6 +248,9 @@ pub struct ContinueFrom {
     /// frontmatter); carried through so recording into a note doesn't
     /// silently promote a model-written title to a user-owned one.
     pub title_by: Option<String>,
+    /// The existing `people:` roster; carried through so recording into a
+    /// note doesn't drop who was on the earlier call.
+    pub people: Vec<String>,
 }
 
 /// Loads `path`'s existing content into a [`ContinueFrom`] seed for
@@ -268,6 +271,7 @@ pub fn load_continue_from(path: &Path) -> anyhow::Result<ContinueFrom> {
         summary: data.summary,
         summary_model: data.summary_model,
         title_by: data.title_by,
+        people: data.people,
     })
 }
 
@@ -515,6 +519,7 @@ fn run_worker(
             transcript.set_raw_date(seed.raw_date);
             transcript.set_transcript_prefix(seed.transcript_prefix);
             transcript.set_summary(seed.summary, seed.summary_model);
+            transcript.set_people(seed.people);
             transcript.set_duration_secs(seed.previous_duration_secs);
             Some((seed.previous_duration_secs, seed.base_offset_secs))
         }

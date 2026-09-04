@@ -1097,11 +1097,21 @@ fn enhance_path_inner<R: tauri::Runtime>(
                     .to_string(),
             );
         }
+        // The matched event's attendee list is saved into the note's
+        // `people:` frontmatter (owner request: who was on the call belongs
+        // in the file, for search and context). Only a lookup that actually
+        // carried attendees replaces the line; a miss preserves what an
+        // earlier enhance saved (see `set_summary_at`'s docs).
+        let people = event
+            .as_ref()
+            .map(|event| event.attendees.clone())
+            .filter(|attendees| !attendees.is_empty());
         crate::sessions::set_summary_at(
             md_path,
             &summary,
             &summary_label(spec, model.as_deref()),
             proposed_title.as_deref(),
+            people.as_deref(),
         )
         .map_err(|e| e.to_string())?;
         Ok(summary)

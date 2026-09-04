@@ -19,6 +19,12 @@ interface RecordButtonProps {
   startedAt: number | null;
   onClick: () => void;
   /**
+   * Hover tooltip. The label alone can't say WHERE the recording goes
+   * (Record continues the open note but starts fresh with nothing
+   * selected), so App spells that out here instead of widening the button.
+   */
+  title?: string;
+  /**
    * `"default"` is the original large centered-screen pill (Stage 0.5).
    * `"compact"` is the small header pill used by the Stage 0.6 shell
    * (Task 5): same green/red + pulse + elapsed logic, just sized to sit
@@ -32,6 +38,7 @@ export function RecordButton({
   disabled,
   startedAt,
   onClick,
+  title,
   size = "default",
 }: RecordButtonProps) {
   const [now, setNow] = useState(() => Date.now());
@@ -56,6 +63,7 @@ export function RecordButton({
       variant={recording ? "destructive" : "default"}
       disabled={disabled}
       onClick={onClick}
+      title={title}
       className={cn(
         "font-mono font-semibold tracking-[0.02em] shadow-none",
         size === "compact" ? "h-[30px] rounded-full px-3.5 text-[11.5px]" : "h-12 rounded-full px-8 text-sm",

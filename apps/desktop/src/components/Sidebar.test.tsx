@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { Sidebar } from "@/components/Sidebar";
 import type { SessionMeta } from "@/lib/ipc";
@@ -301,5 +301,59 @@ describe("Sidebar: ask your notes (stage 4.2)", () => {
     );
 
     expect(screen.queryByRole("button", { name: /ask your notes/i })).toBeNull();
+  });
+});
+
+describe("Sidebar: row context menu (macOS right-click reflex)", () => {
+  it("opens on right click and routes each action to its callback with the row's path", () => {
+    const onOpenFile = vi.fn();
+    const onRevealInFinder = vi.fn();
+    const onDelete = vi.fn();
+    const onSelect = vi.fn();
+    render(
+      <Sidebar
+        sessions={makeSessions()}
+        selectedPath={null}
+        activePath={null}
+        onSelect={onSelect}
+        onNewSession={vi.fn()}
+        onDelete={onDelete}
+        onOpenFile={onOpenFile}
+        onRevealInFinder={onRevealInFinder}
+      />
+    );
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: /session a/i }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /show in finder/i }));
+    expect(onRevealInFinder).toHaveBeenCalledExactlyOnceWith("/tmp/a.md");
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: /session b/i }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /open file/i }));
+    expect(onOpenFile).toHaveBeenCalledExactlyOnceWith("/tmp/b.md");
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: /session b/i }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /move to trash/i }));
+    expect(onDelete).toHaveBeenCalledExactlyOnceWith("/tmp/b.md");
+
+    // The right click itself must not select the row.
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("disables Move to Trash for the recording row (same gate as the hover trash button)", () => {
+    render(
+      <Sidebar
+        sessions={makeSessions()}
+        selectedPath={null}
+        activePath="/tmp/a.md"
+        onSelect={vi.fn()}
+        onNewSession={vi.fn()}
+        onDelete={vi.fn()}
+      />
+    );
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: /^session a/i }));
+    expect(screen.getByRole("menuitem", { name: /move to trash/i })).toHaveAttribute(
+      "data-disabled"
+    );
   });
 });

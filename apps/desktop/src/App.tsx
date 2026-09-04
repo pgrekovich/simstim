@@ -103,7 +103,12 @@ export interface PaneWidthSpec {
 
 export const SIDEBAR_WIDTH: PaneWidthSpec = {
   key: "simstim.sidebar-width",
-  default: 224,
+  // 280: the owner tuned this by eye from the original 224 (2026-09-04).
+  // Titles get the extra room. The default WINDOW width (tauri.conf.json)
+  // must stay >= MAIN_PANE_MIN + this, or the mount-time reclamp squeezes
+  // the sidebar back toward its minimum and the default never actually
+  // shows.
+  default: 280,
   min: 180,
   max: 400,
 };
@@ -768,6 +773,19 @@ function App() {
     prevStatusKindRef.current = status.kind;
   }, [status.kind, refreshSessions]);
 
+  // "saved" is a confirmation, not a state the user lives in: it dissolves
+  // back to idle after a beat instead of sitting in the toolbar until some
+  // unrelated status happens to replace it. Identity-compared so a newer
+  // status set during the wait (a fresh recording, an error) is never
+  // clobbered; the cleanup covers that same race from the timer side.
+  useEffect(() => {
+    if (status.kind !== "saved") return;
+    const timer = window.setTimeout(() => {
+      setStatus((prev) => (prev === status ? { kind: "idle" } : prev));
+    }, 4000);
+    return () => window.clearTimeout(timer);
+  }, [status]);
+
   // Loads the selected session for SessionView. The one exception is the
   // session currently being recorded (`activePath`): its file is being
   // written by the worker in the background and may lag or race a direct
@@ -1283,6 +1301,8 @@ function App() {
         onOpenAsk={() => setAskNotesOpen(true)}
         askActive={askNotesOpen}
         onDelete={handleDeleteSession}
+        onOpenFile={(path) => void openPath(path)}
+        onRevealInFinder={(path) => void revealItemInDir(path)}
       />}
       {!sidebarCollapsed && (
         <ResizeHandle
@@ -1379,6 +1399,15 @@ function App() {
             disabled={busy || (!sessionActive && !modelReady)}
             startedAt={recordingStartedAt}
             onClick={sessionActive ? handleStop : () => void handleStart()}
+            // Record continues the OPEN note (Global Constraints); nothing
+            // on the button itself says so, so the tooltip does.
+            title={
+              sessionActive
+                ? "Stop recording"
+                : selectedPath !== null
+                  ? "Record into this note (⌘⇧N)"
+                  : "Start recording (⌘⇧N)"
+            }
           />}
 
           {/* Ask this call (stage 4.2, design 8c): the drawer's visible
@@ -1553,6 +1582,8 @@ function App() {
               path={selectedPath}
               isActive={false}
               initialData={sessionData}
+              // SessionData carries no duration; the sidebar's scan does.
+              durationSecs={sessions.find((s) => s.path === selectedPath)?.duration_secs ?? null}
               liveLines={lines}
               interimMe={interimMe}
               interimThem={interimThem}

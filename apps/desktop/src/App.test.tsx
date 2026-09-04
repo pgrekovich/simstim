@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import App from "@/App";
+import App, { SIDEBAR_WIDTH } from "@/App";
 import * as ipc from "@/lib/ipc";
 import type { SessionMeta } from "@/lib/ipc";
 import { listen } from "@tauri-apps/api/event";
@@ -380,25 +380,31 @@ describe("App: menu-bar recording toggle (stage 3)", () => {
   });
 
   it("resizes the sidebar by dragging its border and resets on double-click", async () => {
+    // Derived from the spec, not repeated literals: the default is an owner
+    // taste call (224 -> 296 on 2026-09-04) and may move again. The drag
+    // target must stay under jsdom's 1024px window minus the note pane's
+    // 640px minimum (the drag clamp), so the delta is small.
+    const fallback = SIDEBAR_WIDTH.default;
+    const dragged = fallback + 40;
     render(<App />);
     const sidebar = (await screen.findByRole("button", { name: /ask your notes/i })).closest("aside")!;
-    expect(sidebar).toHaveStyle({ width: "224px" });
+    expect(sidebar).toHaveStyle({ width: `${fallback}px` });
 
     const handle = screen.getByRole("separator", { name: "Resize sidebar" });
-    fireEvent.pointerDown(handle, { clientX: 224, button: 0 });
-    fireEvent.pointerMove(window, { clientX: 304 });
+    fireEvent.pointerDown(handle, { clientX: fallback, button: 0 });
+    fireEvent.pointerMove(window, { clientX: dragged });
     fireEvent.pointerUp(window);
-    expect(sidebar).toHaveStyle({ width: "304px" });
-    expect(window.localStorage.getItem("simstim.sidebar-width")).toBe("304");
+    expect(sidebar).toHaveStyle({ width: `${dragged}px` });
+    expect(window.localStorage.getItem("simstim.sidebar-width")).toBe(String(dragged));
 
     // Bounds: a drag far past the minimum clamps instead of collapsing.
-    fireEvent.pointerDown(handle, { clientX: 304, button: 0 });
+    fireEvent.pointerDown(handle, { clientX: dragged, button: 0 });
     fireEvent.pointerMove(window, { clientX: 0 });
     fireEvent.pointerUp(window);
-    expect(sidebar).toHaveStyle({ width: "180px" });
+    expect(sidebar).toHaveStyle({ width: `${SIDEBAR_WIDTH.min}px` });
 
     fireEvent.doubleClick(handle);
-    expect(sidebar).toHaveStyle({ width: "224px" });
+    expect(sidebar).toHaveStyle({ width: `${fallback}px` });
   });
 
   it("resizes the Ask this call drawer, wider toward the left", async () => {
@@ -654,6 +660,29 @@ describe("App: a saving session must not block the next call (owner bug: missed 
     const finishStop = await enterSavingState();
     finishStop("/tmp/active.md");
     expect(await screen.findByText(/^saved$/)).toBeVisible();
+  });
+
+  it("dissolves the saved confirmation back to idle after a few seconds", async () => {
+    const finishStop = await enterSavingState();
+    // Fake timers only from here on: the dissolve timeout is scheduled by
+    // the effect that runs when "saved" lands (inside the act below), so it
+    // ends up on the controllable clock -- while RTL's findBy*/waitFor
+    // (which poll on real timers, and hang under vitest's clock) are all
+    // behind us. Only synchronous get/query assertions past this point.
+    vi.useFakeTimers();
+    try {
+      await act(async () => {
+        finishStop("/tmp/active.md");
+      });
+      expect(screen.getByText(/^saved$/)).toBeVisible();
+
+      act(() => {
+        vi.advanceTimersByTime(4000);
+      });
+      expect(screen.queryByText(/^saved$/)).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("surfaces a failed background save as an error even after a new recording started", async () => {

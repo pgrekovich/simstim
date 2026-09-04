@@ -2,6 +2,7 @@ import { createRef } from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  formatSessionMeta,
   SessionView,
   shouldStackTranscriptFind,
   type SessionViewHandle,
@@ -810,5 +811,64 @@ describe("SessionView: enhance (stage 0.11)", () => {
     expect(screen.getByText(/by claude/i)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /re-run/i }));
     await waitFor(() => expect(ipc.enhanceSession).toHaveBeenCalledExactlyOnceWith("/tmp/call.md"));
+  });
+});
+
+describe("SessionView: title meta line (date and duration)", () => {
+  // TZ-free date strings (no offset) parse as local time, so the expected
+  // clock reading is stable across machines.
+  it("formats same-year notes without the year and appends the duration", () => {
+    expect(
+      formatSessionMeta("2026-09-02T14:03:52", 611, new Date("2026-09-04T00:00:00")),
+    ).toBe("Sep 2, 14:03 · 10:11");
+  });
+
+  it("spells out the year for a note from another year and omits a missing duration", () => {
+    expect(
+      formatSessionMeta("2025-08-28T09:05:00", null, new Date("2026-09-04T00:00:00")),
+    ).toBe("Aug 28, 2025, 09:05");
+  });
+
+  it("returns null for the active session's blank placeholder date", () => {
+    expect(formatSessionMeta("", 100, new Date())).toBeNull();
+    expect(formatSessionMeta("not a date", 100, new Date())).toBeNull();
+  });
+
+  it("renders the meta line under an opened past note's title", () => {
+    render(
+      <SessionView
+        path="/tmp/call.md"
+        isActive={false}
+        initialData={{ ...baseData, date: "2026-09-02T14:03:52" }}
+        durationSecs={611}
+        liveLines={[]}
+        interimMe=""
+        interimThem=""
+        retranscribingJob={null}
+      />
+    );
+
+    expect(
+      screen.getByText(formatSessionMeta("2026-09-02T14:03:52", 611)!),
+    ).toBeVisible();
+  });
+
+  it("shows no meta line while the session is being recorded", () => {
+    render(
+      <SessionView
+        path="/tmp/call.md"
+        isActive
+        initialData={{ ...baseData, date: "2026-09-02T14:03:52" }}
+        durationSecs={611}
+        liveLines={[]}
+        interimMe=""
+        interimThem=""
+        retranscribingJob={null}
+      />
+    );
+
+    expect(
+      screen.queryByText(formatSessionMeta("2026-09-02T14:03:52", 611)!),
+    ).not.toBeInTheDocument();
   });
 });

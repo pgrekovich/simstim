@@ -28,6 +28,7 @@ import {
   updateActiveSession,
   type SessionData,
 } from "@/lib/ipc";
+import { formatDuration } from "@/lib/utils";
 import { isTranscriptUpdatedButAudioDeleteFailed, type RetranscribeJob } from "@/lib/retranscribeStatus";
 
 /** Global Constraints (Task 6): notes save 500ms after the last keystroke. */
@@ -44,11 +45,43 @@ export function shouldStackTranscriptFind(
   return candidateFindLeft - tabsRight < MIN_FIND_GAP_PX;
 }
 
+/**
+ * The quiet meta line under a past note's title: "Sep 2, 14:03 · 10:11",
+ * with the year spelled out once the note is from a different year than
+ * `now`. The sidebar carries the same facts, but it groups by relative day
+ * and can be collapsed entirely -- an opened note has to say when its call
+ * happened on its own. Returns `null` for a blank/invalid date (the active
+ * session's placeholder `initialData.date` is `""`).
+ */
+export function formatSessionMeta(
+  dateStr: string,
+  durationSecs: number | null,
+  now = new Date(),
+): string | null {
+  const d = new Date(dateStr);
+  if (dateStr === "" || Number.isNaN(d.getTime())) return null;
+  const date = d.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    ...(d.getFullYear() !== now.getFullYear() ? { year: "numeric" } : {}),
+  });
+  const time = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  const duration = formatDuration(durationSecs);
+  return duration ? `${date}, ${time} · ${duration}` : `${date}, ${time}`;
+}
+
 interface SessionViewProps {
   path: string;
   /** Whether `path` is the session currently being recorded. */
   isActive: boolean;
   initialData: SessionData;
+  /**
+   * The session's recorded length in seconds, from its sidebar `SessionMeta`
+   * (`SessionData` itself doesn't carry one). Shown in the quiet meta line
+   * under the title next to the date; `null`/omitted hides the duration
+   * half. Ignored while `isActive` (the live clock is in the Stop button).
+   */
+  durationSecs?: number | null;
   /** Live in-memory finalized lines for the active session (ignored otherwise). */
   liveLines: string[];
   /** Live interim drafts for the active session (ignored otherwise). */
@@ -226,6 +259,7 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
     path,
     isActive,
     initialData,
+    durationSecs = null,
     liveLines,
     interimMe,
     interimThem,
@@ -703,6 +737,8 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
       ? "starting..."
       : null;
 
+  const sessionMeta = formatSessionMeta(initialData.date, durationSecs);
+
   const titleInput = (
     <textarea
       ref={titleFieldRef}
@@ -868,7 +904,14 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
         {toolbarFindSlot && findControls ? createPortal(findControls, toolbarFindSlot) : null}
 
         {/* The title belongs to the session, not to a single material tab. */}
-        <div className="shrink-0 px-6 pt-0.5">{titleInput}</div>
+        <div className="shrink-0 px-6 pt-0.5">
+          {titleInput}
+          {/* Hidden while recording: the live clock is in the Stop button,
+              and the placeholder date is blank anyway. */}
+          {!isActive && sessionMeta && (
+            <p className="mt-1 font-mono text-[10.5px] text-muted-foreground">{sessionMeta}</p>
+          )}
+        </div>
 
         <TabsContent
           value="notes"

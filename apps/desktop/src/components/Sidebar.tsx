@@ -1,6 +1,13 @@
-import { MessageCircleQuestion, PanelLeftClose, Search, SquarePen, Trash2 } from "lucide-react";
+import { FileText, Folder, MessageCircleQuestion, PanelLeftClose, Search, SquarePen, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
+import { cn, formatDuration } from "@/lib/utils";
 import type { SessionMeta } from "@/lib/ipc";
 
 interface SidebarProps {
@@ -30,6 +37,10 @@ interface SidebarProps {
   askActive?: boolean;
   /** Row-hover trash button; App owns the confirm dialog and the IPC call. */
   onDelete: (path: string) => void;
+  /** Row context menu's "Open file": the note in the system editor. */
+  onOpenFile?: (path: string) => void;
+  /** Row context menu's "Show in Finder". */
+  onRevealInFinder?: (path: string) => void;
 }
 
 interface SessionGroup {
@@ -59,17 +70,6 @@ function formatTime(dateStr: string): string {
   return `${hh}:${mm}`;
 }
 
-function formatDuration(durationSecs: number | null): string | null {
-  if (durationSecs === null) return null;
-  const whole = Math.max(0, Math.floor(durationSecs));
-  const hours = Math.floor(whole / 3600);
-  const minutes = Math.floor((whole % 3600) / 60);
-  const seconds = whole % 60;
-  return hours > 0
-    ? `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`
-    : `${minutes}:${String(seconds).padStart(2, "0")}`;
-}
-
 /**
  * Groups sessions into day buckets in the order they arrive. `list_sessions`
  * already sorts by date desc, so a single pass merging into the trailing
@@ -92,7 +92,7 @@ function groupSessions(sessions: SessionMeta[]): SessionGroup[] {
 }
 
 export function Sidebar({
-  width = 224,
+  width = 280,
   sessions,
   selectedPath,
   activePath,
@@ -104,6 +104,8 @@ export function Sidebar({
   onOpenAsk,
   askActive = false,
   onDelete,
+  onOpenFile,
+  onRevealInFinder,
 }: SidebarProps) {
   const groups = groupSessions(sessions);
 
@@ -149,8 +151,11 @@ export function Sidebar({
         </Button>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
-        {onOpenAsk && (
+      {/* Pinned above the list, not inside it (owner ruling 2026-09-04):
+          the surface's one entry point must not scroll away with a long
+          note history. */}
+      {onOpenAsk && (
+        <div className="shrink-0 px-3">
           <button
             type="button"
             onClick={onOpenAsk}
@@ -166,11 +171,19 @@ export function Sidebar({
               className="size-[14px] shrink-0 text-[var(--voice-remote)]"
             />
             <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium">Ask your notes</span>
-            <span className="inline-flex h-[17px] shrink-0 items-center rounded-[4px] bg-foreground/[0.07] px-[5px] font-mono text-[10.5px] text-quiet-foreground">
-              ⌘L
-            </span>
+            {/* Below ~205px the label itself needs the room: at the pane's
+                180px minimum the badge was what pushed "Ask your notes" into
+                an ellipsis, and the words beat the shortcut hint. */}
+            {width >= 205 && (
+              <span className="inline-flex h-[17px] shrink-0 items-center rounded-[4px] bg-foreground/[0.07] px-[5px] font-mono text-[10.5px] text-quiet-foreground">
+                ⌘L
+              </span>
+            )}
           </button>
-        )}
+        </div>
+      )}
+
+      <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
         {sessions.length === 0 ? (
           <p className="px-2 py-4 text-center text-xs text-muted-foreground">
             no sessions yet
@@ -192,7 +205,13 @@ export function Sidebar({
                   // A wrapper div, not one button: the delete affordance is
                   // its own overlaid button (nesting buttons is invalid
                   // HTML), revealed on row hover in place of the timestamp.
-                  <div key={session.path} className="group relative">
+                  // The whole row also answers a right click (macOS reflex)
+                  // with the same actions the toolbar overflow menu offers
+                  // for the OPEN note, so any listed note is one gesture
+                  // from its file.
+                  <ContextMenu key={session.path}>
+                    <ContextMenuTrigger asChild>
+                  <div className="group relative">
                     <button
                       type="button"
                       onClick={() => onSelect(session.path)}
@@ -265,6 +284,29 @@ export function Sidebar({
                       </button>
                     )}
                   </div>
+                    </ContextMenuTrigger>
+                    <ContextMenuContent>
+                      <ContextMenuItem onSelect={() => onOpenFile?.(session.path)}>
+                        <FileText />
+                        Open file
+                      </ContextMenuItem>
+                      <ContextMenuItem onSelect={() => onRevealInFinder?.(session.path)}>
+                        <Folder />
+                        Show in Finder
+                      </ContextMenuItem>
+                      <ContextMenuSeparator />
+                      {/* Same gate as the hover trash button: the recording
+                          session and one with machine work in flight can't
+                          be deleted (the backend rejects both). */}
+                      <ContextMenuItem
+                        disabled={recording || Boolean(busyWord)}
+                        onSelect={() => onDelete(session.path)}
+                      >
+                        <Trash2 />
+                        Move to Trash
+                      </ContextMenuItem>
+                    </ContextMenuContent>
+                  </ContextMenu>
                 );
               })}
             </div>

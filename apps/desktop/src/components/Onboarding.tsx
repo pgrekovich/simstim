@@ -97,6 +97,11 @@ function modelsToFetch(models: ModelInfo[], config: AppConfig): ModelInfo[] {
   );
 }
 
+/** macOS display convention: the home directory reads as "~". */
+function displayPath(path: string): string {
+  return path.replace(/^\/Users\/[^/]+/, "~");
+}
+
 /** One number for every in-flight download: bytes received over bytes total. */
 function combinedPercent(progress: Record<string, DownloadProgress>): number | null {
   const entries = Object.values(progress).filter((p) => p.phase !== "error");
@@ -304,7 +309,7 @@ export function Onboarding({ config, models, onOpenSettings, onComplete }: Onboa
           <h1 className="font-serif text-[34px] font-semibold leading-[1.12] tracking-[-0.025em]">
             Your calls stay on this Mac.
           </h1>
-          <p className="mt-4 max-w-[540px] text-[15px] leading-[1.65] text-muted-foreground">
+          <p className="mt-4 text-[15px] leading-[1.65] text-muted-foreground">
             Simstim records only when you click Record. Every call becomes a plain Markdown
             note, with its audio, in a folder you own. Nothing is uploaded.
           </p>
@@ -314,7 +319,9 @@ export function Onboarding({ config, models, onOpenSettings, onComplete }: Onboa
               <p className="font-mono text-[10px] uppercase tracking-[0.07em] text-muted-foreground">
                 Notes folder
               </p>
-              <p className="mt-1 truncate text-[13px]">{currentConfig.output_dir}</p>
+              <p className="mt-1 truncate text-[13px]" title={currentConfig.output_dir}>
+                {displayPath(currentConfig.output_dir)}
+              </p>
             </div>
             <Button
               variant="outline"
@@ -399,8 +406,13 @@ export function Onboarding({ config, models, onOpenSettings, onComplete }: Onboa
             )}
           </div>
 
-          {/* The speech models: no names, no sizes, one quiet line. */}
-          <div className="mt-6 min-h-6">
+          {error && <p role="alert" className="mt-3 text-[12px] text-destructive">{error}</p>}
+
+          {/* Footer: the speech models' one quiet status line on the left (no
+              names, no sizes), Start on the right -- one row, so neither
+              floats alone. */}
+          <div className="mt-8 flex items-center justify-between gap-6">
+            <div className="min-w-0 flex-1">
             {activeModel?.downloaded && downloadPercent === null ? (
               <p className="flex items-center gap-1.5 text-[12px] text-muted-foreground">
                 <Check className="size-3.5 text-emerald-700 dark:text-emerald-400" /> Speech recognition ready
@@ -420,13 +432,10 @@ export function Onboarding({ config, models, onOpenSettings, onComplete }: Onboa
                   <LoaderCircle className="size-3.5 animate-spin" />
                   Preparing speech recognition{downloadPercent !== null && downloadPercent > 0 ? ` · ${downloadPercent}%` : "..."}
                 </p>
-                {downloadPercent !== null && <Progress className="mt-2" value={downloadPercent} />}
+                {downloadPercent !== null && <Progress className="mt-2 max-w-[320px]" value={downloadPercent} />}
               </div>
             )}
           </div>
-
-          {error && <p role="alert" className="mt-3 text-[12px] text-destructive">{error}</p>}
-          <div className="mt-6 flex justify-end">
             <Button onClick={() => void handleFinish()} disabled={!ready || finishing}>
               {finishing ? (
                 <><LoaderCircle className="size-4 animate-spin" /> Finishing...</>

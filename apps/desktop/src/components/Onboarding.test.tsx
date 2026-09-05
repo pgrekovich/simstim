@@ -139,7 +139,7 @@ describe("Onboarding (one screen)", () => {
     await waitFor(() => {
       expect(ipc.setOutputDir).toHaveBeenCalledWith("/Users/pavel/Documents/simstim");
     });
-    expect(await screen.findByText("/Users/pavel/Documents/simstim")).toBeVisible();
+    expect(await screen.findByText("~/Documents/simstim")).toBeVisible();
   });
 
   it("downloads both speech models on its own, without naming them, and completes once the live one lands", async () => {

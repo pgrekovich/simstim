@@ -248,6 +248,9 @@ pub struct ContinueFrom {
     /// frontmatter); carried through so recording into a note doesn't
     /// silently promote a model-written title to a user-owned one.
     pub title_by: Option<String>,
+    /// The existing `people:` roster; carried through so recording into a
+    /// note doesn't drop who was on the earlier call.
+    pub people: Vec<String>,
 }
 
 /// Loads `path`'s existing content into a [`ContinueFrom`] seed for
@@ -268,6 +271,7 @@ pub fn load_continue_from(path: &Path) -> anyhow::Result<ContinueFrom> {
         summary: data.summary,
         summary_model: data.summary_model,
         title_by: data.title_by,
+        people: data.people,
     })
 }
 
@@ -313,14 +317,26 @@ impl RecordingActivity {
     }
 
     pub(crate) fn remote_silent_for(&self) -> Duration {
-        let elapsed_ms = self.started_at.elapsed().as_millis().min(u64::MAX as u128) as u64;
-        self.remote_silent_for_at(elapsed_ms)
+        self.silent_for(Channel::Them)
     }
 
-    fn remote_silent_for_at(&self, elapsed_ms: u64) -> Duration {
-        Duration::from_millis(
-            elapsed_ms.saturating_sub(self.last_them_voice_ms.load(Ordering::Relaxed)),
-        )
+    /// How long since Silero last heard speech on `channel` (since the
+    /// recording started, if never). The UI's "hearing you / hearing them"
+    /// indicator reads this: a channel that has been silent for the whole
+    /// call is exactly the failure mode (a mic blocked by the hardened
+    /// runtime, a system-audio tap without its permission) that used to
+    /// look identical to a working one until the call was over.
+    pub(crate) fn silent_for(&self, channel: Channel) -> Duration {
+        let elapsed_ms = self.started_at.elapsed().as_millis().min(u64::MAX as u128) as u64;
+        self.silent_for_at(channel, elapsed_ms)
+    }
+
+    fn silent_for_at(&self, channel: Channel, elapsed_ms: u64) -> Duration {
+        let clock = match channel {
+            Channel::Me => &self.last_me_voice_ms,
+            Channel::Them => &self.last_them_voice_ms,
+        };
+        Duration::from_millis(elapsed_ms.saturating_sub(clock.load(Ordering::Relaxed)))
     }
 }
 
@@ -515,6 +531,7 @@ fn run_worker(
             transcript.set_raw_date(seed.raw_date);
             transcript.set_transcript_prefix(seed.transcript_prefix);
             transcript.set_summary(seed.summary, seed.summary_model);
+            transcript.set_people(seed.people);
             transcript.set_duration_secs(seed.previous_duration_secs);
             Some((seed.previous_duration_secs, seed.base_offset_secs))
         }
@@ -1060,10 +1077,10 @@ mod tests {
         let activity = RecordingActivity::new();
         activity.mark_voice_at(Channel::Them, 10);
         activity.mark_voice_at(Channel::Me, 100);
-        assert_eq!(activity.remote_silent_for_at(110), Duration::from_millis(100));
+        assert_eq!(activity.silent_for_at(Channel::Them, 110), Duration::from_millis(100));
 
         activity.mark_voice_at(Channel::Them, 105);
-        assert_eq!(activity.remote_silent_for_at(110), Duration::from_millis(5));
+        assert_eq!(activity.silent_for_at(Channel::Them, 110), Duration::from_millis(5));
     }
 
     // continuation_audio_from_secs: Critical fix-review finding, stage 0.9.

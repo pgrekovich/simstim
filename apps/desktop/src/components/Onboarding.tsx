@@ -4,21 +4,17 @@ import { open } from "@tauri-apps/plugin-dialog";
 import {
   ArrowRight,
   Check,
-  Download,
   FolderOpen,
   LoaderCircle,
   Mic,
   RotateCcw,
   Settings,
-  ShieldCheck,
-  Sparkles,
   Volume2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Progress } from "@/components/ui/progress";
-import { ENHANCE_MODEL_OPTIONS } from "@/lib/enhanceModels";
-import { downloadProgressPercent, mergeDownloadProgress } from "@/lib/modelProgress";
+import { mergeDownloadProgress } from "@/lib/modelProgress";
 import {
   checkAudioPermissions,
   completeOnboarding,
@@ -27,10 +23,7 @@ import {
   listEnhanceProviders,
   listModels,
   setAutoEnhance,
-  setEnhanceModel,
   setEnhanceProvider,
-  setEnhanceRenameTitle,
-  setEnhanceUseCalendar,
   setOutputDir,
   type AppConfig,
   type DownloadProgress,
@@ -88,12 +81,44 @@ function PermissionResult({
   );
 }
 
-function humanSize(sizeMb: number): string {
-  return sizeMb >= 1024 ? `${(sizeMb / 1024).toFixed(1)} GB` : `${sizeMb} MB`;
+/**
+ * The speech models the app needs, downloaded here without ceremony: the
+ * live one (required before the first recording) and the accurate pass's
+ * default whisper model (the automatic pass after each call needs it; it
+ * may still be downloading when onboarding finishes, which is fine -- the
+ * pass skips quietly until it lands). Retired entries are never touched.
+ */
+function modelsToFetch(models: ModelInfo[], config: AppConfig): ModelInfo[] {
+  return models.filter(
+    (model) =>
+      !model.retired &&
+      !model.downloaded &&
+      (model.id === config.active_model || model.id === config.retranscribe_model),
+  );
 }
 
+/** macOS display convention: the home directory reads as "~". */
+function displayPath(path: string): string {
+  return path.replace(/^\/Users\/[^/]+/, "~");
+}
+
+/** One number for every in-flight download: bytes received over bytes total. */
+function combinedPercent(progress: Record<string, DownloadProgress>): number | null {
+  const entries = Object.values(progress).filter((p) => p.phase !== "error");
+  if (entries.length === 0) return null;
+  const total = entries.reduce((sum, p) => sum + p.total, 0);
+  if (total === 0) return 0;
+  const received = entries.reduce((sum, p) => sum + p.received, 0);
+  return Math.min(100, Math.round((received / total) * 100));
+}
+
+/**
+ * One screen (2026-09-04 product ruling: the old four steps asked a new user
+ * to configure an AI stack before recording anything). The promise, the
+ * folder, the two macOS permissions, and one honest line about summaries.
+ * The speech models start downloading the moment the screen appears.
+ */
 export function Onboarding({ config, models, onOpenSettings, onComplete }: OnboardingProps) {
-  const [step, setStep] = useState(0);
   const [permissionResult, setPermissionResult] = useState<PermissionCheckResult | null>(null);
   const [checking, setChecking] = useState(false);
   const [choosingFolder, setChoosingFolder] = useState(false);
@@ -101,28 +126,25 @@ export function Onboarding({ config, models, onOpenSettings, onComplete }: Onboa
   const [progress, setProgress] = useState<Record<string, DownloadProgress>>({});
   const [currentConfig, setCurrentConfig] = useState(config);
   const [currentModels, setCurrentModels] = useState(models);
-  const [enhanceProviders, setEnhanceProviders] = useState<EnhanceProviderInfo[]>([]);
+  const [enhanceProviders, setEnhanceProviders] = useState<EnhanceProviderInfo[] | null>(null);
   const [finishing, setFinishing] = useState(false);
   const downloadStarted = useRef(new Set<string>());
-  const permissionStepEntered = useRef(false);
-  const transcriptionStepEntered = useRef(false);
+  const permissionsChecked = useRef(false);
 
   useEffect(() => setCurrentConfig(config), [config]);
   useEffect(() => setCurrentModels(models), [models]);
-  useEffect(() => {
-    if (step !== 3) return;
-    listEnhanceProviders().then(setEnhanceProviders).catch(() => setEnhanceProviders([]));
-  }, [step, config]);
 
   useEffect(() => {
-    if (step !== 1) {
-      permissionStepEntered.current = false;
-      return;
-    }
-    if (permissionStepEntered.current) return;
-    permissionStepEntered.current = true;
+    listEnhanceProviders().then(setEnhanceProviders).catch(() => setEnhanceProviders([]));
+  }, []);
+
+  // macOS shows its permission prompts as soon as the screen appears; the
+  // user is already here, reading why.
+  useEffect(() => {
+    if (permissionsChecked.current) return;
+    permissionsChecked.current = true;
     void handlePermissionCheck();
-  }, [step]);
+  }, []);
 
   async function refreshModels() {
     const [nextConfig, nextModels] = await Promise.all([getConfig(), listModels()]);
@@ -133,16 +155,12 @@ export function Onboarding({ config, models, onOpenSettings, onComplete }: Onboa
 
   useEffect(() => {
     const unlisten = listen<DownloadProgress>("model-download-progress", (event) => {
-      const tracked = currentModels.some(
-        (model) => model.id === event.payload.id && (model.role === "live" || model.role === "summary"),
-      );
-      if (!tracked) return;
       setProgress((previous) => ({
         ...previous,
         [event.payload.id]: mergeDownloadProgress(previous[event.payload.id], event.payload),
       }));
       if (event.payload.phase === "done") {
-        void Promise.all([refreshModels(), listEnhanceProviders().then(setEnhanceProviders)]).finally(() => {
+        void refreshModels().finally(() => {
           setProgress((previous) => {
             const next = { ...previous };
             delete next[event.payload.id];
@@ -155,28 +173,37 @@ export function Onboarding({ config, models, onOpenSettings, onComplete }: Onboa
     return () => {
       unlisten.then((fn) => fn());
     };
-  }, [currentModels]);
+  }, []);
 
   const activeModel = currentModels.find((model) => model.id === currentConfig.active_model);
-  const summaryModel = currentModels.find((model) => model.role === "summary" && !model.retired);
-  const activeProgress = activeModel ? progress[activeModel.id] : undefined;
-  const summaryProgress = summaryModel ? progress[summaryModel.id] : undefined;
-  const selectedProvider = enhanceProviders.find(
-    (provider) => provider.id === currentConfig.enhance_provider,
-  );
   const permissionsPassed = Boolean(
     permissionResult?.microphone.granted && permissionResult.system_audio.granted,
   );
+  // The first installed CLI wins; the user's saved choice wins over that.
+  const summaryProvider =
+    enhanceProviders?.find(
+      (provider) => provider.available && provider.id === currentConfig.enhance_provider,
+    ) ?? enhanceProviders?.find((provider) => provider.available);
+  const downloadPercent = combinedPercent(progress);
+  const failed = Object.values(progress).find((p) => p.phase === "error");
 
+  // Downloads start on their own, once the model list is known.
   useEffect(() => {
-    if (step !== 2) {
-      transcriptionStepEntered.current = false;
-      return;
+    for (const model of modelsToFetch(currentModels, currentConfig)) {
+      void handleDownload(model);
     }
-    if (transcriptionStepEntered.current || !activeModel || activeModel.downloaded) return;
-    transcriptionStepEntered.current = true;
-    void handleDownload(activeModel);
-  }, [step, activeModel]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentModels, currentConfig.active_model, currentConfig.retranscribe_model]);
+
+  // The saved provider may not be the one installed here (a fresh config
+  // says "claude" on a Mac that only has codex): follow what's installed.
+  useEffect(() => {
+    if (!summaryProvider || summaryProvider.id === currentConfig.enhance_provider) return;
+    void setEnhanceProvider(summaryProvider.id)
+      .then(() => setCurrentConfig((value) => ({ ...value, enhance_provider: summaryProvider.id })))
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [summaryProvider?.id]);
 
   async function handlePermissionCheck() {
     if (checking) return;
@@ -212,7 +239,6 @@ export function Onboarding({ config, models, onOpenSettings, onComplete }: Onboa
   async function handleDownload(model: ModelInfo) {
     if (downloadStarted.current.has(model.id)) return;
     downloadStarted.current.add(model.id);
-    setError(null);
     setProgress((previous) => ({
       ...previous,
       [model.id]: { id: model.id, phase: "download", received: 0, total: 0 },
@@ -231,16 +257,21 @@ export function Onboarding({ config, models, onOpenSettings, onComplete }: Onboa
     }
   }
 
-  async function updateSummaryConfig(
-    patch: Partial<AppConfig>,
-    persist: () => Promise<void>,
-  ) {
+  function handleRetryDownloads() {
+    setProgress((previous) =>
+      Object.fromEntries(Object.entries(previous).filter(([, p]) => p.phase !== "error")),
+    );
+    for (const model of modelsToFetch(currentModels, currentConfig)) {
+      void handleDownload(model);
+    }
+  }
+
+  async function handleToggleSummaries(enabled: boolean) {
     const previous = currentConfig;
     setError(null);
-    setCurrentConfig((value) => ({ ...value, ...patch }));
+    setCurrentConfig((value) => ({ ...value, auto_enhance: enabled }));
     try {
-      await persist();
-      setCurrentConfig(await getConfig());
+      await setAutoEnhance(enabled);
     } catch (err) {
       setCurrentConfig(previous);
       setError(String(err));
@@ -261,6 +292,8 @@ export function Onboarding({ config, models, onOpenSettings, onComplete }: Onboa
     }
   }
 
+  const ready = permissionsPassed && Boolean(activeModel?.downloaded);
+
   return (
     <main className="relative flex h-screen min-w-0 flex-1 flex-col bg-background text-foreground">
       <div data-tauri-drag-region className="absolute inset-x-0 top-0 h-11" />
@@ -271,357 +304,146 @@ export function Onboarding({ config, models, onOpenSettings, onComplete }: Onboa
         </Button>
       </div>
 
-      <div className="flex min-h-0 flex-1 justify-center overflow-y-auto px-8 pb-10 pt-8">
+      <div className="flex min-h-0 flex-1 justify-center overflow-y-auto px-8 pb-10 pt-4">
         <section className="my-auto w-full max-w-[620px]">
-          <div className="mb-8 flex items-center gap-2 font-mono text-[10.5px] uppercase tracking-[0.09em] text-muted-foreground">
-            {[0, 1, 2, 3].map((index) => (
-              <div key={index} className="flex items-center gap-2">
-                <span
-                  className={`flex size-5 items-center justify-center rounded-full border ${
-                    index <= step ? "border-foreground/45 text-foreground" : "border-border"
-                  }`}
-                >
-                  {index < step ? <Check className="size-3" /> : index + 1}
-                </span>
-                {index < 3 && <span className="h-px w-8 bg-border" />}
-              </div>
-            ))}
+          <h1 className="font-serif text-[34px] font-semibold leading-[1.12] tracking-[-0.025em]">
+            Your calls stay on this Mac.
+          </h1>
+          <p className="mt-4 text-[15px] leading-[1.65] text-muted-foreground">
+            Simstim records only when you click Record. Every call becomes a plain Markdown
+            note, with its audio, in a folder you own. Nothing is uploaded.
+          </p>
+
+          <div className="mt-7 flex items-center gap-4 rounded-[10px] border border-border bg-card/50 px-4 py-3">
+            <div className="min-w-0 flex-1">
+              <p className="font-mono text-[10px] uppercase tracking-[0.07em] text-muted-foreground">
+                Notes folder
+              </p>
+              <p className="mt-1 truncate text-[13px]" title={currentConfig.output_dir}>
+                {displayPath(currentConfig.output_dir)}
+              </p>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void handleChooseFolder()}
+              disabled={choosingFolder}
+            >
+              {choosingFolder ? (
+                <LoaderCircle className="size-3.5 animate-spin" />
+              ) : (
+                <FolderOpen className="size-3.5" />
+              )}
+              Choose
+            </Button>
           </div>
 
-          {step === 0 && (
-            <div>
-              <div className="mb-6 flex size-11 items-center justify-center rounded-full border border-border bg-card text-voice-remote-foreground">
-                <ShieldCheck className="size-5" />
-              </div>
-              <h1 className="font-serif text-[34px] font-semibold leading-[1.12] tracking-[-0.025em]">
-                Your calls stay on this Mac.
-              </h1>
-              <p className="mt-4 max-w-[540px] text-[15px] leading-[1.65] text-muted-foreground">
-                Simstim records only when you click Record. Audio, transcripts and notes stay in
-                your folder. Next, macOS will ask for the two audio permissions Simstim needs,
-                then we will download the local recording model.
+          <div className="mt-6 grid grid-cols-2 gap-3">
+            <PermissionResult
+              label="Microphone"
+              detail="Waiting for macOS"
+              icon={<Mic className="size-4" />}
+              result={permissionResult?.microphone}
+              checking={checking}
+            />
+            <PermissionResult
+              label="System audio"
+              detail="Waiting for macOS"
+              icon={<Volume2 className="size-4" />}
+              result={permissionResult?.system_audio}
+              checking={checking}
+            />
+          </div>
+          {permissionResult && !permissionsPassed && (
+            <div className="mt-3 flex items-center justify-between gap-3">
+              <p className="text-[12px] leading-relaxed text-muted-foreground">
+                Allow both in System Settings, then check again. Simstim never records here.
               </p>
-              <div className="mt-7 flex items-center gap-4 rounded-[10px] border border-border bg-card/50 px-4 py-3">
-                <div className="min-w-0 flex-1">
-                  <p className="font-mono text-[10px] uppercase tracking-[0.07em] text-muted-foreground">
-                    Notes folder
-                  </p>
-                  <p className="mt-1 truncate text-[13px]">{currentConfig.output_dir}</p>
-                </div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => void handleChooseFolder()}
-                  disabled={choosingFolder}
-                >
-                  {choosingFolder ? (
-                    <LoaderCircle className="size-3.5 animate-spin" />
-                  ) : (
-                    <FolderOpen className="size-3.5" />
-                  )}
-                  Choose
-                </Button>
-              </div>
-              {error && <p role="alert" className="mt-3 text-[12px] text-destructive">{error}</p>}
-              <div className="mt-8 flex justify-end">
-                <Button onClick={() => setStep(1)} disabled={choosingFolder}>
-                  Continue <ArrowRight className="size-4" />
-                </Button>
-              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => void handlePermissionCheck()}
+                disabled={checking}
+                className="shrink-0 text-muted-foreground"
+              >
+                {checking ? (
+                  <><LoaderCircle className="size-4 animate-spin" /> Checking...</>
+                ) : (
+                  <><RotateCcw className="size-3.5" /> Check again</>
+                )}
+              </Button>
             </div>
           )}
 
-          {step === 1 && (
-            <div>
-              <h1 className="font-serif text-[30px] font-semibold tracking-[-0.02em]">
-                Allow audio access.
-              </h1>
-              <p className="mt-3 text-[14px] leading-[1.6] text-muted-foreground">
-                macOS will ask for access to your microphone and system audio. Simstim does not
-                start a recording here, and you do not need to speak or play anything.
+          {/* Summaries: the one choice that involves text leaving the Mac,
+              so it is a visible switch here rather than a buried default. */}
+          <div className="mt-6 rounded-[10px] border border-border bg-card/40 px-4 py-3">
+            {enhanceProviders === null ? (
+              <p className="text-[12.5px] text-muted-foreground">Looking for an AI assistant on this Mac...</p>
+            ) : summaryProvider ? (
+              <label htmlFor="onboarding-summaries" className="flex items-center justify-between gap-4">
+                <span>
+                  <span className="block text-[13px] font-medium">
+                    Summaries by {summaryProvider.name}
+                  </span>
+                  <span className="mt-0.5 block text-[11.5px] leading-[1.5] text-muted-foreground">
+                    After each call, {summaryProvider.name} writes decisions and action items
+                    from the note's text. Text only, never audio. Change it anytime in Settings.
+                  </span>
+                </span>
+                <Checkbox
+                  id="onboarding-summaries"
+                  variant="switch"
+                  checked={currentConfig.auto_enhance}
+                  onCheckedChange={(checked) => void handleToggleSummaries(checked === true)}
+                />
+              </label>
+            ) : (
+              <p className="text-[12.5px] leading-[1.5] text-muted-foreground">
+                Summaries need Claude Code or Codex installed on this Mac. Install one later and
+                Simstim picks it up on its own.
               </p>
-              <div className="mt-6 grid grid-cols-2 gap-3">
-                <PermissionResult
-                  label="Microphone"
-                  detail="Waiting for macOS"
-                  icon={<Mic className="size-4" />}
-                  result={permissionResult?.microphone}
-                  checking={checking}
-                />
-                <PermissionResult
-                  label="System audio"
-                  detail="Waiting for macOS"
-                  icon={<Volume2 className="size-4" />}
-                  result={permissionResult?.system_audio}
-                  checking={checking}
-                />
-              </div>
-              {permissionResult && !permissionsPassed && (
-                <p className="mt-3 text-[12px] leading-relaxed text-muted-foreground">
-                  Allow both permissions in System Settings, then check again.
+            )}
+          </div>
+
+          {error && <p role="alert" className="mt-3 text-[12px] text-destructive">{error}</p>}
+
+          {/* Footer: the speech models' one quiet status line on the left (no
+              names, no sizes), Start on the right -- one row, so neither
+              floats alone. */}
+          <div className="mt-8 flex items-center justify-between gap-6">
+            <div className="min-w-0 flex-1">
+            {activeModel?.downloaded && downloadPercent === null ? (
+              <p className="flex items-center gap-1.5 text-[12px] text-muted-foreground">
+                <Check className="size-3.5 text-emerald-700 dark:text-emerald-400" /> Speech recognition ready
+              </p>
+            ) : failed ? (
+              <div className="flex items-center justify-between gap-3">
+                <p role="alert" className="text-[12px] text-destructive">
+                  Could not download the speech models. {failed.message}
                 </p>
+                <Button variant="outline" size="sm" onClick={handleRetryDownloads}>
+                  <RotateCcw className="size-3.5" /> Retry
+                </Button>
+              </div>
+            ) : (
+              <div>
+                <p className="flex items-center gap-1.5 text-[12px] text-muted-foreground">
+                  <LoaderCircle className="size-3.5 animate-spin" />
+                  Preparing speech recognition{downloadPercent !== null && downloadPercent > 0 ? ` · ${downloadPercent}%` : "..."}
+                </p>
+                {downloadPercent !== null && <Progress className="mt-2 max-w-[320px]" value={downloadPercent} />}
+              </div>
+            )}
+          </div>
+            <Button onClick={() => void handleFinish()} disabled={!ready || finishing}>
+              {finishing ? (
+                <><LoaderCircle className="size-4 animate-spin" /> Finishing...</>
+              ) : (
+                <>Start <ArrowRight className="size-4" /></>
               )}
-              {error && <p role="alert" className="mt-4 text-[12px] text-destructive">{error}</p>}
-              <div className="mt-7 flex items-center justify-between">
-                <Button variant="ghost" onClick={() => setStep(0)} disabled={checking}>
-                  Back
-                </Button>
-                <div className="flex gap-2">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => void handlePermissionCheck()}
-                    disabled={checking}
-                    className="text-muted-foreground"
-                  >
-                    {checking ? (
-                      <><LoaderCircle className="size-4 animate-spin" /> Checking...</>
-                    ) : (
-                      <><RotateCcw className="size-3.5" /> Check again</>
-                    )}
-                  </Button>
-                  <Button onClick={() => setStep(2)} disabled={!permissionsPassed || checking}>
-                    Continue <ArrowRight className="size-4" />
-                  </Button>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {step === 2 && (
-            <div>
-              <h1 className="font-serif text-[30px] font-semibold tracking-[-0.02em]">
-                Set up transcription.
-              </h1>
-              <p className="mt-3 text-[14px] leading-[1.6] text-muted-foreground">
-                Simstim needs one local component to turn calls into text. Its download starts
-                automatically and stays entirely on this Mac.
-              </p>
-              <div className="mt-6 rounded-[10px] border border-border bg-card/55 p-4">
-                <div className="flex items-center justify-between gap-5">
-                  <div className="min-w-0">
-                    <p className="text-[14px] font-semibold">
-                      {activeModel?.name ?? currentConfig.active_model}
-                    </p>
-                    {activeModel?.technical_name && (
-                      <p className="mt-0.5 font-mono text-[10px] text-muted-foreground/55">
-                        {activeModel.technical_name}
-                      </p>
-                    )}
-                    <p className="mt-1 text-[12px] text-muted-foreground">
-                      {activeModel ? humanSize(activeModel.size_mb) : "Recording model"}
-                    </p>
-                  </div>
-                  {activeModel?.downloaded ? (
-                    <span className="flex shrink-0 items-center gap-1.5 font-mono text-[10.5px] uppercase tracking-[0.06em] text-emerald-700 dark:text-emerald-400">
-                      <Check className="size-3.5" /> Ready
-                    </span>
-                  ) : activeProgress?.phase === "error" ? (
-                    <Button variant="outline" size="sm" onClick={() => activeModel && void handleDownload(activeModel)} disabled={!activeModel}>
-                      <Download className="size-3.5" /> Retry
-                    </Button>
-                  ) : (
-                    <span className="flex shrink-0 items-center gap-1.5 text-[11px] text-muted-foreground">
-                      <LoaderCircle className="size-3.5 animate-spin" /> Starting...
-                    </span>
-                  )}
-                </div>
-                {activeProgress && activeProgress.phase !== "error" && (
-                  <div className="mt-4">
-                    <Progress value={downloadProgressPercent(activeProgress)} />
-                    <p className="mt-2 text-[11px] text-muted-foreground">
-                      {activeProgress.total > 0 ? `${Math.round(downloadProgressPercent(activeProgress))}%` : "Starting download..."}
-                    </p>
-                  </div>
-                )}
-                {activeProgress?.phase === "error" && (
-                  <p role="alert" className="mt-3 text-[12px] text-destructive">{activeProgress.message}</p>
-                )}
-              </div>
-              {error && <p role="alert" className="mt-4 text-[12px] text-destructive">{error}</p>}
-              <div className="mt-7 flex items-center justify-between">
-                <Button variant="ghost" onClick={() => setStep(1)} disabled={finishing}>
-                  Back
-                </Button>
-                <Button onClick={() => setStep(3)} disabled={!activeModel?.downloaded}>
-                  Continue <ArrowRight className="size-4" />
-                </Button>
-              </div>
-            </div>
-          )}
-
-          {step === 3 && (
-            <div>
-              <div className="mb-5 flex size-10 items-center justify-center rounded-full border border-border bg-card text-voice-remote-foreground">
-                <Sparkles className="size-4.5" />
-              </div>
-              <h1 className="font-serif text-[30px] font-semibold tracking-[-0.02em]">
-                Set up summaries.
-              </h1>
-              <p className="mt-3 text-[14px] leading-[1.6] text-muted-foreground">
-                Pick an on-device model or one of your installed CLI subscriptions. This step is
-                optional, and every choice remains available in Settings.
-              </p>
-
-              <div className="mt-5 flex flex-col gap-2">
-                {enhanceProviders.map((provider) => {
-                  const selected = currentConfig.enhance_provider === provider.id;
-                  const isLocal = provider.id === "local";
-                  return (
-                    <div
-                      key={provider.id}
-                      className={`rounded-[9px] border px-3.5 py-3 ${selected ? "border-foreground/35 bg-card" : "border-border bg-card/40"}`}
-                    >
-                      <div className="flex items-center gap-3">
-                        <input
-                          type="radio"
-                          name="onboarding-enhance-provider"
-                          aria-label={provider.name}
-                          checked={selected}
-                          disabled={!provider.available}
-                          onChange={() => void updateSummaryConfig(
-                            { enhance_provider: provider.id },
-                            () => setEnhanceProvider(provider.id),
-                          )}
-                          className="size-4 shrink-0 appearance-none rounded-full border-[1.5px] border-muted-foreground/60 checked:border-[5px] checked:border-primary disabled:opacity-40"
-                        />
-                        <div className="min-w-0 flex-1">
-                          <p className="text-[13px] font-semibold">{provider.name}</p>
-                          {isLocal && summaryModel?.technical_name && (
-                            <p className="mt-0.5 truncate font-mono text-[10px] text-muted-foreground/55">
-                              {summaryModel.technical_name}
-                            </p>
-                          )}
-                          <p className="mt-0.5 truncate text-[11.5px] text-muted-foreground">
-                            {provider.available
-                              ? provider.version ?? "Ready"
-                              : isLocal
-                                ? "Model not downloaded"
-                                : `Not installed: ${provider.id} CLI not found`}
-                          </p>
-                        </div>
-                        {isLocal && summaryModel && !summaryModel.downloaded &&
-                          (!summaryProgress || summaryProgress.phase === "error") && (
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => void handleDownload(summaryModel)}
-                            >
-                              <Download className="size-3.5" /> {humanSize(summaryModel.size_mb)}
-                            </Button>
-                          )}
-                        {!isLocal && selected && provider.available && (
-                          <select
-                            aria-label={`${provider.name} model`}
-                            value={currentConfig.enhance_models[provider.id] ?? ""}
-                            onChange={(event) => {
-                              const model = event.target.value;
-                              void updateSummaryConfig(
-                                {
-                                  enhance_models: {
-                                    ...currentConfig.enhance_models,
-                                    [provider.id]: model,
-                                  },
-                                },
-                                () => setEnhanceModel(provider.id, model),
-                              );
-                            }}
-                            className="h-8 rounded-md border border-input bg-transparent px-2 text-xs outline-none focus-visible:border-ring"
-                          >
-                            {(ENHANCE_MODEL_OPTIONS[provider.id] ?? [{ value: "", label: "Default" }]).map(
-                              (option) => <option key={option.value} value={option.value}>{option.label}</option>,
-                            )}
-                          </select>
-                        )}
-                      </div>
-                      {isLocal && summaryProgress && summaryProgress.phase !== "error" && (
-                        <div className="mt-3 pl-7">
-                          <Progress
-                            value={downloadProgressPercent(summaryProgress)}
-                          />
-                          <p className="mt-1.5 text-[10.5px] text-muted-foreground">
-                            {summaryProgress.total > 0
-                              ? `${Math.round(downloadProgressPercent(summaryProgress))}%`
-                              : "Starting download..."}
-                          </p>
-                        </div>
-                      )}
-                      {isLocal && summaryProgress?.phase === "error" && (
-                        <p role="alert" className="mt-2 pl-7 text-[11px] text-destructive">
-                          {summaryProgress.message}
-                        </p>
-                      )}
-                    </div>
-                  );
-                })}
-                {enhanceProviders.length === 0 && (
-                  <div className="rounded-[9px] border border-border bg-card/40 px-3.5 py-3 text-[12px] text-muted-foreground">
-                    Checking available summary providers...
-                  </div>
-                )}
-              </div>
-
-              <div className="mt-4 divide-y divide-border rounded-[9px] border border-border bg-card/40 px-3.5">
-                <label htmlFor="onboarding-auto-enhance" className="flex items-center justify-between gap-4 py-3">
-                  <span>
-                    <span className="block text-[12.5px] font-medium">Summarize automatically</span>
-                    <span className="mt-0.5 block text-[11px] text-muted-foreground">Runs after each finished call.</span>
-                  </span>
-                  <Checkbox
-                    id="onboarding-auto-enhance"
-                    variant="switch"
-                    checked={currentConfig.auto_enhance}
-                    disabled={!selectedProvider?.available}
-                    onCheckedChange={(checked) => void updateSummaryConfig(
-                      { auto_enhance: checked === true },
-                      () => setAutoEnhance(checked === true),
-                    )}
-                  />
-                </label>
-                <label htmlFor="onboarding-rename-title" className="flex items-center justify-between gap-4 py-3">
-                  <span>
-                    <span className="block text-[12.5px] font-medium">Let summaries title notes</span>
-                    <span className="mt-0.5 block text-[11px] text-muted-foreground">Never changes a title you typed.</span>
-                  </span>
-                  <Checkbox
-                    id="onboarding-rename-title"
-                    variant="switch"
-                    checked={currentConfig.enhance_rename_title}
-                    onCheckedChange={(checked) => void updateSummaryConfig(
-                      { enhance_rename_title: checked === true },
-                      () => setEnhanceRenameTitle(checked === true),
-                    )}
-                  />
-                </label>
-                <label htmlFor="onboarding-calendar" className="flex items-center justify-between gap-4 py-3">
-                  <span>
-                    <span className="block text-[12.5px] font-medium">Use calendar context</span>
-                    <span className="mt-0.5 block text-[11px] text-muted-foreground">Cloud providers only, through your Claude connectors.</span>
-                  </span>
-                  <Checkbox
-                    id="onboarding-calendar"
-                    variant="switch"
-                    checked={currentConfig.enhance_use_calendar}
-                    disabled={currentConfig.enhance_provider === "local"}
-                    onCheckedChange={(checked) => void updateSummaryConfig(
-                      { enhance_use_calendar: checked === true },
-                      () => setEnhanceUseCalendar(checked === true),
-                    )}
-                  />
-                </label>
-              </div>
-
-              {error && <p role="alert" className="mt-3 text-[12px] text-destructive">{error}</p>}
-              <div className="mt-6 flex items-center justify-between">
-                <Button variant="ghost" onClick={() => setStep(2)} disabled={finishing}>
-                  Back
-                </Button>
-                <Button onClick={() => void handleFinish()} disabled={finishing}>
-                  {finishing ? <><LoaderCircle className="size-4 animate-spin" /> Finishing...</> : "Start using Simstim"}
-                </Button>
-              </div>
-            </div>
-          )}
+            </Button>
+          </div>
         </section>
       </div>
     </main>

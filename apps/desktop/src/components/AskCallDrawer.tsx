@@ -1,6 +1,6 @@
 import { MessageCircleQuestion, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { ChatConversation } from "@/components/Chat";
+import { ChatConversation, type ChatAskRequest } from "@/components/Chat";
 import type { ChatSource, SessionMeta } from "@/lib/ipc";
 
 interface AskCallDrawerProps {
@@ -15,6 +15,8 @@ interface AskCallDrawerProps {
    * ("You asked · 00:15:04", design 8c).
    */
   recordingStartedAt: number | null;
+  /** A question handed in from the ⌘K palette's "Ask this call" row. */
+  askRequest?: ChatAskRequest | null;
   onClose: () => void;
   /** A citation chip was clicked; App owns the navigation. */
   onOpenCitation: (source: ChatSource) => void;
@@ -40,6 +42,7 @@ export function AskCallDrawer({
   path,
   sessions,
   recordingStartedAt,
+  askRequest = null,
   onClose,
   onOpenCitation,
 }: AskCallDrawerProps) {
@@ -70,6 +73,7 @@ export function AskCallDrawer({
         variant="drawer"
         sessions={sessions}
         placeholder="Ask about this call..."
+        askRequest={askRequest}
         askedAt={() =>
           recordingStartedAt !== null ? recordingClock(recordingStartedAt) : null
         }

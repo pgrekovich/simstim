@@ -1,4 +1,4 @@
-import { FileText, Folder, MessageCircleQuestion, PanelLeftClose, Search, SquarePen, Trash2 } from "lucide-react";
+import { FileText, Folder, PanelLeftClose, Search, SquarePen, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   ContextMenu,
@@ -29,12 +29,12 @@ interface SidebarProps {
   onNewSession: () => void;
   /** Hides the note list while preserving the selected note and recording. */
   onCollapse?: () => void;
-  /** Opens the global search palette. */
+  /**
+   * Opens the global search palette: the one field that searches, asks the
+   * open call and asks every note (2026-09-04 ruling; the pinned "Ask your
+   * notes" row that used to sit above the list is gone).
+   */
   onOpenSearch?: () => void;
-  /** Opens the Ask your notes surface (stage 4.2); the pinned row above the list. */
-  onOpenAsk?: () => void;
-  /** Whether the Ask your notes surface currently owns the main pane. */
-  askActive?: boolean;
   /** Row-hover trash button; App owns the confirm dialog and the IPC call. */
   onDelete: (path: string) => void;
   /** Row context menu's "Open file": the note in the system editor. */
@@ -101,8 +101,6 @@ export function Sidebar({
   onNewSession,
   onCollapse,
   onOpenSearch = () => {},
-  onOpenAsk,
-  askActive = false,
   onDelete,
   onOpenFile,
   onRevealInFinder,
@@ -150,38 +148,6 @@ export function Sidebar({
           <SquarePen className="size-[15px]" />
         </Button>
       </div>
-
-      {/* Pinned above the list, not inside it (owner ruling 2026-09-04):
-          the surface's one entry point must not scroll away with a long
-          note history. */}
-      {onOpenAsk && (
-        <div className="shrink-0 px-3">
-          <button
-            type="button"
-            onClick={onOpenAsk}
-            className={cn(
-              "mt-1.5 flex h-[30px] w-full items-center gap-2 rounded-[7px] border px-2.5 text-left",
-              askActive
-                ? "border-[var(--voice-remote)]/55 bg-background text-foreground shadow-[0_1px_2px_rgb(30_27_22/0.06)]"
-                : "border-foreground/[0.11] bg-background text-quiet-foreground hover:border-foreground/[0.2] hover:bg-card hover:text-foreground active:bg-foreground/[0.06]",
-            )}
-          >
-            <MessageCircleQuestion
-              aria-hidden="true"
-              className="size-[14px] shrink-0 text-[var(--voice-remote)]"
-            />
-            <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium">Ask your notes</span>
-            {/* Below ~205px the label itself needs the room: at the pane's
-                180px minimum the badge was what pushed "Ask your notes" into
-                an ellipsis, and the words beat the shortcut hint. */}
-            {width >= 205 && (
-              <span className="inline-flex h-[17px] shrink-0 items-center rounded-[4px] bg-foreground/[0.07] px-[5px] font-mono text-[10.5px] text-quiet-foreground">
-                ⌘L
-              </span>
-            )}
-          </button>
-        </div>
-      )}
 
       <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
         {sessions.length === 0 ? (

@@ -37,7 +37,7 @@ vi.mock("@/lib/ipc", () => ({
   listSessions: vi.fn().mockResolvedValue([]),
   readSession: vi
     .fn()
-    .mockResolvedValue({ title: "", date: "", notes: "", transcript: "", audio_path: null, summary: "", summary_model: null }),
+    .mockResolvedValue({ title: "", date: "", notes: "", transcript: "", audio_path: null, summary: "", summary_model: null, people: [] }),
   startRecording: vi.fn().mockResolvedValue("/tmp/active.md"),
   stopRecording: vi.fn().mockResolvedValue("/tmp/active.md"),
   saveSession: vi.fn().mockResolvedValue(undefined),
@@ -84,6 +84,7 @@ vi.mock("@/lib/ipc", () => ({
   chatClear: vi.fn().mockResolvedValue(undefined),
   chatHistory: vi.fn().mockResolvedValue({ messages: [], running: false }),
   showMainWindow: vi.fn().mockResolvedValue(undefined),
+  recordingActivity: vi.fn().mockResolvedValue(null),
 }));
 
 vi.mock("@tauri-apps/api/event", () => ({
@@ -247,7 +248,7 @@ describe("App: call detection via the banner window (stage 1.1)", () => {
       },
     ]);
     render(<App />);
-    await screen.findByText("model not downloaded");
+    await screen.findByText("speech recognition is still downloading");
 
     await emitBannerStart();
     await waitFor(() => expect(ipc.showMainWindow).toHaveBeenCalledTimes(1));
@@ -271,11 +272,11 @@ describe("App: call detection via the banner window (stage 1.1)", () => {
     ]);
 
     render(<App />);
-    await screen.findByText("model not downloaded");
+    await screen.findByText("speech recognition is still downloading");
     fireEvent.click(screen.getByRole("button", { name: /^New Note⌘N$/ }));
 
     expect(await screen.findByRole("button", { name: "Open settings" })).toBeVisible();
-    expect(screen.queryByText("model not downloaded")).not.toBeInTheDocument();
+    expect(screen.queryByText("speech recognition is still downloading")).not.toBeInTheDocument();
   });
 
   it("stops through the normal stop path on a banner-stop event", async () => {
@@ -387,7 +388,7 @@ describe("App: menu-bar recording toggle (stage 3)", () => {
     const fallback = SIDEBAR_WIDTH.default;
     const dragged = fallback + 40;
     render(<App />);
-    const sidebar = (await screen.findByRole("button", { name: /ask your notes/i })).closest("aside")!;
+    const sidebar = (await screen.findByRole("button", { name: /collapse sidebar/i })).closest("aside")!;
     expect(sidebar).toHaveStyle({ width: `${fallback}px` });
 
     const handle = screen.getByRole("separator", { name: "Resize sidebar" });
@@ -455,7 +456,7 @@ describe("App: menu-bar recording toggle (stage 3)", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Ask this call" }));
     const drawer = await screen.findByRole("complementary", { name: "Ask this call" });
     const sidebar = screen
-      .getByRole("button", { name: /ask your notes/i })
+      .getByRole("button", { name: /collapse sidebar/i })
       .closest("aside")!;
 
     // Widen the drawer, then shrink the window to the app's minimum: the
@@ -524,7 +525,7 @@ describe("App: menu-bar recording toggle (stage 3)", () => {
       },
     ]);
     render(<App />);
-    await screen.findByText("model not downloaded");
+    await screen.findByText("speech recognition is still downloading");
 
     await emitMenuBarToggle();
     await waitFor(() => expect(ipc.showMainWindow).toHaveBeenCalledTimes(1));
@@ -569,7 +570,7 @@ describe("App: hot-mic fix (final review Critical finding)", () => {
     fireEvent.click(stopButton);
 
     await waitFor(() => expect(ipc.stopRecording).toHaveBeenCalledTimes(1));
-    expect(screen.getByText("saving")).toBeVisible();
+    expect(screen.getByText("finishing")).toBeVisible();
     expect(screen.queryByRole("button", { name: /stop/i })).not.toBeInTheDocument();
 
     act(() => finishStop("/tmp/active.md"));
@@ -622,7 +623,7 @@ describe("App: a saving session must not block the next call (owner bug: missed 
     fireEvent.click(await findStartControl());
     fireEvent.click(await screen.findByRole("button", { name: /stop/i }));
     await waitFor(() => expect(ipc.stopRecording).toHaveBeenCalledTimes(1));
-    expect(screen.getByText("saving")).toBeVisible();
+    expect(screen.getByText("finishing")).toBeVisible();
     return (path: string) => act(() => finishStop(path));
   }
 
@@ -724,9 +725,10 @@ describe("App: active-session notes survive a switch-away-and-back (final review
           audio_path: null,
           summary: "",
           summary_model: null,
+          people: [],
         };
       }
-      return { title: "Untitled", date: "", notes: "", transcript: "", audio_path: null, summary: "", summary_model: null };
+      return { title: "Untitled", date: "", notes: "", transcript: "", audio_path: null, summary: "", summary_model: null, people: [] };
     });
 
     render(<App />);
@@ -782,6 +784,7 @@ describe("App: record continues into the open note (behavior fix)", () => {
       audio_path: null,
       summary: "",
       summary_model: null,
+      people: [],
     });
     vi.mocked(ipc.startRecording).mockResolvedValue("/tmp/other.md");
 
@@ -826,6 +829,7 @@ describe("App: record continues into the open note (behavior fix)", () => {
       audio_path: null,
       summary: "",
       summary_model: null,
+      people: [],
     });
     vi.mocked(ipc.startRecording).mockResolvedValue("/tmp/other.md");
 
@@ -880,6 +884,7 @@ describe("App: refreshes a re-transcribed session after a background done event 
       audio_path: null,
       summary: "",
       summary_model: null,
+      people: [],
     });
 
     render(<App />);
@@ -899,6 +904,7 @@ describe("App: refreshes a re-transcribed session after a background done event 
       audio_path: null,
       summary: "",
       summary_model: null,
+      people: [],
     });
 
     emit("retranscribe-progress", {
@@ -925,6 +931,7 @@ describe("App: refreshes a re-transcribed session after a background done event 
       audio_path: null,
       summary: "",
       summary_model: null,
+      people: [],
     });
 
     render(<App />);
@@ -966,6 +973,7 @@ describe("App: refreshes a re-transcribed session after a background done event 
       audio_path: "/tmp/other.flac",
       summary: "",
       summary_model: null,
+      people: [],
     });
 
     render(<App />);
@@ -982,6 +990,7 @@ describe("App: refreshes a re-transcribed session after a background done event 
       audio_path: "/tmp/other.flac",
       summary: "",
       summary_model: null,
+      people: [],
     });
 
     emit("retranscribe-progress", {
@@ -1008,6 +1017,7 @@ describe("App: refreshes a re-transcribed session after a background done event 
       audio_path: "/tmp/other.flac",
       summary: "",
       summary_model: null,
+      people: [],
     });
 
     render(<App />);
@@ -1051,6 +1061,7 @@ describe("App: surfaces terminal re-transcribe errors from background jobs (stag
       audio_path: null,
       summary: "",
       summary_model: null,
+      people: [],
     });
 
     render(<App />);
@@ -1092,6 +1103,7 @@ describe("App: surfaces terminal re-transcribe errors from background jobs (stag
       audio_path: null,
       summary: "",
       summary_model: null,
+      people: [],
     });
 
     render(<App />);
@@ -1127,6 +1139,7 @@ describe("App: surfaces terminal re-transcribe errors from background jobs (stag
       audio_path: "/tmp/viewed.flac",
       summary: "",
       summary_model: null,
+      people: [],
     });
     // Never resolves: mirrors the real backend, where the promise only
     // settles once the job's own terminal event has already been decided --
@@ -1139,9 +1152,9 @@ describe("App: surfaces terminal re-transcribe errors from background jobs (stag
     fireEvent.click(viewedRow);
     await waitFor(() => expect(document.body.textContent).toContain("hi"));
 
-    const retranscribeButton = await screen.findByRole("button", { name: /^re-transcribe$/i });
+    const retranscribeButton = await screen.findByRole("button", { name: /^improve transcript$/i });
     fireEvent.click(retranscribeButton);
-    await screen.findByRole("button", { name: /re-transcribing/i });
+    await screen.findByRole("button", { name: /improving/i });
 
     emit("retranscribe-progress", {
       path: "/tmp/viewed.md",
@@ -1176,6 +1189,7 @@ describe("App: surfaces terminal re-transcribe errors from background jobs (stag
       audio_path: "/tmp/viewed.flac",
       summary: "",
       summary_model: null,
+      people: [],
     });
     // Rejects immediately, exactly like one of the up-front validation
     // checks -- no progress event ever accompanies this.
@@ -1187,7 +1201,7 @@ describe("App: surfaces terminal re-transcribe errors from background jobs (stag
     fireEvent.click(viewedRow);
     await waitFor(() => expect(document.body.textContent).toContain("hi"));
 
-    const retranscribeButton = await screen.findByRole("button", { name: /^re-transcribe$/i });
+    const retranscribeButton = await screen.findByRole("button", { name: /^improve transcript$/i });
     fireEvent.click(retranscribeButton);
 
     // The manual click's own inline error, exactly as before this fix.
@@ -1295,6 +1309,7 @@ describe("App: deleting a note from the sidebar (stage 0.10)", () => {
       audio_path: null,
       summary: "",
       summary_model: null,
+      people: [],
     });
 
     render(<App />);
@@ -1394,6 +1409,7 @@ describe("App: global search (stage 2.0)", () => {
       audio_path: null,
       summary: "",
       summary_model: null,
+      people: [],
     });
 
     render(<App />);
@@ -1424,6 +1440,7 @@ describe("App: global search (stage 2.0)", () => {
       audio_path: null,
       summary: "",
       summary_model: null,
+      people: [],
     });
 
     render(<App />);
@@ -1501,6 +1518,7 @@ describe("App: empty state and active-window shortcuts (stage 0.10)", () => {
       audio_path: null,
       summary: "",
       summary_model: null,
+      people: [],
     });
 
     render(<App />);
@@ -1592,7 +1610,7 @@ describe("App: enhance progress (stage 0.11)", () => {
     vi.mocked(ipc.listSessions).mockResolvedValue(one);
     vi.mocked(ipc.readSession).mockResolvedValue({
       title: "Weekly sync", date: "", notes: "", transcript: "[00:00:01] Me: hi",
-      audio_path: null, summary: "", summary_model: null,
+      audio_path: null, summary: "", summary_model: null, people: [],
     });
 
     render(<App />);
@@ -1601,7 +1619,7 @@ describe("App: enhance progress (stage 0.11)", () => {
 
     vi.mocked(ipc.readSession).mockResolvedValue({
       title: "Weekly sync", date: "", notes: "", transcript: "[00:00:01] Me: hi",
-      audio_path: null, summary: "- fresh auto summary", summary_model: "claude",
+      audio_path: null, summary: "- fresh auto summary", summary_model: "claude", people: [],
     });
     emit("enhance-progress", { path: "/tmp/sync.md", phase: "done", provider: "claude", message: null });
 
@@ -1609,24 +1627,24 @@ describe("App: enhance progress (stage 0.11)", () => {
     expect(document.body.textContent).toContain("by claude");
   });
 
-  it("shows a summarizing row in the sidebar while an enhance runs, for any session", async () => {
+  it("shows a finishing row in the sidebar while an enhance runs, for any session", async () => {
     vi.mocked(ipc.listSessions).mockResolvedValue(one);
     render(<App />);
     const row = await screen.findByRole("button", { name: /weekly sync/i });
 
     emit("enhance-progress", { path: "/tmp/sync.md", phase: "running", provider: "local", message: null });
-    await waitFor(() => expect(row.textContent).toContain("summarizing"));
+    await waitFor(() => expect(row.textContent).toContain("finishing"));
     expect(within(row).getByTestId("working-dot")).toBeInTheDocument();
 
     emit("enhance-progress", { path: "/tmp/sync.md", phase: "done", provider: "local", message: null });
-    await waitFor(() => expect(row.textContent).not.toContain("summarizing"));
+    await waitFor(() => expect(row.textContent).not.toContain("finishing"));
   });
 
   it("shows the local map/reduce step in the working chip and keeps it fresh", async () => {
     vi.mocked(ipc.listSessions).mockResolvedValue(one);
     vi.mocked(ipc.readSession).mockResolvedValue({
       title: "Weekly sync", date: "", notes: "", transcript: "[00:00:01] Me: hi",
-      audio_path: null, summary: "", summary_model: null,
+      audio_path: null, summary: "", summary_model: null, people: [],
     });
 
     render(<App />);
@@ -1652,11 +1670,11 @@ describe("App: enhance progress (stage 0.11)", () => {
     await waitFor(() => expect(screen.queryByTestId("summary-tab-spinner")).not.toBeInTheDocument());
   });
 
-  it("offers Re-enhance in the overflow menu and runs it for the open note", async () => {
+  it("offers Summarize again in the overflow menu and runs it for the open note", async () => {
     vi.mocked(ipc.listSessions).mockResolvedValue(one);
     vi.mocked(ipc.readSession).mockResolvedValue({
       title: "Weekly sync", date: "", notes: "", transcript: "[00:00:01] Me: hi",
-      audio_path: null, summary: "- old summary", summary_model: "claude",
+      audio_path: null, summary: "- old summary", summary_model: "claude", people: [],
     });
     vi.mocked(ipc.enhanceSession).mockClear().mockResolvedValue("- new");
 
@@ -1667,7 +1685,7 @@ describe("App: enhance progress (stage 0.11)", () => {
     const trigger = screen.getByRole("button", { name: /more actions/i });
     fireEvent.pointerDown(trigger);
     fireEvent.click(trigger);
-    const item = await screen.findByRole("menuitem", { name: /re-enhance/i });
+    const item = await screen.findByRole("menuitem", { name: /summarize again/i });
     fireEvent.click(item);
 
     await waitFor(() =>
@@ -1679,7 +1697,7 @@ describe("App: enhance progress (stage 0.11)", () => {
     vi.mocked(ipc.listSessions).mockResolvedValue(one);
     vi.mocked(ipc.readSession).mockResolvedValue({
       title: "Weekly sync", date: "", notes: "", transcript: "[00:00:01] Me: hi",
-      audio_path: null, summary: "", summary_model: null,
+      audio_path: null, summary: "", summary_model: null, people: [],
     });
 
     render(<App />);

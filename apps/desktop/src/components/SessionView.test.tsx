@@ -21,6 +21,7 @@ vi.mock("@/lib/ipc", () => ({
     audio_path: null,
     summary: "",
     summary_model: null,
+    people: [],
   }),
   retranscribeSession: vi.fn().mockResolvedValue(undefined),
   enhanceSession: vi.fn().mockResolvedValue(""),
@@ -42,6 +43,7 @@ const baseData: SessionData = {
   audio_path: null,
   summary: "",
   summary_model: null,
+  people: [],
 };
 
 beforeEach(() => {
@@ -201,7 +203,7 @@ describe("SessionView: audio playback and re-transcribe (Task 4, stage-0.7)", ()
     );
 
     expect(document.querySelector("audio")).toBeNull();
-    expect(screen.queryByRole("button", { name: /re-transcribe/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /improve transcript/i })).toBeNull();
   });
 
   it("renders a compact audio player fed by convertFileSrc when audio_path is present", () => {
@@ -242,7 +244,7 @@ describe("SessionView: audio playback and re-transcribe (Task 4, stage-0.7)", ()
       />
     );
 
-    expect(screen.getByRole("button", { name: /re-transcribe/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /improve transcript/i })).toBeDisabled();
   });
 
   it("clicking a transcript line seeks the audio element to the parsed offset", () => {
@@ -255,6 +257,7 @@ describe("SessionView: audio playback and re-transcribe (Task 4, stage-0.7)", ()
           audio_path: "/tmp/call.flac",
           summary: "",
           summary_model: null,
+          people: [],
           transcript: "[00:01:05] Me: hello there\n",
         }}
         liveLines={[]}
@@ -290,11 +293,11 @@ describe("SessionView: audio playback and re-transcribe (Task 4, stage-0.7)", ()
       />
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /re-transcribe/i }));
+    fireEvent.click(screen.getByRole("button", { name: /improve transcript/i }));
 
     await waitFor(() => expect(ipc.retranscribeSession).toHaveBeenCalledWith("/tmp/call.md"));
     expect(screen.getByText(/starting/i)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /re-transcribing/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /improving/i })).toBeDisabled();
   });
 
   it("renders the lifted job's phase text (from App) when it names this session's path", () => {
@@ -311,7 +314,7 @@ describe("SessionView: audio playback and re-transcribe (Task 4, stage-0.7)", ()
     );
 
     expect(screen.getByText(/transcribing \(me\)/i)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /re-transcribing/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /improving/i })).toBeDisabled();
   });
 
   it("ignores the lifted job when it names a different session's path", () => {
@@ -328,7 +331,7 @@ describe("SessionView: audio playback and re-transcribe (Task 4, stage-0.7)", ()
     );
 
     expect(screen.queryByText(/writing/i)).toBeNull();
-    expect(screen.getByRole("button", { name: /^re-transcribe$/i })).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: /^improve transcript$/i })).not.toBeDisabled();
   });
 
   it("security-review fix: stays disabled across a remount while the job is still running for this path", () => {
@@ -366,7 +369,7 @@ describe("SessionView: audio playback and re-transcribe (Task 4, stage-0.7)", ()
       />
     );
 
-    expect(screen.getByRole("button", { name: /re-transcribing/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /improving/i })).toBeDisabled();
     expect(screen.getByText(/transcribing \(them\)/i)).toBeInTheDocument();
   });
 
@@ -386,7 +389,7 @@ describe("SessionView: audio playback and re-transcribe (Task 4, stage-0.7)", ()
       />
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /re-transcribe/i }));
+    fireEvent.click(screen.getByRole("button", { name: /improve transcript/i }));
 
     const message = await screen.findByText(/no audio was saved for this call/i);
     expect(message.className).toContain("text-destructive");
@@ -409,6 +412,7 @@ describe("SessionView: audio playback and re-transcribe (Task 4, stage-0.7)", ()
       audio_path: "/tmp/call.flac",
       summary: "",
       summary_model: null,
+      people: [],
     });
     render(
       <SessionView
@@ -419,6 +423,7 @@ describe("SessionView: audio playback and re-transcribe (Task 4, stage-0.7)", ()
           audio_path: "/tmp/call.flac",
           summary: "",
           summary_model: null,
+          people: [],
           transcript: "[00:00:03] Me: old parakeet text\n",
         }}
         liveLines={[]}
@@ -430,7 +435,7 @@ describe("SessionView: audio playback and re-transcribe (Task 4, stage-0.7)", ()
 
     expect(screen.getByText(/old parakeet text/)).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: /re-transcribe/i }));
+    fireEvent.click(screen.getByRole("button", { name: /improve transcript/i }));
 
     await screen.findByText(/could not be deleted/i);
     await screen.findByText(/new whisper text/);
@@ -446,6 +451,7 @@ describe("SessionView: audio playback and re-transcribe (Task 4, stage-0.7)", ()
       audio_path: "/tmp/call.flac",
       summary: "",
       summary_model: null,
+      people: [],
     });
     render(
       <SessionView
@@ -456,6 +462,7 @@ describe("SessionView: audio playback and re-transcribe (Task 4, stage-0.7)", ()
           audio_path: "/tmp/call.flac",
           summary: "",
           summary_model: null,
+          people: [],
           transcript: "[00:00:03] Me: old parakeet text\n",
         }}
         liveLines={[]}
@@ -467,7 +474,7 @@ describe("SessionView: audio playback and re-transcribe (Task 4, stage-0.7)", ()
 
     expect(screen.getByText(/old parakeet text/)).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: /re-transcribe/i }));
+    fireEvent.click(screen.getByRole("button", { name: /improve transcript/i }));
 
     await screen.findByText(/new whisper text/);
     expect(screen.queryByText(/old parakeet text/)).toBeNull();
@@ -485,6 +492,7 @@ describe("SessionView: notes/transcript tabs (stage 0.10)", () => {
           notes: "## Decisions\n\n- Ship **Friday**",
           summary: "> Generated **brief**",
           summary_model: "local/qwen",
+          people: [],
         }}
         liveLines={[]}
         interimMe=""
@@ -601,6 +609,7 @@ describe("SessionView: notes/transcript tabs (stage 0.10)", () => {
           notes: "keep Notes primary",
           summary: "A concise summary",
           summary_model: "local/qwen",
+          people: [],
           transcript: "[00:00:03] Me: hello tabs\n",
         }}
         liveLines={[]}
@@ -631,6 +640,7 @@ describe("SessionView: notes/transcript tabs (stage 0.10)", () => {
           notes: "   ",
           summary: "A concise summary",
           summary_model: "local/qwen",
+          people: [],
         }}
         liveLines={[]}
         interimMe=""
@@ -724,7 +734,7 @@ describe("SessionView: enhance (stage 0.11)", () => {
       />
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /^enhance$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^summarize$/i }));
     await waitFor(() => expect(ipc.enhanceSession).toHaveBeenCalledExactlyOnceWith("/tmp/call.md"));
 
     // While the command is in flight the pill disappears and a disabled
@@ -734,7 +744,7 @@ describe("SessionView: enhance (stage 0.11)", () => {
     const summaryTab = screen.getByRole("tab", { name: /summary/i });
     expect(summaryTab).toBeDisabled();
     expect(screen.getByTestId("summary-tab-spinner")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /^enhance$/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^summarize$/i })).toBeNull();
 
     resolveEnhance("- **ship v2 friday**");
     await waitFor(() => expect(screen.queryByTestId("summary-tab-spinner")).toBeNull());
@@ -755,7 +765,7 @@ describe("SessionView: enhance (stage 0.11)", () => {
     );
     expect(screen.getByTestId("summary-tab-spinner")).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /summary/i })).toBeDisabled();
-    expect(screen.queryByRole("button", { name: /^enhance$/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^summarize$/i })).toBeNull();
   });
 
   it("offers no Enhance control while recording or without a transcript", () => {
@@ -770,7 +780,7 @@ describe("SessionView: enhance (stage 0.11)", () => {
         retranscribingJob={null}
       />
     );
-    expect(screen.queryByRole("button", { name: /^enhance$/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^summarize$/i })).toBeNull();
     unmount();
 
     render(
@@ -784,7 +794,7 @@ describe("SessionView: enhance (stage 0.11)", () => {
         retranscribingJob={null}
       />
     );
-    expect(screen.queryByRole("button", { name: /^enhance$/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^summarize$/i })).toBeNull();
   });
 
   it("retires the pill once a summary exists and offers re-run in the Summary tab's provenance line", async () => {
@@ -797,6 +807,7 @@ describe("SessionView: enhance (stage 0.11)", () => {
           transcript: "[00:00:01] Me: hi",
           summary: "- **ship v2 friday**",
           summary_model: "claude",
+          people: [],
         }}
         liveLines={[]}
         interimMe=""
@@ -805,11 +816,11 @@ describe("SessionView: enhance (stage 0.11)", () => {
       />
     );
 
-    expect(screen.queryByRole("button", { name: /^enhance$/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^summarize$/i })).toBeNull();
 
     fireEvent.click(screen.getByRole("tab", { name: "Summary" }));
     expect(screen.getByText(/by claude/i)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /re-run/i }));
+    fireEvent.click(screen.getByRole("button", { name: /again/i }));
     await waitFor(() => expect(ipc.enhanceSession).toHaveBeenCalledExactlyOnceWith("/tmp/call.md"));
   });
 });
@@ -853,6 +864,28 @@ describe("SessionView: title meta line (date and duration)", () => {
     ).toBeVisible();
   });
 
+  it("appends who was on the call after the date and duration", () => {
+    render(
+      <SessionView
+        path="/tmp/call.md"
+        isActive={false}
+        initialData={{
+          ...baseData,
+          date: "2026-09-02T14:03:52",
+          people: ["Anna Berg", "Mark"],
+        }}
+        durationSecs={611}
+        liveLines={[]}
+        interimMe=""
+        interimThem=""
+        retranscribingJob={null}
+      />
+    );
+
+    const expected = `${formatSessionMeta("2026-09-02T14:03:52", 611)!} · with Anna Berg, Mark`;
+    expect(screen.getByText(expected)).toBeVisible();
+  });
+
   it("shows no meta line while the session is being recorded", () => {
     render(
       <SessionView
@@ -870,5 +903,34 @@ describe("SessionView: title meta line (date and duration)", () => {
     expect(
       screen.queryByText(formatSessionMeta("2026-09-02T14:03:52", 611)!),
     ).not.toBeInTheDocument();
+  });
+});
+
+describe("SessionView: copy summary", () => {
+  it("puts the summary Markdown on the clipboard and flashes 'copied'", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    render(
+      <SessionView
+        path="/tmp/call.md"
+        isActive={false}
+        initialData={{
+          ...baseData,
+          transcript: "[00:00:01] Me: hi",
+          summary: "### Decisions\n- ship v2 friday",
+          summary_model: "claude",
+        }}
+        liveLines={[]}
+        interimMe=""
+        interimThem=""
+        retranscribingJob={null}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("tab", { name: "Summary" }));
+    fireEvent.click(screen.getByRole("button", { name: /copy summary/i }));
+
+    expect(writeText).toHaveBeenCalledExactlyOnceWith("### Decisions\n- ship v2 friday");
+    await waitFor(() => expect(screen.getByRole("button", { name: /copy summary/i })).toHaveTextContent("copied"));
   });
 });

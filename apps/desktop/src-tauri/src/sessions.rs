@@ -58,6 +58,9 @@ pub struct SessionDataOut {
     pub summary: String,
     /// What generated `summary` ("claude" / "codex"), `None` without one.
     pub summary_model: Option<String>,
+    /// The `people:` frontmatter list -- who was on the call, from the
+    /// calendar event the enhance lookup matched. Empty without one.
+    pub people: Vec<String>,
 }
 
 /// Scans `dir` for `.md` files and parses each one's frontmatter. Files that
@@ -164,6 +167,7 @@ pub fn read_session_at(path: &Path, finalizing: Option<&Path>) -> Result<Session
         audio_path,
         summary: data.summary,
         summary_model: data.summary_model,
+        people: data.people,
     })
 }
 
@@ -268,6 +272,7 @@ fn rewrite_session(path: &Path, title: &str, notes: &str) -> Result<()> {
         transcript.set_audio_from_secs(audio_from_secs);
     }
     transcript.set_summary(existing.summary.clone(), existing.summary_model.clone());
+    transcript.set_people(existing.people.clone());
     transcript.set_raw_transcript(existing.transcript.clone());
     transcript.save(path)
 }
@@ -342,6 +347,7 @@ pub fn rewrite_transcript_at(path: &Path, new_transcript: &str, asr_id: &str) ->
         transcript.set_audio_from_secs(audio_from_secs);
     }
     transcript.set_summary(existing.summary.clone(), existing.summary_model.clone());
+    transcript.set_people(existing.people.clone());
     transcript.set_asr(asr_id);
     transcript.set_raw_transcript(final_transcript);
     transcript.save(path)
@@ -400,11 +406,18 @@ fn tail_is_clock_time(tail: &str) -> bool {
 /// file, not against whatever the caller read minutes earlier: if the user
 /// typed a real title while the model was thinking, their words win and
 /// the proposal is dropped.
+///
+/// `people` is the matched calendar event's attendee list: `Some` replaces
+/// the file's `people:` line outright (a re-enhance re-applies the freshest
+/// event data, same as the title), `None` -- no event, or an event carrying
+/// no attendees -- leaves whatever the file already has untouched, so a
+/// lookup miss never erases previously saved names.
 pub fn set_summary_at(
     path: &Path,
     summary: &str,
     model: &str,
     proposed_title: Option<&str>,
+    people: Option<&[String]>,
 ) -> Result<()> {
     let existing = parse_session(path)?;
     let meta = parse_meta(path)?;
@@ -431,6 +444,10 @@ pub fn set_summary_at(
         transcript.set_audio_from_secs(audio_from_secs);
     }
     transcript.set_summary(summary.to_string(), Some(model.to_string()));
+    transcript.set_people(match people {
+        Some(fresh) => fresh.to_vec(),
+        None => existing.people.clone(),
+    });
     transcript.set_raw_transcript(existing.transcript.clone());
     transcript.save(path)
 }
@@ -526,6 +543,16 @@ pub fn search_sessions_in(dir: &Path, query: &str) -> Vec<SearchHit> {
             if meta.title.to_lowercase().contains(&needle) {
                 total += meta.title.to_lowercase().matches(&needle).count();
                 snippets.push(SearchSnippet { section: "title", text: meta.title.clone() });
+            }
+            // Who was on the call counts as much as what was said: a name
+            // query surfaces every call that person attended (the `people:`
+            // frontmatter the calendar lookup saves), snippeted as the
+            // joined list so the results pane shows the whole roster.
+            let people_line = data.people.join(", ");
+            let people_count = people_line.to_lowercase().matches(&needle).count();
+            if people_count > 0 {
+                total += people_count;
+                snippets.push(SearchSnippet { section: "people", text: people_line });
             }
             for (section, body) in [("notes", &data.notes), ("transcript", &data.transcript)] {
                 for line in body.lines() {
@@ -763,7 +790,7 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             let path = note_with_summary(dir.path());
 
-            set_summary_at(&path, "- new summary", "codex", None).unwrap();
+            set_summary_at(&path, "- new summary", "codex", None, None).unwrap();
 
             let data = parse_session(&path).unwrap();
             assert_eq!(data.summary, "- new summary");
@@ -771,6 +798,45 @@ mod tests {
             assert_eq!(data.notes, "rough notes", "notes are sacred");
             assert_eq!(data.title, "Sync");
             assert_eq!(data.transcript, "[00:00:03] Me: hello");
+        }
+
+        /// The matched event's attendees land in `people:`, a later enhance
+        /// with fresh attendees replaces them, and a lookup miss (people:
+        /// None) never erases what a previous enhance saved.
+        #[test]
+        fn set_summary_at_writes_people_and_a_miss_preserves_them() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = note_with_summary(dir.path());
+
+            let crew = vec!["Anna".to_string(), "Mark".to_string()];
+            set_summary_at(&path, "- s", "claude", None, Some(&crew)).unwrap();
+            assert_eq!(parse_session(&path).unwrap().people, crew);
+
+            set_summary_at(&path, "- s2", "claude", None, None).unwrap();
+            assert_eq!(parse_session(&path).unwrap().people, crew, "a miss preserves");
+
+            let fresh = vec!["Dana".to_string()];
+            set_summary_at(&path, "- s3", "claude", None, Some(&fresh)).unwrap();
+            let data = parse_session(&path).unwrap();
+            assert_eq!(data.people, fresh, "fresh event data replaces");
+            assert_eq!(data.notes, "rough notes", "notes are sacred");
+        }
+
+        /// A name query finds the call by its `people:` roster, labeled as
+        /// its own snippet section.
+        #[test]
+        fn search_matches_people_from_the_frontmatter() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = note_with_summary(dir.path());
+            let crew = vec!["Anna Berg".to_string(), "Mark".to_string()];
+            set_summary_at(&path, "- s", "claude", None, Some(&crew)).unwrap();
+
+            let hits = search_sessions_in(dir.path(), "berg");
+            assert_eq!(hits.len(), 1);
+            assert_eq!(hits[0].snippets[0].section, "people");
+            assert_eq!(hits[0].snippets[0].text, "Anna Berg, Mark");
+
+            assert!(search_sessions_in(dir.path(), "nobody").is_empty());
         }
 
         /// Re-enhance regenerates a machine-given title (owner request):
@@ -786,21 +852,21 @@ mod tests {
             note.save(&path).unwrap();
 
             // First enhance: renames the automatic title and marks it.
-            set_summary_at(&path, "- s", "claude", Some("Composed title")).unwrap();
+            set_summary_at(&path, "- s", "claude", Some("Composed title"), None).unwrap();
             assert_eq!(parse_session(&path).unwrap().title, "Composed title");
 
             // Re-enhance: the machine-given title is fair game again.
-            set_summary_at(&path, "- s2", "claude", Some("Q3 Budget Review")).unwrap();
+            set_summary_at(&path, "- s2", "claude", Some("Q3 Budget Review"), None).unwrap();
             assert_eq!(parse_session(&path).unwrap().title, "Q3 Budget Review");
 
             // A notes-only save (same title) keeps the machine marker...
             save_session_at(&path, "Q3 Budget Review", "my notes", None, None).unwrap();
-            set_summary_at(&path, "- s3", "claude", Some("Renamed by model again")).unwrap();
+            set_summary_at(&path, "- s3", "claude", Some("Renamed by model again"), None).unwrap();
             assert_eq!(parse_session(&path).unwrap().title, "Renamed by model again");
 
             // ...but the user typing their own title ends machine renames.
             save_session_at(&path, "My own name", "my notes", None, None).unwrap();
-            set_summary_at(&path, "- s4", "claude", Some("Should not land")).unwrap();
+            set_summary_at(&path, "- s4", "claude", Some("Should not land"), None).unwrap();
             assert_eq!(parse_session(&path).unwrap().title, "My own name");
         }
 
@@ -813,7 +879,7 @@ mod tests {
 
             // A user-typed title survives even when a proposal arrives.
             let typed = note_with_summary(dir.path());
-            set_summary_at(&typed, "- s", "codex", Some("Model title")).unwrap();
+            set_summary_at(&typed, "- s", "codex", Some("Model title"), None).unwrap();
             assert_eq!(parse_session(&typed).unwrap().title, "Sync");
 
             // The "Untitled" default is replaced.
@@ -821,7 +887,7 @@ mod tests {
             let mut note = Transcript::new(t(9, 0, 0));
             note.add(Speaker::Me, 3.0, "hello".into());
             note.save(&untitled).unwrap();
-            set_summary_at(&untitled, "- s", "codex", Some("Budget review")).unwrap();
+            set_summary_at(&untitled, "- s", "codex", Some("Budget review"), None).unwrap();
             assert_eq!(parse_session(&untitled).unwrap().title, "Budget review");
 
             // The detected-call shape is replaced too.
@@ -830,7 +896,7 @@ mod tests {
             note.set_title("Zoom call 14:03".into());
             note.add(Speaker::Me, 3.0, "hello".into());
             note.save(&detected).unwrap();
-            set_summary_at(&detected, "- s", "codex", Some("Budget review")).unwrap();
+            set_summary_at(&detected, "- s", "codex", Some("Budget review"), None).unwrap();
             assert_eq!(parse_session(&detected).unwrap().title, "Budget review");
         }
 

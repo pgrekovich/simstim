@@ -228,6 +228,7 @@
     --color-accent: var(--accent);
     --color-accent-foreground: var(--accent-foreground);
     --color-destructive: var(--destructive);
+    --color-success: var(--success);
     --color-border: var(--border);
     --color-input: var(--input);
     --color-ring: var(--ring);
@@ -247,7 +248,11 @@
     --color-quiet-foreground: var(--quiet-foreground);
 }
 
-/* The paper/tape palette from the interface redesign. `:root` is light and
+/* The paper/tape palette from the interface redesign, tuned 2026-09-07: the
+   dark surfaces sit closer to neutral (the old olive-brown black read as
+   dirty next to system windows; warmth now lives in the text and the ochre),
+   muted text clears 4.5:1 on paper, and success is its own warm green token
+   instead of a cool stock one. `:root` is light and
    `.dark` is dark; src/lib/theme.ts toggles the class from config and the
    system preference. Fonts stay local so the app makes no network request. */
 :root {
@@ -255,37 +260,38 @@
     --font-ui: "Helvetica Neue", -apple-system, BlinkMacSystemFont, sans-serif;
     --font-reading: "Source Serif 4", "New York", "Iowan Old Style", Georgia, serif;
     --font-machine: "Spline Sans Mono", "SFMono-Regular", Menlo, Monaco, monospace;
-    --background: #F4F2EB;
+    --background: #F6F4EF;
     --foreground: #1E1B16;
-    --card: #EFEDE4;
+    --card: #EFEDE7;
     --card-foreground: #2C2822;
-    --popover: #F4F2EB;
+    --popover: #F6F4EF;
     --popover-foreground: #1E1B16;
     --primary: #1E1B16;
-    --primary-foreground: #F4F2EB;
-    --secondary: #EFEDE4;
+    --primary-foreground: #F6F4EF;
+    --secondary: #EFEDE7;
     --secondary-foreground: #1E1B16;
-    --muted: #E9E6DC;
-    --muted-foreground: #8B8578;
+    --muted: #EAE7E0;
+    --muted-foreground: #746E65;
     --quiet-foreground: #4C4840;
-    --accent: #E6E2D7;
+    --accent: #E8E4DC;
     --accent-foreground: #1E1B16;
     --destructive: #C33D2E;
+    --success: #4F7A3B;
     --border: rgb(30 27 22 / 11%);
     --input: rgb(30 27 22 / 14%);
     --ring: rgb(30 27 22 / 28%);
-    --voice-remote: #A8843C;
-    --voice-remote-foreground: #76591E;
+    --voice-remote: #A07B34;
+    --voice-remote-foreground: #6F5319;
     --chart-1: oklch(0.646 0.222 41.116);
     --chart-2: oklch(0.6 0.118 184.704);
     --chart-3: oklch(0.398 0.07 227.392);
     --chart-4: oklch(0.828 0.189 84.429);
     --chart-5: oklch(0.769 0.188 70.08);
-    --sidebar: #ECE9E0;
+    --sidebar: #EDEBE4;
     --sidebar-foreground: #1E1B16;
     --sidebar-primary: #1E1B16;
-    --sidebar-primary-foreground: #F4F2EB;
-    --sidebar-accent: #F4F2EB;
+    --sidebar-primary-foreground: #F6F4EF;
+    --sidebar-accent: #F6F4EF;
     --sidebar-accent-foreground: #1E1B16;
     --sidebar-border: rgb(30 27 22 / 10%);
     --sidebar-ring: rgb(30 27 22 / 28%);
@@ -294,22 +300,23 @@
 }
 
 .dark {
-    --background: #17150F;
+    --background: #181715;
     --foreground: #F0EBDD;
-    --card: #1E1C15;
+    --card: #201E1B;
     --card-foreground: #DED8C8;
-    --popover: #1E1C15;
+    --popover: #201E1B;
     --popover-foreground: #F0EBDD;
     --primary: #F0EBDD;
-    --primary-foreground: #17150F;
-    --secondary: #1E1C15;
+    --primary-foreground: #181715;
+    --secondary: #201E1B;
     --secondary-foreground: #F0EBDD;
-    --muted: #252219;
+    --muted: #27251F;
     --muted-foreground: #A8A090;
     --quiet-foreground: #B7B1A2;
-    --accent: #2B281E;
+    --accent: #2C2A25;
     --accent-foreground: #F0EBDD;
     --destructive: #E05540;
+    --success: #9DBF78;
     --border: rgb(233 228 214 / 9%);
     --input: rgb(233 228 214 / 14%);
     --ring: rgb(233 228 214 / 30%);
@@ -320,11 +327,11 @@
     --chart-3: oklch(0.439 0 0);
     --chart-4: oklch(0.371 0 0);
     --chart-5: oklch(0.269 0 0);
-    --sidebar: #131109;
+    --sidebar: #131210;
     --sidebar-foreground: #E9E4D6;
     --sidebar-primary: #F0EBDD;
-    --sidebar-primary-foreground: #17150F;
-    --sidebar-accent: #1E1C15;
+    --sidebar-primary-foreground: #181715;
+    --sidebar-accent: #201E1B;
     --sidebar-accent-foreground: #F0EBDD;
     --sidebar-border: rgb(233 228 214 / 8%);
     --sidebar-ring: rgb(233 228 214 / 30%);

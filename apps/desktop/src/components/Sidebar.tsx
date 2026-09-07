@@ -120,7 +120,7 @@ export function Sidebar({
         <Button
           variant="ghost"
           size="icon"
-          className="size-6 rounded-md text-muted-foreground hover:bg-foreground/[0.07] hover:text-foreground active:bg-foreground/[0.14] dark:text-[#8B8578]"
+          className="size-6 rounded-md text-muted-foreground hover:bg-foreground/[0.07] hover:text-foreground active:bg-foreground/[0.14] dark:text-[#8A857D]"
           aria-label="Collapse sidebar"
           title="Collapse sidebar (⌘\\)"
           onClick={onCollapse}
@@ -130,7 +130,7 @@ export function Sidebar({
         <Button
           variant="ghost"
           size="icon"
-          className="size-6 rounded-md text-muted-foreground hover:bg-foreground/[0.07] hover:text-foreground active:bg-foreground/[0.14] dark:text-[#8B8578]"
+          className="size-6 rounded-md text-muted-foreground hover:bg-foreground/[0.07] hover:text-foreground active:bg-foreground/[0.14] dark:text-[#8A857D]"
           aria-label="Search all notes"
           title="Search (⌘K)"
           onClick={onOpenSearch}
@@ -140,7 +140,7 @@ export function Sidebar({
         <Button
           variant="ghost"
           size="icon"
-          className="size-6 rounded-md text-muted-foreground hover:bg-foreground/[0.07] hover:text-foreground active:bg-foreground/[0.14] dark:text-[#8B8578]"
+          className="size-6 rounded-md text-muted-foreground hover:bg-foreground/[0.07] hover:text-foreground active:bg-foreground/[0.14] dark:text-[#8A857D]"
           aria-label="New note"
           title="New note"
           onClick={onNewSession}
@@ -157,7 +157,7 @@ export function Sidebar({
         ) : (
           groups.map((group) => (
             <div key={group.label} className="flex flex-col gap-px">
-              <div className="px-2 pb-2 pt-[14px] font-mono text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground dark:text-[#7A7466]">
+              <div className="px-2 pb-2 pt-[14px] font-mono text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground dark:text-[#7C776F]">
                 {group.label}
               </div>
               {group.sessions.map((session) => {
@@ -223,7 +223,7 @@ export function Sidebar({
                       ) : (
                         <>
                           <span className={cn("w-full truncate pr-6 text-[12.5px]", selected && "font-medium")}>{session.title}</span>
-                          <span className="font-mono text-[10.5px] text-muted-foreground dark:text-[#7A7466]">
+                          <span className="font-mono text-[10.5px] text-muted-foreground dark:text-[#7C776F]">
                             {formatTime(session.date)}
                             {duration && ` · ${duration}`}
                           </span>

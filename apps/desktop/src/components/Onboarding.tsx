@@ -59,7 +59,7 @@ function PermissionResult({
       <div
         className={`flex size-9 shrink-0 items-center justify-center rounded-full border ${
           passed
-            ? "border-emerald-600/30 bg-emerald-600/10 text-emerald-700 dark:text-emerald-400"
+            ? "border-success/30 bg-success/10 text-success"
             : "border-border bg-background/70 text-muted-foreground"
         }`}
       >
@@ -415,7 +415,7 @@ export function Onboarding({ config, models, onOpenSettings, onComplete }: Onboa
             <div className="min-w-0 flex-1">
             {activeModel?.downloaded && downloadPercent === null ? (
               <p className="flex items-center gap-1.5 text-[12px] text-muted-foreground">
-                <Check className="size-3.5 text-emerald-700 dark:text-emerald-400" /> Speech recognition ready
+                <Check className="size-3.5 text-success" /> Speech recognition ready
               </p>
             ) : failed ? (
               <div className="flex items-center justify-between gap-3">

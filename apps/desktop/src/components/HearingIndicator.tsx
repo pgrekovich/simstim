@@ -43,7 +43,7 @@ export function HearingIndicator({ status }: { status: HearingStatus | null }) {
               aria-hidden="true"
               className={cn(
                 "size-1.5 rounded-full transition-colors duration-300",
-                heard ? "bg-emerald-600 dark:bg-emerald-400" : "bg-foreground/20",
+                heard ? "bg-success" : "bg-foreground/20",
               )}
             />
             {label}

@@ -35,7 +35,7 @@ export function HearingIndicator({ status }: { status: HearingStatus | null }) {
           <span
             key={label}
             title={silentMs === null ? "Listening..." : describe(label, silentMs)}
-            className="flex items-center gap-1.5 font-mono text-[10.5px] text-muted-foreground"
+            className="flex items-center gap-1.5 text-[11px] tabular-nums text-muted-foreground"
           >
             <span
               data-testid={`hearing-${label}`}

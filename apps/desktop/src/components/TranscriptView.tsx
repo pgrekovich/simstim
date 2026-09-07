@@ -256,8 +256,8 @@ export function TranscriptView({
                     <span
                       className={
                         block.speaker === "Them"
-                          ? "inline-flex h-[17px] items-center rounded-[4px] border border-[var(--voice-remote)] px-[7px] font-mono text-[9.5px] font-semibold uppercase tracking-[0.08em] text-[var(--voice-remote-foreground)]"
-                          : "inline-flex h-[17px] items-center rounded-[4px] border border-foreground bg-foreground px-[7px] font-mono text-[9.5px] font-semibold uppercase tracking-[0.08em] text-background"
+                          ? "inline-flex h-[17px] items-center rounded-[4px] border border-[var(--voice-remote)] px-[7px] text-[10px] font-semibold uppercase tracking-[0.04em] text-[var(--voice-remote-foreground)]"
+                          : "inline-flex h-[17px] items-center rounded-[4px] border border-foreground bg-foreground px-[7px] text-[10px] font-semibold uppercase tracking-[0.04em] text-background"
                       }
                     >
                       {block.speaker}
@@ -301,7 +301,7 @@ export function TranscriptView({
             {interimMe && (
               <div className="flex flex-col gap-[3px]">
                 <span className="flex items-baseline gap-[9px]">
-                  <span className="inline-flex h-[17px] items-center rounded-[4px] border border-foreground bg-foreground px-[7px] font-mono text-[9.5px] font-semibold uppercase not-italic tracking-[0.08em] text-background">Me</span>
+                  <span className="inline-flex h-[17px] items-center rounded-[4px] border border-foreground bg-foreground px-[7px] text-[10px] font-semibold uppercase not-italic tracking-[0.04em] text-background">Me</span>
                   <span className="font-mono text-[10px] not-italic text-muted-foreground">···</span>
                 </span>
                 <p className="whitespace-pre-wrap font-serif text-[15px] italic leading-[1.6] text-muted-foreground">{interimMe}</p>
@@ -310,7 +310,7 @@ export function TranscriptView({
             {interimThem && (
               <div className="flex flex-col gap-[3px]">
                 <span className="flex items-baseline gap-[9px]">
-                  <span className="inline-flex h-[17px] items-center rounded-[4px] border border-[var(--voice-remote)] px-[7px] font-mono text-[9.5px] font-semibold uppercase not-italic tracking-[0.08em] text-[var(--voice-remote-foreground)]">Them</span>
+                  <span className="inline-flex h-[17px] items-center rounded-[4px] border border-[var(--voice-remote)] px-[7px] text-[10px] font-semibold uppercase not-italic tracking-[0.04em] text-[var(--voice-remote-foreground)]">Them</span>
                   <span className="font-mono text-[10px] not-italic text-muted-foreground">···</span>
                 </span>
                 <p className="whitespace-pre-wrap font-serif text-[15px] italic leading-[1.6] text-muted-foreground">{interimThem}</p>

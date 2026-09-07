@@ -68,7 +68,7 @@ export function AskNotesView({ sessions, askRequest, onOpenCitation }: AskNotesV
         <div className="flex items-center gap-2.5">
           <h1 className="font-serif text-[15px] font-semibold">Ask your notes</h1>
           {badge && (
-            <span className="inline-flex h-[22px] items-center rounded-full bg-foreground/[0.06] px-2.5 font-mono text-[10px] text-quiet-foreground">
+            <span className="inline-flex h-[22px] items-center rounded-full bg-foreground/[0.06] px-2.5 text-[11px] tabular-nums text-quiet-foreground">
               {badge}
             </span>
           )}

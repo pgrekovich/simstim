@@ -16,7 +16,7 @@ function Keys({ chars }: { chars: string[] }) {
       {chars.map((c) => (
         <kbd
           key={c}
-          className="flex h-5 min-w-5 items-center justify-center rounded-[4px] border border-border bg-foreground/[0.06] px-1.5 font-mono text-[10.5px] text-muted-foreground"
+          className="flex h-5 min-w-5 items-center justify-center rounded-[4px] border border-border bg-foreground/[0.06] px-1.5 text-[11px] tabular-nums text-muted-foreground"
         >
           {c}
         </kbd>
@@ -67,12 +67,12 @@ export function EmptyState({
           type="button"
           onClick={onStartRecording}
           disabled={recordingDisabled}
-          className="h-12 rounded-full bg-primary px-8 font-mono text-sm font-semibold tracking-[0.02em] text-primary-foreground shadow-none hover:bg-primary/90"
+          className="h-12 rounded-[12px] bg-primary px-8 text-[14px] font-semibold text-primary-foreground shadow-none hover:bg-primary/90"
         >
           <span aria-hidden="true" className="size-2 rounded-full bg-destructive" />
           Start Recording
         </Button>
-        <p className="mt-3 font-mono text-[10.5px] text-muted-foreground">
+        <p className="mt-3 text-[11px] tabular-nums text-muted-foreground">
           {recordingHint ?? "⌘⇧N · your call becomes a note"}
         </p>
         <div className="mt-8 w-full rounded-xl border border-border bg-card/45 p-2 shadow-[0_8px_28px_rgb(0_0_0/0.05)]">

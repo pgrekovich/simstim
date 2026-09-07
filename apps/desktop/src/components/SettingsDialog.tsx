@@ -161,7 +161,7 @@ function Row({
       <div className="flex min-w-0 flex-col gap-[3px]">
         <Label className={cn("text-[13px]", sub ? "font-normal" : "font-medium")} htmlFor={htmlFor}>{label}</Label>
         {description && <span className="text-[11.5px] leading-[1.45] text-muted-foreground">{description}</span>}
-        {error && <span className="font-mono text-[10.5px] text-destructive">{error}</span>}
+        {error && <span className="text-[11px] text-destructive">{error}</span>}
       </div>
       {children && <div className="flex shrink-0 items-center gap-1.5">{children}</div>}
     </div>
@@ -177,10 +177,10 @@ function Group({ children }: { children: ReactNode }) {
 function GroupHeading({ children, right }: { children: ReactNode; right?: ReactNode }) {
   return (
     <div className="flex items-baseline justify-between gap-2">
-      <h4 className="font-mono text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+      <h4 className="text-[11px] font-semibold text-muted-foreground">
         {children}
       </h4>
-      {right && <span className="font-mono text-[10.5px] text-muted-foreground">{right}</span>}
+      {right && <span className="text-[11px] tabular-nums text-muted-foreground">{right}</span>}
     </div>
   );
 }
@@ -693,7 +693,7 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
               Settings
             </DialogTitle>
           </div>
-          <span className="font-mono text-[10.5px] text-muted-foreground">saved automatically</span>
+          <span className="text-[11px] tabular-nums text-muted-foreground">saved automatically</span>
         </header>
         <div className="min-h-0 flex-1 overflow-y-auto">
           <div className="mx-auto flex w-full max-w-[640px] flex-col gap-10 px-8 pb-12 pt-2">
@@ -730,7 +730,7 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                   label="Notes folder"
                   description={
                     <span
-                      className="block max-w-72 truncate font-mono"
+                      className="block max-w-72 truncate"
                       title={config?.output_dir ?? ""}
                     >
                       {config ? displayPath(config.output_dir) : "..."}
@@ -1022,7 +1022,7 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                         : "..."
                     }
                   >
-                    <span className="font-mono text-[10.5px] text-muted-foreground">
+                    <span className="text-[11px] tabular-nums text-muted-foreground">
                       {storage ? humanBytes(storage.notes_bytes) : "..."}
                     </span>
                   </Row>
@@ -1036,14 +1036,14 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                         : "..."
                     }
                   >
-                    <span className="font-mono text-[10.5px] text-muted-foreground">
+                    <span className="text-[11px] tabular-nums text-muted-foreground">
                       {storage ? humanBytes(storage.audio_bytes) : "..."}
                     </span>
                   </Row>
                 </Group>
                 <p className="text-[11px] leading-[1.5] text-muted-foreground">
                   Everything above lives in{" "}
-                  <span className="font-mono">{config ? displayPath(config.output_dir) : "the notes folder"}</span>{" "}
+                  <span>{config ? displayPath(config.output_dir) : "the notes folder"}</span>{" "}
                   and is yours to move, sync or delete.
                 </p>
               </div>
@@ -1062,7 +1062,7 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                             mutedName={model.retired}
                           />
                           <div className="flex shrink-0 items-center gap-1.5">
-                            <span className="font-mono text-[10.5px] text-muted-foreground">
+                            <span className="text-[11px] tabular-nums text-muted-foreground">
                               {humanBytes(freedBytes(model))}
                             </span>
                             {/* The live model never offers deletion: it is

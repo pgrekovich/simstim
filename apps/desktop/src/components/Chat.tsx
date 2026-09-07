@@ -248,7 +248,7 @@ export function ChatConversation({
             {messages.map((message, index) =>
               message.role === "user" ? (
                 <div key={index} className="flex flex-col gap-1.5">
-                  <span className="font-mono text-[9.5px] font-medium uppercase tracking-[0.1em] text-muted-foreground">
+                  <span className="text-[11px] font-semibold text-muted-foreground">
                     You asked{message.asked_at ? ` · ${message.asked_at}` : ""}
                   </span>
                   <p
@@ -269,13 +269,13 @@ export function ChatConversation({
                   )}
                 >
                   <div className="flex items-baseline justify-between gap-3">
-                    <span className="font-mono text-[9.5px] font-medium uppercase tracking-[0.1em] text-muted-foreground">
+                    <span className="text-[11px] font-semibold text-muted-foreground">
                       {distinctSourceCount(message.sources) > 0
                         ? `From ${distinctSourceCount(message.sources)} ${distinctSourceCount(message.sources) === 1 ? "note" : "notes"}`
                         : "Answer"}
                     </span>
                     {message.label && (
-                      <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
+                      <span className="shrink-0 text-[11px] text-muted-foreground">
                         {message.label}
                       </span>
                     )}
@@ -295,7 +295,7 @@ export function ChatConversation({
                           key={sourceIndex}
                           type="button"
                           onClick={() => onOpenCitation(source)}
-                          className="inline-flex h-6 items-center rounded-full border border-foreground/[0.16] bg-background px-2.5 font-mono text-[10px] text-quiet-foreground hover:border-foreground/[0.3] hover:bg-foreground/[0.06]"
+                          className="inline-flex h-6 items-center rounded-full border border-foreground/[0.16] bg-background px-2.5 text-[11px] tabular-nums text-quiet-foreground hover:border-foreground/[0.3] hover:bg-foreground/[0.06]"
                         >
                           {sourceChipLabel(source, sessions)}
                         </button>
@@ -331,7 +331,7 @@ export function ChatConversation({
               <>
                 {pendingQuestion !== null && (
                   <div className="flex flex-col gap-1.5">
-                    <span className="font-mono text-[9.5px] font-medium uppercase tracking-[0.1em] text-muted-foreground">
+                    <span className="text-[11px] font-semibold text-muted-foreground">
                       You asked{pendingAskedAt ? ` · ${pendingAskedAt}` : ""}
                     </span>
                     <p
@@ -351,7 +351,7 @@ export function ChatConversation({
                   )}
                 >
                   <span aria-hidden="true" className="working-spinner size-3 shrink-0 text-muted-foreground" />
-                  <span className="flex-1 font-mono text-[10.5px] text-muted-foreground">
+                  <span className="flex-1 text-[11px] tabular-nums text-muted-foreground">
                     {scopePath === null ? "reading your notes" : "reading this call"}
                   </span>
                   <button
@@ -400,7 +400,7 @@ export function ChatConversation({
             aria-label="Send question"
             disabled={running || draft.trim() === ""}
             onClick={() => send(draft)}
-            className="inline-flex h-[17px] shrink-0 items-center gap-0.5 rounded-[4px] bg-foreground/[0.07] px-[5px] font-mono text-[10.5px] text-quiet-foreground disabled:opacity-60"
+            className="inline-flex h-[17px] shrink-0 items-center gap-0.5 rounded-[4px] bg-foreground/[0.07] px-[5px] text-[11px] text-quiet-foreground disabled:opacity-60"
           >
             <CornerDownLeft className="size-2.5" />
           </button>

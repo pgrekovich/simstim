@@ -65,8 +65,8 @@ export function RecordButton({
       onClick={onClick}
       title={title}
       className={cn(
-        "font-mono font-semibold tracking-[0.02em] shadow-none",
-        size === "compact" ? "h-[30px] rounded-full px-3.5 text-[11.5px]" : "h-12 rounded-full px-8 text-sm",
+        "font-semibold shadow-none",
+        size === "compact" ? "h-[28px] rounded-[7px] px-3.5 text-[12.5px]" : "h-12 rounded-[12px] px-8 text-[14px]",
         recording
           ? "border border-destructive/25 bg-destructive/10 text-destructive hover:bg-destructive/16"
           : "bg-primary text-primary-foreground hover:bg-primary/90"

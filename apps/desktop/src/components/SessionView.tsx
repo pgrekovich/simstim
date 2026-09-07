@@ -817,7 +817,7 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
         placeholder="Find"
         className="w-[clamp(64px,8vw,120px)] min-w-0 bg-transparent text-[11.5px] outline-none placeholder:text-muted-foreground"
       />
-      <span className="shrink-0 font-mono text-[10px] text-muted-foreground" aria-live="polite">
+      <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground" aria-live="polite">
         {transcriptMatches.length === 0 ? 0 : activeFindIndex + 1} / {transcriptMatches.length}
       </span>
       <span className="flex shrink-0 gap-0.5">
@@ -870,7 +870,7 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
       type="button"
       variant="outline"
       size="sm"
-      className="ml-3 h-[30px] shrink-0 gap-[7px] rounded-full px-[14px] font-mono text-[11px] font-medium tracking-[0.04em]"
+      className="ml-3 h-[28px] shrink-0 gap-[6px] rounded-[7px] px-[12px] text-[12.5px] font-medium"
       onClick={handleEnhance}
     >
       <Sparkles className="size-3.5 text-[var(--voice-remote)]" />
@@ -879,9 +879,9 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
   ) : null;
 
   const tabList = (
-    <TabsList ref={tabListRef} className="h-[34px] shrink-0 gap-[3px] rounded-full bg-foreground/[0.06] p-[3px] dark:bg-foreground/[0.07]">
+    <TabsList ref={tabListRef} className="h-[28px] shrink-0 gap-[2px] rounded-[7px] bg-foreground/[0.06] p-[2px] dark:bg-foreground/[0.1]">
       <TabsTrigger
-        className="h-7 gap-[7px] rounded-full px-[13px] font-mono text-[11px] font-normal hover:bg-foreground/[0.05] data-[state=active]:bg-background data-[state=active]:font-semibold data-[state=active]:tracking-[0.04em] data-[state=active]:shadow-[0_1px_2px_rgb(0_0_0/0.14)] dark:data-[state=active]:bg-foreground/[0.14]"
+        className="h-6 gap-[6px] rounded-[5px] px-[12px] text-[13px] font-medium text-quiet-foreground hover:text-foreground data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-[0_1px_2px_rgb(0_0_0/0.2)] dark:data-[state=active]:bg-[#636366] dark:data-[state=active]:text-white"
         value="notes"
       >
         Notes
@@ -892,7 +892,7 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
           step detail ("Summarizing part 2 of 7...") lives in the tooltip. */}
       {(summary || enhanceBusy) && (
         <TabsTrigger
-          className="h-7 gap-[7px] rounded-full px-[13px] font-mono text-[11px] font-normal hover:bg-foreground/[0.05] data-[state=active]:bg-background data-[state=active]:font-semibold data-[state=active]:tracking-[0.04em] data-[state=active]:shadow-[0_1px_2px_rgb(0_0_0/0.14)] dark:data-[state=active]:bg-foreground/[0.14]"
+          className="h-6 gap-[6px] rounded-[5px] px-[12px] text-[13px] font-medium text-quiet-foreground hover:text-foreground data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-[0_1px_2px_rgb(0_0_0/0.2)] dark:data-[state=active]:bg-[#636366] dark:data-[state=active]:text-white"
           value="summary"
           disabled={!summary}
           title={enhanceBusy ? enhanceProgress ?? "Summarizing..." : undefined}
@@ -904,7 +904,7 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
         </TabsTrigger>
       )}
       <TabsTrigger
-        className="h-7 gap-[7px] rounded-full px-[13px] font-mono text-[11px] font-normal hover:bg-foreground/[0.05] data-[state=active]:bg-background data-[state=active]:font-semibold data-[state=active]:tracking-[0.04em] data-[state=active]:shadow-[0_1px_2px_rgb(0_0_0/0.14)] dark:data-[state=active]:bg-foreground/[0.14]"
+        className="h-6 gap-[6px] rounded-[5px] px-[12px] text-[13px] font-medium text-quiet-foreground hover:text-foreground data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-[0_1px_2px_rgb(0_0_0/0.2)] dark:data-[state=active]:bg-[#636366] dark:data-[state=active]:text-white"
         value="transcript"
       >
         {isActive && <span aria-hidden="true" className="recording-tally size-[5px] rounded-full bg-destructive" />}
@@ -944,7 +944,7 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
           {/* Hidden while recording: the live clock is in the Stop button,
               and the placeholder date is blank anyway. */}
           {!isActive && sessionMeta && (
-            <p className="mt-1 truncate font-mono text-[10.5px] text-muted-foreground">{sessionMeta}</p>
+            <p className="mt-1 truncate text-[11px] tabular-nums text-muted-foreground">{sessionMeta}</p>
           )}
         </div>
 
@@ -968,10 +968,10 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
             forceMount
             className="min-h-0 flex-1 overflow-y-auto px-6 py-4 data-[state=inactive]:hidden"
           >
-            <div className="border-l-2 border-[var(--voice-remote)] pl-5">
+            <div>
               {summaryModel && (
-                <p className="mb-4 font-mono text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
-                  by {summaryModel}
+                <p className="mb-4 text-[11px] text-muted-foreground">
+                  Written by {summaryModel}
                   {" · "}
                   {/* Sharing is the point of a summary: one word away from
                       the clipboard as Markdown, ready for the person you
@@ -980,9 +980,9 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
                     type="button"
                     onClick={handleCopySummary}
                     aria-label="Copy summary"
-                    className="font-mono uppercase tracking-[0.08em] underline-offset-2 hover:text-foreground hover:underline"
+                    className="underline-offset-2 hover:text-foreground hover:underline"
                   >
-                    {summaryCopied ? "copied" : "copy"}
+                    {summaryCopied ? "Copied" : "Copy"}
                   </button>
                   {canEnhance && (
                     <>
@@ -995,9 +995,9 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
                         type="button"
                         disabled={enhanceBusy}
                         onClick={handleEnhance}
-                        className="font-mono uppercase tracking-[0.08em] underline-offset-2 hover:text-foreground hover:underline disabled:pointer-events-none disabled:opacity-50"
+                        className="underline-offset-2 hover:text-foreground hover:underline disabled:pointer-events-none disabled:opacity-50"
                       >
-                        {enhanceBusy ? "summarizing..." : "again"}
+                        {enhanceBusy ? "Summarizing..." : "Again"}
                       </button>
                     </>
                   )}
@@ -1033,7 +1033,7 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
           />
 
           {retranscribeStatusText && (
-            <p className="shrink-0 px-6 font-mono text-[10.5px] text-muted-foreground">{retranscribeStatusText}</p>
+            <p className="shrink-0 px-6 text-[11px] tabular-nums text-muted-foreground">{retranscribeStatusText}</p>
           )}
           {retranscribeError && (
             <p className="shrink-0 text-sm text-destructive">{retranscribeError}</p>

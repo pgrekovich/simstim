@@ -110,7 +110,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
                 event.stopPropagation();
                 beginEditing();
               }}
-              className="absolute right-6 top-4 rounded-full bg-foreground/[0.06] px-2 py-1 font-mono text-[9px] uppercase tracking-[0.08em] text-muted-foreground opacity-0 outline-none transition-opacity hover:text-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/45 group-hover:opacity-100"
+              className="absolute right-6 top-4 rounded-full bg-foreground/[0.06] px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.04em] text-muted-foreground opacity-0 outline-none transition-opacity hover:text-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring/45 group-hover:opacity-100"
             >
               edit
             </button>

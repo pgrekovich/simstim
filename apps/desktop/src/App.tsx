@@ -1301,7 +1301,7 @@ function App() {
 
   if (appConfig === null) {
     return (
-      <div data-tauri-drag-region className="flex h-screen items-center justify-center bg-background font-mono text-[11px] text-muted-foreground">
+      <div data-tauri-drag-region className="flex h-screen items-center justify-center bg-background text-[12px] text-muted-foreground">
         loading...
       </div>
     );
@@ -1422,7 +1422,7 @@ function App() {
           />
 
           {showTopbar && statusText && (
-            <span className="min-w-0 max-w-[35%] shrink-0 truncate font-mono text-[10.5px] text-muted-foreground">
+            <span className="min-w-0 max-w-[35%] shrink-0 truncate text-[11px] tabular-nums text-muted-foreground">
               {statusText}
             </span>
           )}
@@ -1525,7 +1525,7 @@ function App() {
           >
             <CircleAlert aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-destructive" />
             <div className="min-w-0 flex-1">
-              <p className="font-mono text-[10.5px] font-semibold uppercase tracking-[0.06em] text-destructive">
+              <p className="text-[12px] font-semibold text-destructive">
                 Something went wrong
               </p>
               <p className="mt-1 text-[12.5px] leading-[1.45] [overflow-wrap:anywhere]">
@@ -1609,7 +1609,7 @@ function App() {
                   className="mt-0.5 size-4 shrink-0 text-destructive"
                 />
                 <div className="min-w-0">
-                  <p className="font-mono text-[10.5px] font-semibold uppercase tracking-[0.06em] text-destructive">
+                  <p className="text-[12px] font-semibold text-destructive">
                     Could not open note
                   </p>
                   <p className="mt-1 text-[12.5px] leading-[1.45] [overflow-wrap:anywhere]">

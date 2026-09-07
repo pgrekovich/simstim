@@ -157,7 +157,7 @@ export function Sidebar({
         ) : (
           groups.map((group) => (
             <div key={group.label} className="flex flex-col gap-px">
-              <div className="px-2 pb-2 pt-[14px] font-mono text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+              <div className="px-2 pb-2 pt-[14px] text-[11px] font-semibold text-muted-foreground">
                 {group.label}
               </div>
               {group.sessions.map((session) => {
@@ -203,7 +203,7 @@ export function Sidebar({
                           />
                           <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                             <span className="truncate text-[12.5px] font-medium text-foreground">{session.title}</span>
-                            <span className="font-mono text-[10.5px] text-destructive">recording</span>
+                            <span className="text-[11px] text-destructive">recording</span>
                           </span>
                         </>
                       ) : busyWord ? (
@@ -218,13 +218,13 @@ export function Sidebar({
                           />
                           <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                             <span className="truncate text-[12.5px] text-inherit">{session.title}</span>
-                            <span className="font-mono text-[10.5px] text-muted-foreground">{busyWord}</span>
+                            <span className="text-[11px] tabular-nums text-muted-foreground">{busyWord}</span>
                           </span>
                         </>
                       ) : (
                         <>
                           <span className={cn("w-full truncate pr-6 text-[12.5px]", selected && "font-medium")}>{session.title}</span>
-                          <span className="font-mono text-[10.5px] text-muted-foreground">
+                          <span className="text-[11px] tabular-nums text-muted-foreground">
                             {formatTime(session.date)}
                             {duration && ` · ${duration}`}
                           </span>

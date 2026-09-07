@@ -316,7 +316,7 @@ export function Onboarding({ config, models, onOpenSettings, onComplete }: Onboa
 
           <div className="mt-7 flex items-center gap-4 rounded-[10px] border border-border bg-card/50 px-4 py-3">
             <div className="min-w-0 flex-1">
-              <p className="font-mono text-[10px] uppercase tracking-[0.07em] text-muted-foreground">
+              <p className="text-[11px] font-semibold text-muted-foreground">
                 Notes folder
               </p>
               <p className="mt-1 truncate text-[13px]" title={currentConfig.output_dir}>

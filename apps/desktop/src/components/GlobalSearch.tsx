@@ -324,7 +324,7 @@ export function GlobalSearch({
         </span>
         <span
           className={cn(
-            "inline-flex h-[17px] shrink-0 items-center rounded-[4px] px-[5px] font-mono text-[10.5px]",
+            "inline-flex h-[17px] shrink-0 items-center rounded-[4px] px-[5px] text-[11px]",
             active ? "bg-background/20 text-background" : "bg-foreground/[0.07] text-quiet-foreground",
           )}
         >
@@ -363,7 +363,7 @@ export function GlobalSearch({
             <span className="min-w-0 truncate text-[13.5px] font-medium">
               <Highlighted text={row.title} query={query} inverted={active} />
             </span>
-            <span className={cn("shrink-0 font-mono text-[10px]", metadataClass)}>
+            <span className={cn("shrink-0 text-[11px] tabular-nums", metadataClass)}>
               {[formatDate(row.date), duration].filter(Boolean).join(" · ")}
             </span>
           </span>
@@ -372,7 +372,7 @@ export function GlobalSearch({
             <span className="flex items-center gap-2">
               <span
                 className={cn(
-                  "inline-flex h-[17px] shrink-0 items-center rounded-[4px] border px-1.5 font-mono text-[9px] font-semibold uppercase tracking-[0.06em]",
+                  "inline-flex h-[17px] shrink-0 items-center rounded-[4px] border px-1.5 text-[10px] font-semibold uppercase tracking-[0.04em]",
                   active
                     ? "border-background/65 text-background"
                     : row.speaker === "Them"
@@ -382,7 +382,7 @@ export function GlobalSearch({
               >
                 {row.speaker ?? "Said"}
               </span>
-              <span className={cn("min-w-0 truncate font-mono text-[10px]", metadataClass)}>
+              <span className={cn("min-w-0 truncate text-[11px] tabular-nums", metadataClass)}>
                 {row.title}{row.timestamp ? ` · ${row.timestamp}` : ""}
               </span>
             </span>
@@ -433,7 +433,7 @@ export function GlobalSearch({
             placeholder="Search notes and transcripts"
             className="min-w-0 flex-1 bg-transparent text-[15px] outline-none placeholder:text-muted-foreground"
           />
-          <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
+          <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
             {loading ? "searching" : `${resultCount} ${resultCount === 1 ? "result" : "results"}`}
           </span>
         </div>
@@ -451,7 +451,7 @@ export function GlobalSearch({
             <>
               {noteRows.length > 0 && (
                 <section aria-label="Notes">
-                  <p className="px-3 pb-1.5 pt-2 font-mono text-[9.5px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+                  <p className="px-3 pb-1.5 pt-2 text-[11px] font-semibold text-muted-foreground">
                     Notes
                   </p>
                   {noteRows.map(renderRow)}
@@ -459,7 +459,7 @@ export function GlobalSearch({
               )}
               {spokenRows.length > 0 && (
                 <section aria-label="Spoken">
-                  <p className="px-3 pb-1.5 pt-3 font-mono text-[9.5px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+                  <p className="px-3 pb-1.5 pt-3 text-[11px] font-semibold text-muted-foreground">
                     Spoken
                   </p>
                   {spokenRows.map(renderRow)}
@@ -489,7 +489,7 @@ export function GlobalSearch({
           )}
         </div>
 
-        <div className="flex h-[38px] items-center gap-4 border-t bg-card px-[18px] font-mono text-[10px] text-muted-foreground">
+        <div className="flex h-[38px] items-center gap-4 border-t bg-card px-[18px] text-[11px] text-muted-foreground">
           <span>↑↓ move</span>
           <span className="flex items-center gap-1"><CornerDownLeft className="size-3" /> open</span>
           <span className="flex-1" />

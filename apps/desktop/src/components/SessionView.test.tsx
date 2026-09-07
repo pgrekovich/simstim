@@ -931,6 +931,6 @@ describe("SessionView: copy summary", () => {
     fireEvent.click(screen.getByRole("button", { name: /copy summary/i }));
 
     expect(writeText).toHaveBeenCalledExactlyOnceWith("### Decisions\n- ship v2 friday");
-    await waitFor(() => expect(screen.getByRole("button", { name: /copy summary/i })).toHaveTextContent("copied"));
+    await waitFor(() => expect(screen.getByRole("button", { name: /copy summary/i })).toHaveTextContent("Copied"));
   });
 });

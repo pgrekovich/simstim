@@ -194,8 +194,10 @@ function TurnRow({
   children: ReactNode;
 }) {
   return (
-    <div className="group grid grid-cols-[64px_minmax(0,1fr)] gap-x-3">
-      <div className="flex flex-col items-end gap-[1px] pt-[2px] text-right">
+    <div className="group grid grid-cols-[44px_minmax(0,1fr)] gap-x-3">
+      {/* The gutter is one line tall: the timestamp hangs below the speaker
+          out of the flow, so a hidden clock never pads the turn. */}
+      <div className="relative pt-[2px] text-right">
         <span
           className={
             speaker === "Them"
@@ -207,7 +209,7 @@ function TurnRow({
         </span>
         {/* The clock is there when you look for it (hover, keyboard focus
             inside the turn), quiet otherwise: the words are the content. */}
-        <span className="text-[11px] leading-[1.4] tabular-nums text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+        <span className="absolute right-0 top-[19px] whitespace-nowrap text-[10.5px] leading-none tabular-nums text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
           {timestamp}
         </span>
       </div>

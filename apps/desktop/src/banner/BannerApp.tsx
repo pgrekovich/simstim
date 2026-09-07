@@ -112,7 +112,7 @@ export default function BannerApp() {
       onMouseLeave={() => setHovered(false)}
     >
       <div className="relative w-full">
-        <div className="relative rounded-[18px] border border-border bg-popover shadow-[0_12px_38px_rgba(20,17,12,0.38)] dark:shadow-[0_12px_38px_rgba(0,0,0,0.55)]">
+        <div className="relative rounded-[18px] border border-border bg-popover shadow-[0_1px_2px_rgba(0,0,0,0.12),0_3px_8px_rgba(0,0,0,0.16)] dark:shadow-[0_1px_2px_rgba(0,0,0,0.5),0_3px_8px_rgba(0,0,0,0.5)]">
           <div className="flex items-center gap-3 py-[11px] pl-[13px] pr-3">
             <img src={appIcon} alt="" className="size-[38px] shrink-0 rounded-[9px]" />
             <div className="min-w-0 flex-1">
@@ -128,7 +128,7 @@ export default function BannerApp() {
             <div
               className={
                 detected
-                  ? "flex h-[34px] shrink-0 items-stretch overflow-hidden rounded-[9px] bg-foreground text-background"
+                  ? "flex h-[34px] shrink-0 items-stretch overflow-hidden rounded-[9px] bg-primary text-primary-foreground"
                   : "flex h-[34px] shrink-0 items-stretch overflow-hidden rounded-[9px] bg-destructive text-white"
               }
             >
@@ -156,7 +156,7 @@ export default function BannerApp() {
         {hovered && (
           <button
             aria-label="Dismiss"
-            className="absolute -left-[7px] -top-[7px] flex size-[22px] items-center justify-center rounded-full border border-border bg-popover text-muted-foreground shadow-[0_2px_7px_rgba(0,0,0,0.28)] hover:bg-muted hover:text-foreground"
+            className="absolute -left-[7px] -top-[7px] flex size-[22px] items-center justify-center rounded-full border border-border bg-popover text-muted-foreground shadow-[0_1px_3px_rgba(0,0,0,0.2)] hover:bg-muted hover:text-foreground"
             onClick={() => void bannerDismiss()}
           >
             <X className="size-3" />
@@ -164,7 +164,7 @@ export default function BannerApp() {
         )}
 
         {menuOpen && (
-          <div className="absolute right-0 top-full z-10 mt-0.5 w-56 rounded-[12px] border border-border bg-popover p-[5px] shadow-[0_12px_34px_rgba(20,17,12,0.34)]">
+          <div className="absolute right-0 top-full z-10 mt-0.5 w-56 rounded-[12px] border border-border bg-popover p-[5px] shadow-[0_1px_2px_rgba(0,0,0,0.12),0_3px_8px_rgba(0,0,0,0.16)]">
             <button
               className="flex h-[29px] w-full items-center rounded-[7px] px-[9px] text-left text-[13px] hover:bg-accent hover:text-accent-foreground"
               onClick={() => {

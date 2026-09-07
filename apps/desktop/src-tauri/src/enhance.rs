@@ -454,6 +454,11 @@ pub(crate) fn build_prompt(
              дополняет их фактами, решениями, числами и именами. {cyrillic_task}.\n\
              Учитывай поздние уточнения. Полностью исключи приветствия, шутки,\n\
              повторы, ругань, старые инциденты и побочные истории.\n\
+             Язык ответа: основной язык звонка, то есть язык, на котором идёт\n\
+             большая часть расшифровки. Слова, фразы и даже целые отрезки на\n\
+             другом языке его не меняют: оставляй их только как термины, где нужно.\n\
+             Единственное исключение: если пользователь вёл заметки, пиши на языке\n\
+             заметок пользователя, даже когда расшифровка в основном на другом.\n\
              {final_check}. Верни только короткий Markdown без заголовка документа.\n\
              {extra_rules}"
         );
@@ -735,21 +740,44 @@ fn compact_transcript(transcript: &str) -> String {
 /// Speaker labels and prompt instructions are English even when the call is
 /// not. Give the model a deterministic script hint so those wrapper tokens
 /// cannot make it translate a Russian call into English.
+/// The output language, decided by precedence (owner ruling 2026-09-07):
+/// the call's main language is the one most of the transcript is spoken in,
+/// and words, phrases or whole exchanges in another language do not change
+/// it. The only thing that overrides it is the language the user wrote
+/// their notes in. So the notes decide when they hold real text; otherwise
+/// the transcript does. The two are never pooled: a long English call must
+/// not outvote a user who took notes in Russian, nor the other way round.
+/// Script-level (Cyrillic vs Latin) because that is the branch the prompt
+/// has; within one script the prompt's own wording carries the same rule.
 fn uses_cyrillic_output(notes: &str, transcript: &str) -> bool {
-    let text = format!("{notes}\n{transcript}");
-    let cyrillic = text
-        .chars()
-        .filter(|ch| matches!(*ch as u32, 0x0400..=0x052f))
-        .count();
-    let latin = text.chars().filter(|ch| ch.is_ascii_alphabetic()).count();
-    cyrillic >= 20 && cyrillic > latin
+    /// Fewer letters than this is a stray word or an emoji title, not a
+    /// language choice.
+    const MIN_LETTERS: usize = 20;
+    fn counts(text: &str) -> (usize, usize) {
+        let cyrillic = text
+            .chars()
+            .filter(|ch| matches!(*ch as u32, 0x0400..=0x052f))
+            .count();
+        let latin = text.chars().filter(|ch| ch.is_ascii_alphabetic()).count();
+        (cyrillic, latin)
+    }
+    let (notes_cyrillic, notes_latin) = counts(notes);
+    if notes_cyrillic + notes_latin >= MIN_LETTERS {
+        return notes_cyrillic > notes_latin;
+    }
+    let (cyrillic, latin) = counts(transcript);
+    cyrillic >= MIN_LETTERS && cyrillic > latin
 }
 
+/// The one language rule the prompt states in words, since the script
+/// heuristic above cannot tell Polish from English: main language of the
+/// call = the language most of the transcript is spoken in, foreign words
+/// and passages do not change it, the user's notes override it.
 fn output_language_rule(cyrillic_output: bool) -> &'static str {
     if cyrillic_output {
-        "The spoken content is predominantly Cyrillic. Write exclusively in that same language and script. Never translate it to English. Ignore the English Me/Them labels, title, timestamps, headings and these instructions when choosing the output language"
+        "The call's main language is the one most of the transcript is spoken in (here, a Cyrillic language). Write exclusively in that language and script. Words, phrases or whole exchanges in another language do not change the output language; keep them only as terms where needed. The one exception: if the user wrote notes, write in the language of the user's notes, even when the transcript is mostly in another language. Never translate to English. Ignore the English Me/Them labels, title, timestamps, headings and these instructions when choosing the output language"
     } else {
-        "Write exclusively in the dominant natural language of the spoken transcript. Never choose English merely because the Me/Them labels, title, timestamps, headings or these instructions are English"
+        "The call's main language is the one most of the transcript is spoken in. Write exclusively in that language. Words, phrases or whole exchanges in another language do not change the output language; keep them only as terms where needed. The one exception: if the user wrote notes, write in the language of the user's notes, even when the transcript is mostly in another language. Never choose English merely because the Me/Them labels, title, timestamps, headings or these instructions are English"
     }
 }
 
@@ -1252,6 +1280,46 @@ mod tests {
             assert!(p.contains("under 140 words"));
             assert!(p.contains("at most 3 bullets"));
             assert!(p.ends_with("Stay under the requested word limit.\n"));
+        }
+
+        /// Owner ruling 2026-09-07: the transcript's main language is the
+        /// call's language, foreign phrases do not change it, and only the
+        /// language of the user's notes overrides it.
+        #[test]
+        fn notes_language_overrides_transcript_language_and_neither_is_pooled() {
+            let russian_call = "[00:00:01] Me: Давайте выпустим новую версию в пятницу и проверим тесты\n\
+                                [00:00:05] Them: Хорошо, и заодно обновим документацию";
+            let english_call = "[00:00:01] Me: Let's ship the new version on Friday and run the tests\n\
+                                [00:00:05] Them: Sounds good, and update the documentation as well";
+            // No notes: the transcript decides.
+            assert!(uses_cyrillic_output("", russian_call));
+            assert!(!uses_cyrillic_output("", english_call));
+            // A few foreign words or an emoji do not flip the call's language.
+            assert!(uses_cyrillic_output("", &format!("{russian_call}\n[00:00:09] Me: ok deploy staging")));
+            assert!(uses_cyrillic_output("🚀 ok", russian_call));
+            // Real notes override the transcript in both directions, even
+            // when the transcript is much longer than the notes.
+            let long_english = english_call.repeat(6);
+            assert!(uses_cyrillic_output("- релиз в пятницу\n- обновить доки", &long_english));
+            let long_russian = russian_call.repeat(6);
+            assert!(!uses_cyrillic_output("- release on Friday\n- update docs", &long_russian));
+        }
+
+        #[test]
+        fn language_precedence_is_spelled_out_in_both_prompt_branches() {
+            let english = build_prompt("Untitled", "", "[00:00:01] Me: hi", false, false, None);
+            assert!(english.contains("main language is the one most of the transcript is spoken in"));
+            assert!(english.contains("write in the language of the user's notes"));
+            let cyrillic = build_prompt(
+                "Untitled",
+                "",
+                "[00:00:01] Me: Давайте выпустим новую версию в пятницу и проверим тесты",
+                false,
+                false,
+                None,
+            );
+            assert!(cyrillic.contains("основной язык звонка"), "{cyrillic}");
+            assert!(cyrillic.contains("пиши на языке\nзаметок пользователя") || cyrillic.contains("на языке заметок пользователя"), "{cyrillic}");
         }
 
         #[test]

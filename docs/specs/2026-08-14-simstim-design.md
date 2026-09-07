@@ -709,6 +709,12 @@ implemented the same day and binding from here on:
   run also returns a `PEOPLE:` line with the names actually found in the
   transcript, so an all-hands still records who spoke; the calendar's own
   roster wins whenever it has one.
+- **Output language** (2026-09-07 ruling): the call's main language is the
+  one most of the transcript is spoken in; words, phrases or whole passages
+  in another language do not change it. The only override is the language
+  the user's notes are written in. The detector applies the same precedence
+  (notes decide when they hold real text, else the transcript) and never
+  pools the two, so a long English call cannot outvote Russian notes.
 
 Not done, still owed to the review: a shared "Finishing your note" status
 in the note itself, naming "Them" from `people:` on 1:1 calls, a Share

@@ -348,3 +348,110 @@
 .dark [data-selected="true"] {
     background: color-mix(in srgb, var(--primary) 24%, transparent) !important;
 }
+
+@layer base {
+  /* Scrollbars stay invisible until the pointer is over the scroll container
+     or it is actively scrolling (the `is-scrolling` class is tagged by
+     scrollbar-reveal.ts, since WebKit loses its native "show while
+     scrolling" overlay behavior the moment ::-webkit-scrollbar is
+     customized). Both the standard scrollbar-color path and the -webkit
+     pseudo-element path get the same treatment: which one WKWebView honors
+     depends on its version. */
+  * {
+    @apply border-border outline-ring/50;
+    scrollbar-color: transparent transparent;
+    scrollbar-width: thin;
+    }
+  *:hover,
+  .is-scrolling {
+    scrollbar-color: var(--scrollbar-thumb) transparent;
+    }
+  *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+    }
+  *::-webkit-scrollbar-track,
+  *::-webkit-scrollbar-corner {
+    background: transparent;
+    }
+  *::-webkit-scrollbar-thumb {
+    min-height: 36px;
+    border: 2px solid transparent;
+    border-radius: 999px;
+    background: transparent;
+    background-clip: padding-box;
+    }
+  *:hover::-webkit-scrollbar-thumb,
+  .is-scrolling::-webkit-scrollbar-thumb {
+    background: var(--scrollbar-thumb);
+    background-clip: padding-box;
+    }
+  *::-webkit-scrollbar-thumb:hover {
+    background: var(--scrollbar-thumb-hover);
+    background-clip: padding-box;
+    }
+  *::-webkit-scrollbar-button {
+    display: none;
+    width: 0;
+    height: 0;
+    }
+  body {
+    @apply m-0 bg-background font-sans text-foreground;
+    }
+  /* Desktop app, not a web page: controls get the arrow cursor, the way
+     every native macOS button does. Overrides Tailwind preflight's
+     web-convention `cursor: pointer` on buttons. */
+  button,
+  [role="button"],
+  [role="tab"],
+  [role="menuitem"] {
+    cursor: default;
+    }
+  /* The global search palette provides Escape and keyboard navigation;
+     WebKit's native blue clear glyph does not belong to the design and
+     crowds the result count at narrow widths. */
+  input[type="search"]::-webkit-search-cancel-button {
+    display: none;
+    appearance: none;
+    }
+  /* The banner window is a transparent layer around a floating card
+     (main.tsx tags <html> with .banner-window); the default opaque body
+     would paint the whole window rectangle. Smoothing matches how macOS
+     renders its own notification text. */
+  .banner-window body {
+    background: transparent;
+    }
+}
+
+@keyframes recording-tally {
+  0%, 100% { opacity: 0.42; }
+  50% { opacity: 1; }
+}
+
+.recording-tally {
+  animation: recording-tally 1.6s ease-in-out infinite;
+}
+
+/* The design language's second (and last) sanctioned animation: the
+   indeterminate work spinner, a hairline ring whose top arc carries
+   currentColor while the rest stays a faint track. Used wherever the app is
+   doing machine work the user waits on (summarizing, re-transcribing). */
+@keyframes working-spin {
+  to { transform: rotate(360deg); }
+}
+
+.working-spinner {
+  border-radius: 9999px;
+  border: 1.5px solid color-mix(in srgb, currentColor 25%, transparent);
+  border-top-color: currentColor;
+  animation: working-spin 0.9s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .recording-tally,
+  .working-spinner,
+  .animate-pulse,
+  .animate-spin {
+    animation: none !important;
+  }
+}

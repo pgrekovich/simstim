@@ -184,3 +184,20 @@ describe("TranscriptView: citation jump (stage 4.2)", () => {
     expect(scrollIntoView).not.toHaveBeenCalled();
   });
 });
+
+describe("TranscriptView: selecting text never seeks", () => {
+  it("ignores the click that ends a text selection", () => {
+    const onSeek = vi.fn();
+    render(<TranscriptView lines={["[00:00:04] Me: copy this passage"]} onSeek={onSeek} />);
+    const original = window.getSelection;
+    window.getSelection = () => ({ toString: () => "copy this" }) as unknown as Selection;
+    try {
+      fireEvent.click(screen.getByRole("button", { name: /copy this passage/i }));
+      expect(onSeek).not.toHaveBeenCalled();
+    } finally {
+      window.getSelection = original;
+    }
+    fireEvent.click(screen.getByRole("button", { name: /copy this passage/i }));
+    expect(onSeek).toHaveBeenCalledWith(4);
+  });
+});

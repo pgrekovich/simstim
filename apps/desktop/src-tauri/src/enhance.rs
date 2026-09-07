@@ -245,6 +245,8 @@ pub(crate) fn calendar_lookup_prompt(start: &str, end: &str) -> String {
          STRICT JSON only, no prose, no code fences, in exactly one of these shapes:\n\
          {{\"found\": true, \"title\": \"<the event's title, verbatim>\", \"attendees\": [\"name\"]}}\n\
          {{\"found\": false}}\n\
+         List individual people only: never a mailing list, group alias or room. If the \
+         invitation lists only a group address, use an empty attendees list.\n\
          Never invent an event: if the tools fail or nothing overlaps, reply with found false.\n"
     )
 }
@@ -261,8 +263,35 @@ pub(crate) fn parse_calendar_reply(text: &str) -> Option<CalendarEvent> {
     let title = sanitize_event_title(reply.title.as_deref()?);
     (!title.is_empty()).then_some(CalendarEvent {
         title,
-        attendees: reply.attendees,
+        attendees: drop_group_addresses(reply.attendees),
     })
+}
+
+/// Invitations often list a mailing list ("internal@company.com",
+/// "team@...") instead of, or next to, the people on it. A group is not a
+/// person: it would render as "with Internal" under the note (owner report).
+/// Name-based and deliberately narrow; a list this misses is simply kept.
+pub(crate) fn drop_group_addresses(attendees: Vec<String>) -> Vec<String> {
+    const GROUP_WORDS: &[&str] = &[
+        "all", "everyone", "everybody", "team", "teams", "staff", "internal", "external",
+        "dev", "devs", "developers", "engineering", "eng", "product", "design", "sales",
+        "marketing", "support", "hr", "people", "ops", "admin", "office", "company", "group",
+        "list", "noreply", "no-reply", "calendar", "meetings", "invites", "info", "hello",
+        "founders", "leadership", "management", "board",
+    ];
+    attendees
+        .into_iter()
+        .filter(|attendee| {
+            let Some((local, _)) = attendee.trim().split_once('@') else {
+                return true;
+            };
+            let local = local.to_ascii_lowercase();
+            !GROUP_WORDS.contains(&local.as_str())
+                && !local.ends_with("-team")
+                && !local.ends_with("-all")
+                && !local.starts_with("all-")
+        })
+        .collect()
 }
 
 /// The event name stays verbatim except what the line-oriented `title:`
@@ -1256,6 +1285,18 @@ mod tests {
             .unwrap();
             assert_eq!(event.title, "Q3 Budget Review");
             assert_eq!(event.attendees, vec!["Pavel"]);
+        }
+
+        #[test]
+        fn group_addresses_are_not_people() {
+            let kept = drop_group_addresses(vec![
+                "internal@demoboost.com".to_string(),
+                "m.suwald@demoboost.com".to_string(),
+                "Anna Berg".to_string(),
+                "dev-team@x.io".to_string(),
+                "all-hands@x.io".to_string(),
+            ]);
+            assert_eq!(kept, vec!["m.suwald@demoboost.com", "Anna Berg"]);
 
             // Stray prose or fences around the JSON are tolerated.
             let fenced = parse_calendar_reply(

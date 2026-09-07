@@ -1037,6 +1037,34 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
             findStacked && "pt-10",
           )}
         >
+          {/* The transcript's own quiet line, the twin of the summary's
+              provenance line: copy, and the accurate pass by hand. */}
+          {(transcriptLines.length > 0 || audioPath) && (
+            <p className="shrink-0 px-6 text-[11px] text-muted-foreground">
+              <button
+                type="button"
+                onClick={handleCopyTranscript}
+                aria-label="Copy transcript"
+                disabled={transcriptLines.length === 0}
+                className="underline-offset-2 hover:text-foreground hover:underline disabled:pointer-events-none disabled:opacity-50"
+              >
+                {transcriptCopied ? "Copied" : "Copy"}
+              </button>
+              {audioPath && (
+                <>
+                  {" · "}
+                  <button
+                    type="button"
+                    disabled={isActive || retranscribeBusy}
+                    onClick={handleRetranscribe}
+                    className="underline-offset-2 hover:text-foreground hover:underline disabled:pointer-events-none disabled:opacity-50"
+                  >
+                    {retranscribeBusy ? "Improving..." : "Improve transcript"}
+                  </button>
+                </>
+              )}
+            </p>
+          )}
           <TranscriptView
             lines={transcriptLines}
             interimMe={isActive ? interimMe : undefined}
@@ -1065,31 +1093,6 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
             <AudioPlayer
               ref={playerRef}
               src={convertFileSrc(audioPath)}
-              trailing={
-                <>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="shrink-0"
-                    aria-label="Copy transcript"
-                    disabled={transcriptLines.length === 0}
-                    onClick={handleCopyTranscript}
-                  >
-                    {transcriptCopied ? "Copied" : "Copy"}
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="shrink-0"
-                    disabled={isActive || retranscribeBusy}
-                    onClick={handleRetranscribe}
-                  >
-                    {retranscribeBusy ? "Improving..." : "Improve transcript"}
-                  </Button>
-                </>
-              }
             />
           )}
         </TabsContent>

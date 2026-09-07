@@ -194,7 +194,7 @@ function TurnRow({
   children: ReactNode;
 }) {
   return (
-    <div className="grid grid-cols-[64px_minmax(0,1fr)] gap-x-3">
+    <div className="group grid grid-cols-[64px_minmax(0,1fr)] gap-x-3">
       <div className="flex flex-col items-end gap-[1px] pt-[2px] text-right">
         <span
           className={
@@ -205,7 +205,9 @@ function TurnRow({
         >
           {speaker}
         </span>
-        <span className="text-[11px] leading-[1.4] tabular-nums text-muted-foreground">
+        {/* The clock is there when you look for it (hover, keyboard focus
+            inside the turn), quiet otherwise: the words are the content. */}
+        <span className="text-[11px] leading-[1.4] tabular-nums text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
           {timestamp}
         </span>
       </div>
@@ -317,7 +319,12 @@ export function TranscriptView({
                             role="button"
                             tabIndex={0}
                             title={item.timestamp}
-                            onClick={() => onSeek(timestampToSeconds(item.timestamp))}
+                            onClick={() => {
+                              // A drag to select words ends in a click too;
+                              // copying a passage must never start playback.
+                              if (window.getSelection()?.toString()) return;
+                              onSeek(timestampToSeconds(item.timestamp));
+                            }}
                             onKeyDown={(event) => {
                               if (event.key === "Enter" || event.key === " ") {
                                 event.preventDefault();

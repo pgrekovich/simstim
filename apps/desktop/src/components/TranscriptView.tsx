@@ -195,8 +195,11 @@ function TurnRow({
   children: ReactNode;
 }) {
   return (
-    <div className="grid grid-cols-[44px_minmax(0,1fr)] gap-x-3">
-      <div className="pt-[2px] text-right">
+    // Baseline alignment: the 11.5px label and the 15px words share a
+    // baseline, which is the only way the two type sizes read as one line
+    // (a fixed top padding drifted with the fonts; owner screenshot).
+    <div className="grid grid-cols-[44px_minmax(0,1fr)] items-baseline gap-x-3">
+      <div className="text-right">
         <span
           className={
             speaker === "Them"

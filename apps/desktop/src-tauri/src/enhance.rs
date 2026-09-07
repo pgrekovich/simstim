@@ -270,7 +270,11 @@ pub(crate) fn parse_calendar_reply(text: &str) -> Option<CalendarEvent> {
 /// Invitations often list a mailing list ("internal@company.com",
 /// "team@...") instead of, or next to, the people on it. A group is not a
 /// person: it would render as "with Internal" under the note (owner report).
+/// The calendar connector may also hand back the list's display name alone
+/// ("internal"), so a bare one-word entry is judged by the same list.
 /// Name-based and deliberately narrow; a list this misses is simply kept.
+/// The UI applies the same rule at render time (`lib/people.ts`) so notes
+/// written before this filter existed read right too; keep the two in step.
 pub(crate) fn drop_group_addresses(attendees: Vec<String>) -> Vec<String> {
     const GROUP_WORDS: &[&str] = &[
         "all", "everyone", "everybody", "team", "teams", "staff", "internal", "external",
@@ -282,8 +286,13 @@ pub(crate) fn drop_group_addresses(attendees: Vec<String>) -> Vec<String> {
     attendees
         .into_iter()
         .filter(|attendee| {
-            let Some((local, _)) = attendee.trim().split_once('@') else {
-                return true;
+            let trimmed = attendee.trim();
+            let local = match trimmed.split_once('@') {
+                Some((local, _)) => local,
+                // A real name has a space or is an address; a lone word
+                // like "internal" is the list's display name.
+                None if trimmed.contains(' ') => return true,
+                None => trimmed,
             };
             let local = local.to_ascii_lowercase();
             !GROUP_WORDS.contains(&local.as_str())
@@ -1291,12 +1300,14 @@ mod tests {
         fn group_addresses_are_not_people() {
             let kept = drop_group_addresses(vec![
                 "internal@demoboost.com".to_string(),
+                "Internal".to_string(),
                 "m.suwald@demoboost.com".to_string(),
                 "Anna Berg".to_string(),
+                "Pavel".to_string(),
                 "dev-team@x.io".to_string(),
                 "all-hands@x.io".to_string(),
             ]);
-            assert_eq!(kept, vec!["m.suwald@demoboost.com", "Anna Berg"]);
+            assert_eq!(kept, vec!["m.suwald@demoboost.com", "Anna Berg", "Pavel"]);
 
             // Stray prose or fences around the JSON are tolerated.
             let fenced = parse_calendar_reply(

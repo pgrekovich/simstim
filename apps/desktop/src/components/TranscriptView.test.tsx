@@ -34,7 +34,7 @@ describe("TranscriptView: transcript find (stage 2.1)", () => {
 });
 
 describe("TranscriptView: consecutive same-speaker lines group into one turn", () => {
-  it("shows one speaker label per turn, with the turn's first timestamp", () => {
+  it("shows one speaker label per turn and keeps every chunk's timestamp on its tooltip only", () => {
     render(
       <TranscriptView
         lines={[
@@ -48,11 +48,13 @@ describe("TranscriptView: consecutive same-speaker lines group into one turn", (
 
     expect(screen.getAllByText("Me")).toHaveLength(1);
     expect(screen.getAllByText("Them")).toHaveLength(1);
-    expect(screen.getByText("00:00:02")).toBeInTheDocument();
-    // The grouped lines' own timestamps are not printed as headers.
-    expect(screen.queryByText("00:00:06")).toBeNull();
-    expect(screen.queryByText("00:00:10")).toBeNull();
-    expect(screen.getByText("00:00:15")).toBeInTheDocument();
+    // No clock is printed anywhere (owner ruling 2026-09-07); each chunk
+    // still says when it was said, on hover, through the native tooltip.
+    for (const clock of ["00:00:02", "00:00:06", "00:00:10", "00:00:15"]) {
+      expect(screen.queryByText(clock)).toBeNull();
+    }
+    expect(screen.getByTitle("00:00:06")).toHaveTextContent("Yeah.");
+    expect(screen.getByTitle("00:00:15")).toHaveTextContent("Okay.");
   });
 
   it("keeps every grouped chunk individually seekable at its own offset", () => {
@@ -84,8 +86,8 @@ describe("TranscriptView: consecutive same-speaker lines group into one turn", (
     // The annotation splits one speaker into two labeled turns.
     expect(screen.getAllByText("Me")).toHaveLength(2);
     expect(screen.getByText(/hand-added annotation/)).toBeInTheDocument();
-    expect(screen.getByText("00:00:02")).toBeInTheDocument();
-    expect(screen.getByText("00:00:09")).toBeInTheDocument();
+    expect(screen.getByTitle("00:00:02")).toHaveTextContent("before");
+    expect(screen.getByTitle("00:00:09")).toHaveTextContent("after");
   });
 
   it("still finds and highlights matches inside a grouped turn", () => {

@@ -174,7 +174,15 @@ export function Sidebar({
                   // 2026-09-07: the menu is enough, and Notes has none).
                   <ContextMenu key={session.path}>
                     <ContextMenuTrigger asChild>
-                  <div className="group relative border-b border-border last:border-b-0">
+                  <div
+                    className={cn(
+                      // Notes hides the hairlines touching the selected row
+                      // (its tint reads as the divider); the row above loses
+                      // its line through the `note-row` rule in index.css.
+                      "note-row group relative border-b border-border last:border-b-0",
+                      selected && "border-transparent"
+                    )}
+                  >
                     <button
                       type="button"
                       onClick={() => onSelect(session.path)}

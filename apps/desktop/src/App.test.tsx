@@ -804,8 +804,9 @@ describe("App: record continues into the open note (behavior fix)", () => {
     await screen.findByDisplayValue("old notes");
     // The existing transcript line must still be visible: recording into an
     // open note must not lose what was already there.
-    await waitFor(() => expect(document.body.textContent).toContain("00:00:01"));
-    await waitFor(() => expect(document.body.textContent).toContain("hi"));
+    // Its clock is not printed (owner ruling 2026-09-07), it lives on the
+    // chunk's tooltip.
+    await waitFor(() => expect(screen.getByTitle("00:00:01")).toHaveTextContent("hi"));
   });
 
   it("flushes a pending, still-debouncing notes edit via save_session before start_recording is called (lost-edit race fix)", async () => {

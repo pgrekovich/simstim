@@ -178,26 +178,25 @@ export function nearestLineIndex(lines: string[], timestamp: string): number {
 
 /**
  * One speaker turn in the Voice Memos layout (2026-09-07 HIG pass): the
- * speaker and the turn's first timestamp sit in a narrow left gutter, the
- * words flow as one paragraph to the right. "Them" takes the accent color,
- * "Me" the ink, so a glance down the gutter shows who talked.
+ * speaker sits in a narrow left gutter, the words flow as one paragraph to
+ * the right. "Them" takes the accent color, "Me" the ink, so a glance down
+ * the gutter shows who talked. No clock is printed anywhere: every chunk
+ * carries its timestamp as a native tooltip (owner ruling 2026-09-07, the
+ * gutter clock was "ugly" both visible and on hover), and the OS delays
+ * tooltips on its own so they never flicker while reading.
  */
 function TurnRow({
   speaker,
-  timestamp,
   draft = false,
   children,
 }: {
   speaker: "Me" | "Them";
-  timestamp: string;
   draft?: boolean;
   children: ReactNode;
 }) {
   return (
-    <div className="group grid grid-cols-[44px_minmax(0,1fr)] gap-x-3">
-      {/* The gutter is one line tall: the timestamp hangs below the speaker
-          out of the flow, so a hidden clock never pads the turn. */}
-      <div className="relative pt-[2px] text-right">
+    <div className="grid grid-cols-[44px_minmax(0,1fr)] gap-x-3">
+      <div className="pt-[2px] text-right">
         <span
           className={
             speaker === "Them"
@@ -206,11 +205,6 @@ function TurnRow({
           }
         >
           {speaker}
-        </span>
-        {/* The clock is there when you look for it (hover, keyboard focus
-            inside the turn), quiet otherwise: the words are the content. */}
-        <span className="absolute right-0 top-[19px] whitespace-nowrap text-[10.5px] leading-none tabular-nums text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
-          {timestamp}
         </span>
       </div>
       <p
@@ -301,11 +295,10 @@ export function TranscriptView({
                 );
               }
               return (
-                <TurnRow key={block.items[0].index} speaker={block.speaker} timestamp={block.items[0].timestamp}>
+                <TurnRow key={block.items[0].index} speaker={block.speaker}>
                   {/* One flowing paragraph per turn; every ASR chunk inside
-                      stays its own seekable fragment (its timestamp is on
-                      the hover title, since only the turn's first one is
-                      printed in the gutter). */}
+                      stays its own seekable fragment, its timestamp on the
+                      native tooltip. */}
                   {block.items.map((item, j) => {
                     const body = highlightedText(item.text, item.index, matches, activeMatchIndex);
                     return (
@@ -338,7 +331,7 @@ export function TranscriptView({
                             {body}
                           </span>
                         ) : (
-                          <span ref={(element) => { lineRefs.current[item.index] = element; }}>
+                          <span ref={(element) => { lineRefs.current[item.index] = element; }} title={item.timestamp}>
                             {body}
                           </span>
                         )}
@@ -349,12 +342,12 @@ export function TranscriptView({
               );
             })}
             {interimMe && (
-              <TurnRow speaker="Me" timestamp="···" draft>
+              <TurnRow speaker="Me" draft>
                 {interimMe}
               </TurnRow>
             )}
             {interimThem && (
-              <TurnRow speaker="Them" timestamp="···" draft>
+              <TurnRow speaker="Them" draft>
                 {interimThem}
               </TurnRow>
             )}

@@ -349,6 +349,12 @@
     background: color-mix(in srgb, var(--primary) 24%, transparent) !important;
 }
 
+/* The hairline above the selected note row goes too (Notes does this): the
+   row that owns it is the previous sibling, which no utility can address. */
+.note-row:has(+ .note-row [data-selected="true"]) {
+    border-color: transparent;
+}
+
 @layer base {
   /* Scrollbars stay invisible until the pointer is over the scroll container
      or it is actively scrolling (the `is-scrolling` class is tagged by

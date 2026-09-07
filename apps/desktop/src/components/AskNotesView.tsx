@@ -8,6 +8,7 @@ import {
   type ChatSource,
   type SessionMeta,
 } from "@/lib/ipc";
+import { quickQuestionsFor, usePrompts } from "@/lib/prompts";
 
 interface AskNotesViewProps {
   sessions: SessionMeta[];
@@ -34,6 +35,7 @@ export function AskNotesView({ sessions, askRequest, onOpenCitation }: AskNotesV
   // Remounts the conversation after a clear so it re-seeds from the (now
   // empty) backend history -- the conversation is backend-owned state.
   const [clearTick, setClearTick] = useState(0);
+  const { prompts } = usePrompts();
 
   useEffect(() => {
     let cancelled = false;
@@ -91,6 +93,7 @@ export function AskNotesView({ sessions, askRequest, onOpenCitation }: AskNotesV
         sessions={sessions}
         placeholder={noteCount ? `Ask anything about ${noteCount}...` : "Ask anything about your notes..."}
         askRequest={askRequest}
+        quickQuestions={quickQuestionsFor(prompts, "notes")}
         onOpenCitation={onOpenCitation}
         emptyState={
           <div className="flex h-full items-center justify-center">

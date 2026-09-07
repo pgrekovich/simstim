@@ -44,6 +44,11 @@ valid: omitted values use the defaults shown below. Restart simstim after a
 manual edit so startup-only settings such as Dock presence and call detection
 are reapplied.
 
+Your prompts live next to it in `prompts.toml`: standing instructions added to
+every summary, summary styles (how a note's Summary section is written) and
+quick questions for the chat. Settings edits the same file; it is seeded with
+a few defaults on first read and is yours to edit, version or sync.
+
 ```toml
 output_dir = "~/Documents/simstim"
 active_model = "parakeet-tdt-0.6b-v3-int8"

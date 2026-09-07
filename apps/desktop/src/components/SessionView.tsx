@@ -7,7 +7,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { ChevronDown, ChevronUp, Sparkles, X } from "lucide-react";
+import { Check, ChevronDown, ChevronUp, Sparkles, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { createPortal } from "react-dom";
 import { convertFileSrc } from "@tauri-apps/api/core";
@@ -18,6 +18,12 @@ import {
   type MarkdownEditorHandle,
 } from "@/components/Markdown";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { findTranscriptMatches, TranscriptView } from "@/components/TranscriptView";
 import {
@@ -30,6 +36,7 @@ import {
 } from "@/lib/ipc";
 import { formatDuration } from "@/lib/utils";
 import { describePeople } from "@/lib/people";
+import { STANDARD_STYLE, styleName, usePrompts } from "@/lib/prompts";
 import { isTranscriptUpdatedButAudioDeleteFailed, type RetranscribeJob } from "@/lib/retranscribeStatus";
 
 /** Global Constraints (Task 6): notes save 500ms after the last keystroke. */
@@ -298,6 +305,11 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
   // in-place refresh to track here anymore.
   const summary = initialData.summary;
   const summaryModel = initialData.summary_model;
+  // Which of the user's summary styles wrote this summary (`summary_style:`
+  // frontmatter), `null` for the built-in prompt. The style menu in the
+  // provenance line lists the current prompts.toml styles.
+  const summaryStyle = initialData.summary_style;
+  const { prompts } = usePrompts();
   // Local-only optimistic flag for Enhance, same shape as `clicking` below:
   // covers the instants before the backend's `enhance-progress` "running"
   // event lands and flips the `enhanceRunning` prop.
@@ -651,13 +663,17 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
       .catch(() => {});
   }
 
-  async function handleEnhance() {
+  /**
+   * `style` is a summary style id (or `"standard"`) to write the summary
+   * in; omitted, the backend repeats the style the note remembers.
+   */
+  async function handleEnhance(style?: string) {
     if (isActive || enhanceBusy) return;
     setEnhanceClicking(true);
     try {
       await commitNotes();
       await commitTitle();
-      await enhanceSession(path);
+      await enhanceSession(path, style);
     } catch (err) {
       console.error("failed to enhance session", err);
     } finally {
@@ -886,7 +902,7 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
       variant="outline"
       size="sm"
       className="ml-3 h-[28px] shrink-0 gap-[6px] rounded-[7px] px-[12px] text-[12.5px] font-medium"
-      onClick={handleEnhance}
+      onClick={() => void handleEnhance()}
     >
       <Sparkles className="size-3.5 text-[var(--voice-remote)]" />
       Summarize
@@ -993,6 +1009,48 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
               {summaryModel && (
                 <p className="mb-4 text-[11px] text-muted-foreground">
                   Written by {summaryModel}
+                  {/* The style that wrote this summary, and the menu to
+                      write it another way (prompts.toml). Picking a style
+                      re-summarizes at once; the note remembers it. Shown
+                      only when the user has styles, or when this summary
+                      came from one (even a since-deleted one). */}
+                  {(prompts.summary_styles.length > 0 || summaryStyle) && (
+                    <>
+                      {" · "}
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <button
+                            type="button"
+                            disabled={enhanceBusy || !canEnhance}
+                            aria-label="Summary style"
+                            className="inline-flex items-center gap-px underline-offset-2 hover:text-foreground hover:underline disabled:pointer-events-none disabled:opacity-50"
+                          >
+                            {styleName(prompts.summary_styles, summaryStyle)}
+                            <ChevronDown className="size-3" />
+                          </button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="start">
+                          {[
+                            { id: STANDARD_STYLE, name: styleName([], null) },
+                            ...prompts.summary_styles,
+                          ].map((style) => {
+                            const current = (summaryStyle ?? STANDARD_STYLE) === style.id;
+                            return (
+                              <DropdownMenuItem
+                                key={style.id}
+                                onSelect={() => void handleEnhance(style.id)}
+                                aria-checked={current}
+                                role="menuitemradio"
+                              >
+                                <span className="flex-1">{style.name}</span>
+                                {current && <Check aria-hidden="true" />}
+                              </DropdownMenuItem>
+                            );
+                          })}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </>
+                  )}
                   {" · "}
                   {/* Sharing is the point of a summary: one word away from
                       the clipboard as Markdown, ready for the person you
@@ -1015,7 +1073,7 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
                       <button
                         type="button"
                         disabled={enhanceBusy}
-                        onClick={handleEnhance}
+                        onClick={() => void handleEnhance()}
                         className="underline-offset-2 hover:text-foreground hover:underline disabled:pointer-events-none disabled:opacity-50"
                       >
                         {enhanceBusy ? "Summarizing..." : "Again"}

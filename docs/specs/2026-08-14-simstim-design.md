@@ -724,6 +724,64 @@ Not done, still owed to the review: a shared "Finishing your note" status
 in the note itself, naming "Them" from `people:` on 1:1 calls, a Share
 affordance beyond the clipboard.
 
+## Stage 4.3: your prompts (shipped 2026-09-07)
+
+The last feature before the release, owner-specified: "tune the main
+summarizer without replacing our system prompt, add custom summarizers, and
+quick prompts for the chat (find the Jira tasks this call touched, find a
+time to meet, what did I miss, make me smart); ship a few that fit everyone,
+let users create as many as they want; the UI must cope with many of them,
+in Settings and in the chat."
+
+Decisions (proposed, owner: "звучит разумно, гоу"):
+
+- **Two kinds of prompt, not one.** A *summary style* decides how the note's
+  one `## Summary` section is written: it replaces only the built-in task
+  rule (what to extract, in what shape); source data, the language rule,
+  the honesty rules and the TITLE/PEOPLE contracts hold for every style.
+  Picking a style re-summarizes; the note remembers it in `summary_style:`
+  frontmatter so Again (and the automatic run after a call) repeats it.
+  Several summaries per note was rejected: it breaks the file format and
+  the UI. *Summary instructions* are standing text appended to every
+  summary, framed in the prompt as subordinate to the rules. A *quick
+  question* is a chat prompt: its answer lives in the conversation, never
+  in the file; `scope` is call, notes or both. Jira and calendar prompts
+  are chat prompts because they need the CLI's tools.
+- **One file the user owns**: `~/.config/simstim/prompts.toml` next to
+  `config.toml`, seeded with defaults on first read (three styles: Action
+  items, Decisions and open questions, Brief for someone who missed it;
+  six questions: What did I miss, Make me smart, Draft a follow-up email,
+  Find related Jira issues, Find a time to meet, Open loops). Defaults are
+  ordinary rows, editable and deletable; Restore defaults brings them
+  back. The built-in prompt is the reserved style `standard`, never in the
+  file. Settings saves the whole document (`save_prompts`) after
+  validation (unique slug ids, no empty names or prompts, legal scope); a
+  hand-edited file that fails to parse is shown as an error and never
+  overwritten. A broken file degrades summaries to the built-in prompt.
+- **Settings**: a Prompts section on the one page. Instructions textarea,
+  then two lists in the Notes idiom (name, first prompt line, scope
+  badge), each row expanding into an inline editor (name, prompt, scope
+  segmented control, Delete, Done), "Add" at the bottom, autosave 400 ms
+  after the last keystroke. A new row gets its id from its name on the
+  first save and is not written until it has both a name and a prompt.
+- **Summary tab**: the provenance line reads "Written by claude · Action
+  items ▾ · Copy · Again"; the style name is a menu (Standard first, the
+  current one checked) and picking one re-summarizes at once. Hidden when
+  the user has no styles and the summary is standard. The toolbar menu
+  gains "Summarize as ▸" with the same list.
+- **Chat**: an empty conversation shows the first four quick questions as
+  chips plus "N more"; the composer has a lightning button and a "/" menu
+  (type "/" then part of a name; arrows, Enter, Escape) that scales to
+  dozens. A quick question sends its prompt but shows its name
+  (`question_name` on the stored user message).
+- **Where the user's words stay sacred**: prompts never touch `## Notes`;
+  styles write only the machine-owned Summary section, questions write
+  nothing to disk.
+
+Not done: a default style for the automatic run after a call (today:
+standard, or the note's remembered style); reordering rows by drag; sharing
+prompts between machines is "sync the dotfile".
+
 ## Milestones after MVP-0
 
 1. Audio file kept next to the .md; re-transcribe command (whisper turbo).

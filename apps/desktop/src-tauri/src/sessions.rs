@@ -58,6 +58,9 @@ pub struct SessionDataOut {
     pub summary: String,
     /// What generated `summary` ("claude" / "codex"), `None` without one.
     pub summary_model: Option<String>,
+    /// The user's summary style (prompts.toml id) that wrote `summary`,
+    /// `None` for the built-in prompt or without a summary.
+    pub summary_style: Option<String>,
     /// The `people:` frontmatter list -- who was on the call, from the
     /// calendar event the enhance lookup matched. Empty without one.
     pub people: Vec<String>,
@@ -167,6 +170,7 @@ pub fn read_session_at(path: &Path, finalizing: Option<&Path>) -> Result<Session
         audio_path,
         summary: data.summary,
         summary_model: data.summary_model,
+        summary_style: data.summary_style,
         people: data.people,
     })
 }
@@ -272,6 +276,7 @@ fn rewrite_session(path: &Path, title: &str, notes: &str) -> Result<()> {
         transcript.set_audio_from_secs(audio_from_secs);
     }
     transcript.set_summary(existing.summary.clone(), existing.summary_model.clone());
+    transcript.set_summary_style(existing.summary_style.clone());
     transcript.set_people(existing.people.clone());
     transcript.set_raw_transcript(existing.transcript.clone());
     transcript.save(path)
@@ -347,6 +352,7 @@ pub fn rewrite_transcript_at(path: &Path, new_transcript: &str, asr_id: &str) ->
         transcript.set_audio_from_secs(audio_from_secs);
     }
     transcript.set_summary(existing.summary.clone(), existing.summary_model.clone());
+    transcript.set_summary_style(existing.summary_style.clone());
     transcript.set_people(existing.people.clone());
     transcript.set_asr(asr_id);
     transcript.set_raw_transcript(final_transcript);
@@ -412,12 +418,17 @@ fn tail_is_clock_time(tail: &str) -> bool {
 /// event data, same as the title), `None` -- no event, or an event carrying
 /// no attendees -- leaves whatever the file already has untouched, so a
 /// lookup miss never erases previously saved names.
+///
+/// `style` is the id of the user's summary style that wrote this summary
+/// (`summary_style:` frontmatter), `None` for the built-in prompt. Written
+/// outright, like the model label: it describes THIS summary.
 pub fn set_summary_at(
     path: &Path,
     summary: &str,
     model: &str,
     proposed_title: Option<&str>,
     people: Option<&[String]>,
+    style: Option<&str>,
 ) -> Result<()> {
     let existing = parse_session(path)?;
     let meta = parse_meta(path)?;
@@ -444,6 +455,7 @@ pub fn set_summary_at(
         transcript.set_audio_from_secs(audio_from_secs);
     }
     transcript.set_summary(summary.to_string(), Some(model.to_string()));
+    transcript.set_summary_style(style.map(str::to_string));
     transcript.set_people(match people {
         Some(fresh) => fresh.to_vec(),
         None => existing.people.clone(),
@@ -786,11 +798,26 @@ mod tests {
         }
 
         #[test]
+        fn set_summary_at_records_the_style_that_wrote_the_summary() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = note_with_summary(dir.path());
+            set_summary_at(&path, "- actions", "claude", None, None, Some("action-items")).unwrap();
+            assert_eq!(parse_session(&path).unwrap().summary_style.as_deref(), Some("action-items"));
+            // A later standard run clears it: the line describes THIS summary.
+            set_summary_at(&path, "- standard", "claude", None, None, None).unwrap();
+            assert_eq!(parse_session(&path).unwrap().summary_style, None);
+            // Title/notes edits carry it through untouched.
+            set_summary_at(&path, "- actions", "claude", None, None, Some("brief")).unwrap();
+            rewrite_session(&path, "Sync", "edited notes").unwrap();
+            assert_eq!(parse_session(&path).unwrap().summary_style.as_deref(), Some("brief"));
+        }
+
+        #[test]
         fn set_summary_at_replaces_only_the_summary() {
             let dir = tempfile::tempdir().unwrap();
             let path = note_with_summary(dir.path());
 
-            set_summary_at(&path, "- new summary", "codex", None, None).unwrap();
+            set_summary_at(&path, "- new summary", "codex", None, None, None).unwrap();
 
             let data = parse_session(&path).unwrap();
             assert_eq!(data.summary, "- new summary");
@@ -809,14 +836,14 @@ mod tests {
             let path = note_with_summary(dir.path());
 
             let crew = vec!["Anna".to_string(), "Mark".to_string()];
-            set_summary_at(&path, "- s", "claude", None, Some(&crew)).unwrap();
+            set_summary_at(&path, "- s", "claude", None, Some(&crew), None).unwrap();
             assert_eq!(parse_session(&path).unwrap().people, crew);
 
-            set_summary_at(&path, "- s2", "claude", None, None).unwrap();
+            set_summary_at(&path, "- s2", "claude", None, None, None).unwrap();
             assert_eq!(parse_session(&path).unwrap().people, crew, "a miss preserves");
 
             let fresh = vec!["Dana".to_string()];
-            set_summary_at(&path, "- s3", "claude", None, Some(&fresh)).unwrap();
+            set_summary_at(&path, "- s3", "claude", None, Some(&fresh), None).unwrap();
             let data = parse_session(&path).unwrap();
             assert_eq!(data.people, fresh, "fresh event data replaces");
             assert_eq!(data.notes, "rough notes", "notes are sacred");
@@ -829,7 +856,7 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             let path = note_with_summary(dir.path());
             let crew = vec!["Anna Berg".to_string(), "Mark".to_string()];
-            set_summary_at(&path, "- s", "claude", None, Some(&crew)).unwrap();
+            set_summary_at(&path, "- s", "claude", None, Some(&crew), None).unwrap();
 
             let hits = search_sessions_in(dir.path(), "berg");
             assert_eq!(hits.len(), 1);
@@ -852,21 +879,21 @@ mod tests {
             note.save(&path).unwrap();
 
             // First enhance: renames the automatic title and marks it.
-            set_summary_at(&path, "- s", "claude", Some("Composed title"), None).unwrap();
+            set_summary_at(&path, "- s", "claude", Some("Composed title"), None, None).unwrap();
             assert_eq!(parse_session(&path).unwrap().title, "Composed title");
 
             // Re-enhance: the machine-given title is fair game again.
-            set_summary_at(&path, "- s2", "claude", Some("Q3 Budget Review"), None).unwrap();
+            set_summary_at(&path, "- s2", "claude", Some("Q3 Budget Review"), None, None).unwrap();
             assert_eq!(parse_session(&path).unwrap().title, "Q3 Budget Review");
 
             // A notes-only save (same title) keeps the machine marker...
             save_session_at(&path, "Q3 Budget Review", "my notes", None, None).unwrap();
-            set_summary_at(&path, "- s3", "claude", Some("Renamed by model again"), None).unwrap();
+            set_summary_at(&path, "- s3", "claude", Some("Renamed by model again"), None, None).unwrap();
             assert_eq!(parse_session(&path).unwrap().title, "Renamed by model again");
 
             // ...but the user typing their own title ends machine renames.
             save_session_at(&path, "My own name", "my notes", None, None).unwrap();
-            set_summary_at(&path, "- s4", "claude", Some("Should not land"), None).unwrap();
+            set_summary_at(&path, "- s4", "claude", Some("Should not land"), None, None).unwrap();
             assert_eq!(parse_session(&path).unwrap().title, "My own name");
         }
 
@@ -879,7 +906,7 @@ mod tests {
 
             // A user-typed title survives even when a proposal arrives.
             let typed = note_with_summary(dir.path());
-            set_summary_at(&typed, "- s", "codex", Some("Model title"), None).unwrap();
+            set_summary_at(&typed, "- s", "codex", Some("Model title"), None, None).unwrap();
             assert_eq!(parse_session(&typed).unwrap().title, "Sync");
 
             // The "Untitled" default is replaced.
@@ -887,7 +914,7 @@ mod tests {
             let mut note = Transcript::new(t(9, 0, 0));
             note.add(Speaker::Me, 3.0, "hello".into());
             note.save(&untitled).unwrap();
-            set_summary_at(&untitled, "- s", "codex", Some("Budget review"), None).unwrap();
+            set_summary_at(&untitled, "- s", "codex", Some("Budget review"), None, None).unwrap();
             assert_eq!(parse_session(&untitled).unwrap().title, "Budget review");
 
             // The detected-call shape is replaced too.
@@ -896,7 +923,7 @@ mod tests {
             note.set_title("Zoom call 14:03".into());
             note.add(Speaker::Me, 3.0, "hello".into());
             note.save(&detected).unwrap();
-            set_summary_at(&detected, "- s", "codex", Some("Budget review"), None).unwrap();
+            set_summary_at(&detected, "- s", "codex", Some("Budget review"), None, None).unwrap();
             assert_eq!(parse_session(&detected).unwrap().title, "Budget review");
         }
 

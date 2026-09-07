@@ -1,5 +1,5 @@
 import { createRef } from "react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   formatSessionMeta,
@@ -11,6 +11,9 @@ import * as ipc from "@/lib/ipc";
 import type { SessionData } from "@/lib/ipc";
 
 vi.mock("@/lib/ipc", () => ({
+  getPrompts: vi.fn().mockResolvedValue({ summary_instructions: "", summary_styles: [], quick_questions: [] }),
+  savePrompts: vi.fn().mockResolvedValue({ summary_instructions: "", summary_styles: [], quick_questions: [] }),
+  restoreDefaultPrompts: vi.fn().mockResolvedValue({ summary_instructions: "", summary_styles: [], quick_questions: [] }),
   saveSession: vi.fn().mockResolvedValue(undefined),
   updateActiveSession: vi.fn().mockResolvedValue(undefined),
   readSession: vi.fn().mockResolvedValue({
@@ -21,6 +24,7 @@ vi.mock("@/lib/ipc", () => ({
     audio_path: null,
     summary: "",
     summary_model: null,
+    summary_style: null,
     people: [],
   }),
   retranscribeSession: vi.fn().mockResolvedValue(undefined),
@@ -43,6 +47,7 @@ const baseData: SessionData = {
   audio_path: null,
   summary: "",
   summary_model: null,
+  summary_style: null,
   people: [],
 };
 
@@ -257,6 +262,7 @@ describe("SessionView: audio playback and re-transcribe (Task 4, stage-0.7)", ()
           audio_path: "/tmp/call.flac",
           summary: "",
           summary_model: null,
+          summary_style: null,
           people: [],
           transcript: "[00:01:05] Me: hello there\n",
         }}
@@ -412,6 +418,7 @@ describe("SessionView: audio playback and re-transcribe (Task 4, stage-0.7)", ()
       audio_path: "/tmp/call.flac",
       summary: "",
       summary_model: null,
+      summary_style: null,
       people: [],
     });
     render(
@@ -423,6 +430,7 @@ describe("SessionView: audio playback and re-transcribe (Task 4, stage-0.7)", ()
           audio_path: "/tmp/call.flac",
           summary: "",
           summary_model: null,
+          summary_style: null,
           people: [],
           transcript: "[00:00:03] Me: old parakeet text\n",
         }}
@@ -451,6 +459,7 @@ describe("SessionView: audio playback and re-transcribe (Task 4, stage-0.7)", ()
       audio_path: "/tmp/call.flac",
       summary: "",
       summary_model: null,
+      summary_style: null,
       people: [],
     });
     render(
@@ -462,6 +471,7 @@ describe("SessionView: audio playback and re-transcribe (Task 4, stage-0.7)", ()
           audio_path: "/tmp/call.flac",
           summary: "",
           summary_model: null,
+          summary_style: null,
           people: [],
           transcript: "[00:00:03] Me: old parakeet text\n",
         }}
@@ -492,6 +502,7 @@ describe("SessionView: notes/transcript tabs (stage 0.10)", () => {
           notes: "## Decisions\n\n- Ship **Friday**",
           summary: "> Generated **brief**",
           summary_model: "local/qwen",
+          summary_style: null,
           people: [],
         }}
         liveLines={[]}
@@ -609,6 +620,7 @@ describe("SessionView: notes/transcript tabs (stage 0.10)", () => {
           notes: "keep Notes primary",
           summary: "A concise summary",
           summary_model: "local/qwen",
+          summary_style: null,
           people: [],
           transcript: "[00:00:03] Me: hello tabs\n",
         }}
@@ -640,6 +652,7 @@ describe("SessionView: notes/transcript tabs (stage 0.10)", () => {
           notes: "   ",
           summary: "A concise summary",
           summary_model: "local/qwen",
+          summary_style: null,
           people: [],
         }}
         liveLines={[]}
@@ -735,7 +748,7 @@ describe("SessionView: enhance (stage 0.11)", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: /^summarize$/i }));
-    await waitFor(() => expect(ipc.enhanceSession).toHaveBeenCalledExactlyOnceWith("/tmp/call.md"));
+    await waitFor(() => expect(ipc.enhanceSession).toHaveBeenCalledExactlyOnceWith("/tmp/call.md", undefined));
 
     // While the command is in flight the pill disappears and a disabled
     // Summary tab appears with a spinner (stage 4.1 polish: the old work
@@ -807,6 +820,7 @@ describe("SessionView: enhance (stage 0.11)", () => {
           transcript: "[00:00:01] Me: hi",
           summary: "- **ship v2 friday**",
           summary_model: "claude",
+          summary_style: null,
           people: [],
         }}
         liveLines={[]}
@@ -821,7 +835,75 @@ describe("SessionView: enhance (stage 0.11)", () => {
     fireEvent.click(screen.getByRole("tab", { name: "Summary" }));
     expect(screen.getByText(/by claude/i)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /again/i }));
-    await waitFor(() => expect(ipc.enhanceSession).toHaveBeenCalledExactlyOnceWith("/tmp/call.md"));
+    await waitFor(() => expect(ipc.enhanceSession).toHaveBeenCalledExactlyOnceWith("/tmp/call.md", undefined));
+  });
+});
+
+describe("SessionView: summary styles (prompts.toml)", () => {
+  it("names the style that wrote the summary and re-summarizes in a picked one", async () => {
+    vi.mocked(ipc.getPrompts).mockResolvedValue({
+      summary_instructions: "",
+      summary_styles: [
+        { id: "action-items", name: "Action items", prompt: "..." },
+        { id: "brief", name: "Brief", prompt: "..." },
+      ],
+      quick_questions: [],
+    });
+    render(
+      <SessionView
+        path="/tmp/call.md"
+        isActive={false}
+        initialData={{
+          ...baseData,
+          transcript: "[00:00:01] Me: hi",
+          summary: "- **ship v2 friday**",
+          summary_model: "claude",
+          summary_style: "action-items",
+          people: [],
+        }}
+        liveLines={[]}
+        interimMe=""
+        interimThem=""
+        retranscribingJob={null}
+      />
+    );
+    fireEvent.click(screen.getByRole("tab", { name: "Summary" }));
+    const trigger = await screen.findByRole("button", { name: "Summary style" });
+    expect(trigger).toHaveTextContent("Action items");
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false, pointerType: "mouse" });
+    fireEvent.click(trigger);
+    const menu = await screen.findByRole("menu");
+    const items = within(menu).getAllByRole("menuitemradio");
+    expect(items.map((i) => i.textContent)).toEqual(["Standard", "Action items", "Brief"]);
+    expect(items[1]).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(items[2]);
+    await waitFor(() => expect(ipc.enhanceSession).toHaveBeenCalledExactlyOnceWith("/tmp/call.md", "brief"));
+  });
+
+  it("hides the style menu when the user has no styles and the summary is standard", async () => {
+    vi.mocked(ipc.getPrompts).mockResolvedValue({ summary_instructions: "", summary_styles: [], quick_questions: [] });
+    render(
+      <SessionView
+        path="/tmp/call.md"
+        isActive={false}
+        initialData={{
+          ...baseData,
+          transcript: "[00:00:01] Me: hi",
+          summary: "- **ship v2 friday**",
+          summary_model: "claude",
+          summary_style: null,
+          people: [],
+        }}
+        liveLines={[]}
+        interimMe=""
+        interimThem=""
+        retranscribingJob={null}
+      />
+    );
+    fireEvent.click(screen.getByRole("tab", { name: "Summary" }));
+    expect(screen.getByText(/by claude/i)).toBeInTheDocument();
+    await waitFor(() => expect(ipc.getPrompts).toHaveBeenCalled());
+    expect(screen.queryByRole("button", { name: "Summary style" })).toBeNull();
   });
 });
 
@@ -919,6 +1001,7 @@ describe("SessionView: copy summary", () => {
           transcript: "[00:00:01] Me: hi",
           summary: "### Decisions\n- ship v2 friday",
           summary_model: "claude",
+          summary_style: null,
         }}
         liveLines={[]}
         interimMe=""

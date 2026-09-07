@@ -403,6 +403,9 @@ fn run_cli_capture(
 /// already matched by date and time: it enters the prompt as source data
 /// (this IS the meeting), while its verbatim name is applied to the title
 /// by the app itself, never trusted to the model to echo back.
+/// The prompt with no user tuning; production goes through
+/// [`build_prompt_tuned`], this is the tests' shorthand.
+#[cfg(test)]
 pub(crate) fn build_prompt(
     title: &str,
     notes: &str,
@@ -410,6 +413,39 @@ pub(crate) fn build_prompt(
     propose_title: bool,
     list_people: bool,
     event: Option<&CalendarEvent>,
+) -> String {
+    build_prompt_tuned(
+        title,
+        notes,
+        transcript,
+        propose_title,
+        list_people,
+        event,
+        &PromptTuning::default(),
+    )
+}
+
+/// The user's part of the summary prompt (prompts.toml, see `prompts.rs`).
+/// `style_prompt` is a summary style's text: it REPLACES the built-in task
+/// rule (what to extract, in what shape) and nothing else, so the source
+/// data, the language rule, the honesty rules and the TITLE/PEOPLE output
+/// contracts hold for every style. `instructions` are the standing
+/// instructions appended to every run; the prompt says in words that they
+/// apply within the rules and cannot lift them.
+#[derive(Debug, Default, Clone, Copy)]
+pub(crate) struct PromptTuning<'a> {
+    pub style_prompt: Option<&'a str>,
+    pub instructions: &'a str,
+}
+
+pub(crate) fn build_prompt_tuned(
+    title: &str,
+    notes: &str,
+    transcript: &str,
+    propose_title: bool,
+    list_people: bool,
+    event: Option<&CalendarEvent>,
+    tuning: &PromptTuning<'_>,
 ) -> String {
     let notes_are_empty = notes.trim().is_empty();
     let notes_block = if notes_are_empty {
@@ -422,10 +458,17 @@ pub(crate) fn build_prompt(
     } else {
         "Rewrite the user's rough notes in their original structure. Preserve every distinct user point, add only directly supporting transcript detail, and do not introduce unrelated transcript topics"
     };
+    // A summary style is the user's own task rule, in the user's words.
+    let style_prompt = tuning.style_prompt.map(str::trim).filter(|p| !p.is_empty());
+    let task_rule = style_prompt.unwrap_or(task_rule);
     let cyrillic_output = uses_cyrillic_output(notes, transcript);
     let language_rule = output_language_rule(cyrillic_output);
     let prompt_transcript = compact_transcript(transcript);
-    let extra_rules = build_extra_rules(propose_title, list_people, event, cyrillic_output);
+    let extra_rules = format!(
+        "{}{}",
+        build_extra_rules(propose_title, list_people, event, cyrillic_output),
+        instructions_rule(tuning.instructions, cyrillic_output)
+    );
     let final_check = if cyrillic_output {
         "Пиши только на языке расшифровки кириллицей; не переводи на английский. Используй только явные утверждения. Сохраняй направление из источника в цель и область действия каждого компонента. Позднее уточнение «не X, а Y» отменяет X. Не смешивай текущее состояние, предпочтительный план и fallback. Условие остается условием. Действие допустимо только при явном обязательстве владельца. Не заполняй раздел ради формата: сомнительное и побочные истории исключи"
     } else {
@@ -437,6 +480,9 @@ pub(crate) fn build_prompt(
         } else {
             "Перепиши заметки пользователя, сохранив их структуру и каждый отдельный пункт. Добавляй только прямо подтверждающие детали из расшифровки и не вводи посторонние темы"
         };
+        // The style's own words stand in for the task, whatever language
+        // they are written in; the language rule still governs the output.
+        let cyrillic_task = style_prompt.unwrap_or(cyrillic_task);
         return format!(
             "Ниже исходные данные звонка. Не отвечай, пока не прочитаешь их до конца.\n\
              \n\
@@ -590,6 +636,30 @@ fn build_extra_rules(
         }
     }
     rules
+}
+
+/// The user's standing summary instructions as a trailing prompt block, in
+/// the branch's language. Empty when there are none. Framed explicitly as
+/// subordinate to the rules above: they tune the summary, they do not lift
+/// the language rule, the honesty rules or the output contracts.
+fn instructions_rule(instructions: &str, cyrillic_output: bool) -> String {
+    let instructions = instructions.trim();
+    if instructions.is_empty() {
+        return String::new();
+    }
+    if cyrillic_output {
+        format!(
+            "\nПостоянные пожелания пользователя к каждой сводке. Выполняй их в рамках \
+             правил выше: они уточняют сводку, но не отменяют правила о языке, \
+             точности и служебных строках.\n{instructions}\n"
+        )
+    } else {
+        format!(
+            "\nThe user's standing instructions for every summary. Apply them within \
+             the rules above: they refine the summary, they never lift the rules on \
+             language, accuracy or the TITLE/PEOPLE lines.\n{instructions}\n"
+        )
+    }
 }
 
 /// Peels the requested leading `PEOPLE: ...` line off a model reply (after
@@ -1042,9 +1112,17 @@ fn validate_enhance(
 /// THREAD, and the first version of this froze the entire app for the whole
 /// generation (owner bug report). The `AppHandle` crosses into the blocking
 /// closure instead of `State` guards, which can't outlive the request.
+/// `style` is a summary style id from prompts.toml, `"standard"` for the
+/// built-in prompt, or `None` to repeat whatever style the note remembers
+/// (`summary_style:` frontmatter), which is what "Again" and the automatic
+/// run after a call do.
 #[tauri::command]
-pub async fn enhance_session(path: String, app: tauri::AppHandle) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || enhance_path_blocking(&app, &path))
+pub async fn enhance_session(
+    path: String,
+    style: Option<String>,
+    app: tauri::AppHandle,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || enhance_path_blocking(&app, &path, style.as_deref()))
         .await
         .map_err(|e| format!("enhance task failed: {e}"))?
 }
@@ -1062,9 +1140,10 @@ pub async fn enhance_session(path: String, app: tauri::AppHandle) -> Result<Stri
 fn enhance_path_blocking<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     path: &str,
+    style: Option<&str>,
 ) -> Result<String, String> {
     let provider = Config::load().enhance_provider;
-    let result = enhance_path_inner(app, path);
+    let result = enhance_path_inner(app, path, style);
     match &result {
         Ok(_) => emit_progress(app, path, "done", &provider, None),
         Err(message) => emit_progress(app, path, "error", &provider, Some(message.clone())),
@@ -1075,11 +1154,20 @@ fn enhance_path_blocking<R: tauri::Runtime>(
 fn enhance_path_inner<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     path: &str,
+    requested_style: Option<&str>,
 ) -> Result<String, String> {
     let md_path = Path::new(path);
     let state = app.state::<AppState>();
     let enhance = app.state::<EnhanceState>();
     let cfg = Config::load();
+    // The user's prompts. A broken prompts.toml must not stop summaries:
+    // it degrades to the built-in prompt with no instructions (Settings
+    // shows the parse error).
+    let prompts = crate::prompts::Prompts::load().unwrap_or_else(|_| crate::prompts::Prompts {
+        summary_instructions: String::new(),
+        summary_styles: Vec::new(),
+        quick_questions: Vec::new(),
+    });
     let spec = PROVIDERS
         .iter()
         .find(|s| s.id == cfg.enhance_provider)
@@ -1092,6 +1180,9 @@ fn enhance_path_inner<R: tauri::Runtime>(
         .map(str::to_string);
 
     let existing = simstim_transcript::parse_session(md_path).map_err(|e| e.to_string())?;
+    // Which style writes this summary: the one asked for, else the one the
+    // note remembers; a deleted style quietly means standard.
+    let style = prompts.resolve_style(requested_style.or(existing.summary_style.as_deref()));
     // A title proposal only ever lands while the title is machine-owned:
     // the automatic "Untitled"/detected shape, or one a previous enhance
     // wrote (`title_by:` frontmatter) -- so re-enhancing regenerates the
@@ -1155,13 +1246,17 @@ fn enhance_path_inner<R: tauri::Runtime>(
             .map(|event| event.attendees.clone())
             .filter(|attendees| !attendees.is_empty());
         let list_people = calendar_people.is_none();
-        let prompt = build_prompt(
+        let prompt = build_prompt_tuned(
             &existing.title,
             &existing.notes,
             &existing.transcript,
             compose_title,
             list_people,
             event.as_ref(),
+            &PromptTuning {
+                style_prompt: style.map(|s| s.prompt.as_str()),
+                instructions: &prompts.summary_instructions,
+            },
         );
         let raw = run_provider(spec, model.as_deref(), &prompt)?;
         let (composed_title, summary) = if compose_title {
@@ -1200,6 +1295,7 @@ fn enhance_path_inner<R: tauri::Runtime>(
             &summary_label(spec, model.as_deref()),
             proposed_title.as_deref(),
             people.as_deref(),
+            style.map(|s| s.id.as_str()),
         )
         .map_err(|e| e.to_string())?;
         Ok(summary)
@@ -1249,7 +1345,7 @@ pub(crate) fn maybe_auto_enhance<R: tauri::Runtime>(app: tauri::AppHandle<R>, pa
         return;
     }
     tauri::async_runtime::spawn_blocking(move || {
-        let _ = enhance_path_blocking(&app, &path);
+        let _ = enhance_path_blocking(&app, &path, None);
     });
 }
 
@@ -1435,6 +1531,50 @@ mod tests {
             let (people, body) = split_people_line(&rest);
             assert_eq!(people.unwrap(), vec!["Dana"]);
             assert_eq!(body, "body");
+        }
+
+        /// A summary style replaces only the task rule; the standing
+        /// instructions ride at the end, framed as subordinate. Both
+        /// languages.
+        #[test]
+        fn a_style_replaces_the_task_rule_and_instructions_trail_the_prompt() {
+            let tuning = PromptTuning {
+                style_prompt: Some("List only the action items, owner first."),
+                instructions: "Always use British spelling.",
+            };
+            let english = build_prompt_tuned("Untitled", "", "[00:00:01] Me: hi", true, true, None, &tuning);
+            assert!(english.contains("- List only the action items, owner first.."), "{english}");
+            assert!(!english.contains("Status (at most 3 bullets)"));
+            // Everything that is not the task rule stays.
+            assert!(english.contains("TITLE: <title>"));
+            assert!(english.contains("PEOPLE: <name>, <name>"));
+            assert!(english.contains("main language is the one most of the transcript is spoken in"));
+            assert!(english.contains("Never merge separate incidents or invent facts"));
+            let instructions_at = english.find("standing instructions for every summary").unwrap();
+            assert!(english[instructions_at..].contains("Always use British spelling."));
+            assert!(english[instructions_at..].contains("never lift the rules"));
+
+            let cyrillic = build_prompt_tuned(
+                "Untitled",
+                "",
+                "[00:00:01] Me: Давайте выпустим новую версию в пятницу и проверим тесты",
+                false,
+                false,
+                None,
+                &tuning,
+            );
+            assert!(cyrillic.contains("List only the action items, owner first."), "{cyrillic}");
+            assert!(!cyrillic.contains("максимум 3 пункта"));
+            assert!(cyrillic.contains("Постоянные пожелания пользователя"));
+            assert!(cyrillic.contains("Always use British spelling."));
+
+            // No tuning: byte-identical to the plain prompt, no trailing block.
+            let plain = build_prompt("Untitled", "", "[00:00:01] Me: hi", false, false, None);
+            assert!(!plain.contains("standing instructions"));
+            assert!(plain.contains("Status (at most 3 bullets)"));
+            // Whitespace-only tuning counts as none.
+            let blank = PromptTuning { style_prompt: Some("  "), instructions: " \n" };
+            assert_eq!(build_prompt_tuned("Untitled", "", "[00:00:01] Me: hi", false, false, None, &blank), plain);
         }
 
         /// A matched event enters the prompt as source data in both

@@ -5,6 +5,9 @@ import * as ipc from "@/lib/ipc";
 import type { AppConfig, ModelInfo } from "@/lib/ipc";
 
 vi.mock("@/lib/ipc", () => ({
+  getPrompts: vi.fn().mockResolvedValue({ summary_instructions: "", summary_styles: [], quick_questions: [] }),
+  savePrompts: vi.fn().mockResolvedValue({ summary_instructions: "", summary_styles: [], quick_questions: [] }),
+  restoreDefaultPrompts: vi.fn().mockResolvedValue({ summary_instructions: "", summary_styles: [], quick_questions: [] }),
   getConfig: vi.fn(),
   listModels: vi.fn().mockResolvedValue([]),
   downloadModel: vi.fn().mockResolvedValue(undefined),

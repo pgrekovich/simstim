@@ -2,6 +2,7 @@ import { MessageCircleQuestion, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ChatConversation, type ChatAskRequest } from "@/components/Chat";
 import type { ChatSource, SessionMeta } from "@/lib/ipc";
+import { quickQuestionsFor, usePrompts } from "@/lib/prompts";
 
 interface AskCallDrawerProps {
   /** Pane width in px, owned (and persisted) by App's resize handling. */
@@ -46,6 +47,7 @@ export function AskCallDrawer({
   onClose,
   onOpenCitation,
 }: AskCallDrawerProps) {
+  const { prompts } = usePrompts();
   return (
     <aside
       aria-label="Ask this call"
@@ -74,6 +76,7 @@ export function AskCallDrawer({
         sessions={sessions}
         placeholder="Ask about this call..."
         askRequest={askRequest}
+        quickQuestions={quickQuestionsFor(prompts, "call")}
         askedAt={() =>
           recordingStartedAt !== null ? recordingClock(recordingStartedAt) : null
         }

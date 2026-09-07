@@ -5,7 +5,7 @@ import {
   type KeyboardEvent,
 } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { CornerDownLeft, Square } from "lucide-react";
+import { CornerDownLeft, Square, Zap } from "lucide-react";
 import { MarkdownContent } from "@/components/Markdown";
 import { cn } from "@/lib/utils";
 import {
@@ -16,6 +16,7 @@ import {
   type ChatProgress,
   type ChatSource,
   type SessionMeta,
+  type QuickQuestion,
 } from "@/lib/ipc";
 
 /**
@@ -49,6 +50,13 @@ interface ChatConversationProps {
   askedAt?: () => string | null;
   /** A question handed in from outside (⌘K), sent as soon as it arrives. */
   askRequest?: ChatAskRequest | null;
+  /**
+   * The user's quick questions for this scope (prompts.toml): offered as
+   * chips while the conversation is empty, and through the composer's
+   * "/" menu and lightning button at any time. Sent as their prompt text,
+   * shown by their name.
+   */
+  quickQuestions?: QuickQuestion[];
   /** Rendered when the conversation is still empty (the quiet hint). */
   emptyState?: React.ReactNode;
 }
@@ -109,6 +117,7 @@ export function ChatConversation({
   askedAt,
   askRequest,
   emptyState,
+  quickQuestions = [],
 }: ChatConversationProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [running, setRunning] = useState(false);
@@ -117,6 +126,10 @@ export function ChatConversation({
   // the question text -- the backend only stores the exchange on success).
   const [pendingQuestion, setPendingQuestion] = useState<string | null>(null);
   const [pendingAskedAt, setPendingAskedAt] = useState<string | null>(null);
+  // The in-flight quick question's name (shown instead of its prompt).
+  const [pendingName, setPendingName] = useState<string | null>(null);
+  // The "/" menu's keyboard cursor, reset whenever the filter changes.
+  const [menuIndex, setMenuIndex] = useState(0);
   // Mirror of `pendingQuestion` for the event listener: restoring a failed
   // question into the input must not happen inside a state updater (updaters
   // must be pure), so the handler reads the current value from here instead.
@@ -171,6 +184,7 @@ export function ChatConversation({
         if (question !== null) setDraft((current) => (current === "" ? question : current));
         pendingQuestionRef.current = null;
         setPendingQuestion(null);
+        setPendingName(null);
         setPendingAskedAt(null);
         if (payload.message !== "cancelled") {
           setError(payload.message ?? "chat failed");
@@ -180,6 +194,7 @@ export function ChatConversation({
       // "done": the stored conversation now carries the full exchange.
       pendingQuestionRef.current = null;
       setPendingQuestion(null);
+      setPendingName(null);
       setPendingAskedAt(null);
       setError(null);
       chatHistory(scopePath)
@@ -200,19 +215,43 @@ export function ChatConversation({
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages, running, pendingQuestion]);
 
-  function send(question: string) {
+  function send(question: string, name?: string) {
     const trimmed = question.trim();
     if (trimmed === "" || running) return;
     const stamp = askedAt?.() ?? null;
-    pendingQuestionRef.current = trimmed;
+    pendingQuestionRef.current = name ? null : trimmed;
     setPendingQuestion(trimmed);
+    setPendingName(name ?? null);
     setPendingAskedAt(stamp);
     setError(null);
     setDraft("");
     // Fire and forget: `chat-progress` events drive everything visible, and
     // the rejection is surfaced by the same "error" event (chat.rs emits
     // exactly one terminal event per ask, validation failures included).
-    chatAsk(scopePath, trimmed, stamp ?? undefined).catch(() => {});
+    chatAsk(scopePath, trimmed, stamp ?? undefined, name).catch(() => {});
+  }
+
+  /** A quick question: its prompt is the question, its name is what shows. */
+  function sendQuick(question: QuickQuestion) {
+    send(question.prompt, question.name);
+  }
+
+  // The composer's "/" menu: type "/" (or press the lightning button) and
+  // the quick questions list opens above the input, filtered by what
+  // follows the slash. Scales to many questions where chips would not.
+  const slashFilter = draft.startsWith("/") ? draft.slice(1).trim().toLowerCase() : null;
+  const menuItems =
+    slashFilter === null
+      ? []
+      : quickQuestions.filter((q) => slashFilter === "" || q.name.toLowerCase().includes(slashFilter));
+  const menuOpen = slashFilter !== null && quickQuestions.length > 0;
+  useEffect(() => {
+    setMenuIndex(0);
+  }, [slashFilter]);
+
+  function openQuickMenu() {
+    setDraft("/");
+    inputRef.current?.focus();
   }
 
   // A question handed in from outside (the ⌘K palette handoff).
@@ -224,6 +263,29 @@ export function ChatConversation({
   }, [askRequest]);
 
   function handleKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (menuOpen) {
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        setMenuIndex((i) => Math.min(i + 1, Math.max(menuItems.length - 1, 0)));
+        return;
+      }
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        setMenuIndex((i) => Math.max(i - 1, 0));
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setDraft("");
+        return;
+      }
+      if (event.key === "Enter") {
+        event.preventDefault();
+        const picked = menuItems[menuIndex];
+        if (picked) sendQuick(picked);
+        return;
+      }
+    }
     if (event.key === "Enter") {
       event.preventDefault();
       send(draft);
@@ -242,7 +304,44 @@ export function ChatConversation({
         )}
       >
         {messages.length === 0 && pendingQuestion === null && !running && error === null ? (
-          emptyState ?? null
+          <>
+            {emptyState ?? null}
+            {quickQuestions.length > 0 && (
+              // The first few quick questions as chips, the rest one "/" away:
+              // a long list must never turn the empty state into a wall.
+              <div
+                aria-label="Quick questions"
+                className={cn("flex flex-wrap justify-center gap-1.5", pane ? "pt-5" : "pt-4")}
+              >
+                {quickQuestions.slice(0, 4).map((question) => (
+                  <button
+                    key={question.id}
+                    type="button"
+                    title={question.prompt}
+                    onClick={() => sendQuick(question)}
+                    className={cn(
+                      "inline-flex min-h-7 items-center rounded-[14px] border border-foreground/[0.14] px-3 py-[4.5px] text-left leading-[1.4] text-quiet-foreground hover:border-foreground/[0.28] hover:bg-foreground/[0.05]",
+                      pane ? "text-[12px]" : "text-[11.5px]",
+                    )}
+                  >
+                    {question.name}
+                  </button>
+                ))}
+                {quickQuestions.length > 4 && (
+                  <button
+                    type="button"
+                    onClick={openQuickMenu}
+                    className={cn(
+                      "inline-flex min-h-7 items-center rounded-[14px] px-3 py-[4.5px] text-quiet-foreground hover:bg-foreground/[0.05]",
+                      pane ? "text-[12px]" : "text-[11.5px]",
+                    )}
+                  >
+                    {quickQuestions.length - 4} more
+                  </button>
+                )}
+              </div>
+            )}
+          </>
         ) : (
           <div className={cn("flex flex-col", pane ? "gap-5" : "gap-3.5")}>
             {messages.map((message, index) =>
@@ -257,7 +356,7 @@ export function ChatConversation({
                       pane ? "text-[17px]" : "text-[14.5px]",
                     )}
                   >
-                    {message.text}
+                    {message.question_name ?? message.text}
                   </p>
                 </div>
               ) : (
@@ -340,7 +439,7 @@ export function ChatConversation({
                         pane ? "text-[17px]" : "text-[14.5px]",
                       )}
                     >
-                      {pendingQuestion}
+                      {pendingName ?? pendingQuestion}
                     </p>
                   </div>
                 )}
@@ -377,11 +476,59 @@ export function ChatConversation({
 
       <div
         className={cn(
-          "flex shrink-0 items-center border-t border-foreground/[0.1]",
+          "relative flex shrink-0 items-center border-t border-foreground/[0.1]",
           pane ? "gap-3 bg-card px-14 py-4" : "px-[18px] py-3",
         )}
       >
+        {menuOpen && (
+          <div
+            role="listbox"
+            aria-label="Quick questions"
+            className={cn(
+              "absolute bottom-full z-10 mb-1 max-h-64 overflow-y-auto rounded-[10px] border border-border bg-popover p-1 shadow-[0_4px_16px_rgba(0,0,0,0.12)]",
+              pane ? "left-14 right-14" : "left-[18px] right-[18px]",
+            )}
+          >
+            {menuItems.length === 0 ? (
+              <p className="px-2.5 py-2 text-[12px] text-muted-foreground">No quick question matches</p>
+            ) : (
+              menuItems.map((question, index) => (
+                <button
+                  key={question.id}
+                  type="button"
+                  role="option"
+                  aria-selected={index === menuIndex}
+                  onMouseMove={() => setMenuIndex(index)}
+                  // mousedown, not click: a click would blur the input first
+                  // and the menu (which lives off the draft) would vanish.
+                  onMouseDown={(event) => {
+                    event.preventDefault();
+                    sendQuick(question);
+                  }}
+                  className={cn(
+                    "flex w-full flex-col items-start gap-px rounded-[7px] px-2.5 py-1.5 text-left",
+                    index === menuIndex ? "bg-foreground/[0.08]" : "hover:bg-foreground/[0.05]",
+                  )}
+                >
+                  <span className="text-[12.5px] font-medium text-foreground">{question.name}</span>
+                  <span className="line-clamp-1 text-[11px] text-muted-foreground">{question.prompt}</span>
+                </button>
+              ))
+            )}
+          </div>
+        )}
         <div className="flex h-9 min-w-0 flex-1 items-center gap-2 rounded-full border border-input bg-background px-3.5 focus-within:border-foreground focus-within:ring-[3px] focus-within:ring-ring/35">
+          {quickQuestions.length > 0 && (
+            <button
+              type="button"
+              aria-label="Quick questions"
+              title="Quick questions (type /)"
+              onClick={openQuickMenu}
+              className="inline-flex size-5 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:text-foreground"
+            >
+              <Zap className="size-[13px]" />
+            </button>
+          )}
           <input
             ref={inputRef}
             type="text"

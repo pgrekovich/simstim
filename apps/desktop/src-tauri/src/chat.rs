@@ -76,6 +76,10 @@ pub struct ChatMessage {
     /// recording clock for a mid-call ask), echoed back so a remounted view
     /// can re-render it. `None` on assistant messages and idle asks.
     pub asked_at: Option<String>,
+    /// For a quick question (prompts.toml): the question's name, shown by
+    /// the UI instead of the prompt text it actually sent. `None` on typed
+    /// questions and on assistant messages.
+    pub question_name: Option<String>,
 }
 
 #[derive(Default)]
@@ -646,8 +650,16 @@ fn ask_blocking<R: tauri::Runtime>(
     note_path: Option<PathBuf>,
     question: String,
     asked_at: Option<String>,
+    question_name: Option<String>,
 ) {
-    let result = ask_inner(app, &scope_key, note_path.as_deref(), &question, asked_at);
+    let result = ask_inner(
+        app,
+        &scope_key,
+        note_path.as_deref(),
+        &question,
+        asked_at,
+        question_name,
+    );
     match result {
         Ok(()) => emit_progress(app, &scope_key, "done", None),
         Err(message) => emit_progress(app, &scope_key, "error", Some(message)),
@@ -660,6 +672,7 @@ fn ask_inner<R: tauri::Runtime>(
     note_path: Option<&Path>,
     question: &str,
     asked_at: Option<String>,
+    question_name: Option<String>,
 ) -> Result<(), String> {
     // The ONE AI choice, shared with summaries (owner ruling): provider and
     // its per-provider model override both come from the enhance settings.
@@ -731,6 +744,7 @@ fn ask_inner<R: tauri::Runtime>(
                         asr: String::new(),
                         summary: String::new(),
                         summary_model: None,
+                        summary_style: None,
                         title_by: None,
                         audio_from_secs: None,
                         people: Vec::new(),
@@ -775,6 +789,7 @@ fn ask_inner<R: tauri::Runtime>(
             followups,
             label: Some(exact_model.unwrap_or_else(|| chat_label(&provider, model.as_deref()))),
             asked_at: None,
+            question_name: None,
         })
     })();
 
@@ -792,6 +807,7 @@ fn ask_inner<R: tauri::Runtime>(
                 followups: Vec::new(),
                 label: None,
                 asked_at,
+                question_name,
             });
             convo.messages.push(answer);
             drop(convos);
@@ -831,12 +847,13 @@ pub async fn chat_ask(
     path: Option<String>,
     question: String,
     asked_at: Option<String>,
+    question_name: Option<String>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     let scope = scope_key(path.as_deref());
     let note_path = path.map(PathBuf::from);
     tauri::async_runtime::spawn_blocking(move || {
-        ask_blocking(&app, scope, note_path, question, asked_at)
+        ask_blocking(&app, scope, note_path, question, asked_at, question_name)
     })
     .await
     .map_err(|e| format!("chat task failed: {e}"))
@@ -898,6 +915,7 @@ mod tests {
             followups: Vec::new(),
             label: None,
             asked_at: None,
+            question_name: None,
         }
     }
 

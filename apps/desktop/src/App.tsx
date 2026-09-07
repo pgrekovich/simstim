@@ -24,6 +24,9 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
 } from "@/components/ui/dropdown-menu";
 import { RecordButton } from "@/components/RecordButton";
 import { ResizeHandle } from "@/components/ResizeHandle";
@@ -71,6 +74,7 @@ import {
   type RetranscribeJob,
 } from "@/lib/retranscribeStatus";
 import { initTheme } from "@/lib/theme";
+import { STANDARD_STYLE, STANDARD_STYLE_NAME, usePrompts } from "@/lib/prompts";
 
 /**
  * The engine (VAD + ASR) loads in a worker thread after `start_recording`
@@ -213,6 +217,8 @@ function App() {
   // Ask your notes (stage 4.2): when open, the folder-wide chat owns the
   // main pane (the selection stays put underneath and comes back on close).
   const [askNotesOpen, setAskNotesOpen] = useState(false);
+  // The user's prompts (prompts.toml): the toolbar menu lists summary styles.
+  const { prompts } = usePrompts();
   // A question handed to Ask your notes from the ⌘K palette's bottom row.
   const [askNotesRequest, setAskNotesRequest] = useState<ChatAskRequest | null>(null);
   const askNotesRequestIdRef = useRef(0);
@@ -1182,11 +1188,11 @@ function App() {
   // flush pending edits FIRST so the model reads what's on screen, then let
   // the enhance-progress event stream drive every visible consequence (the
   // chip, the sidebar spinner, the toast on failure, the refetch on done).
-  async function handleEnhanceSelected() {
+  async function handleEnhanceSelected(style?: string) {
     if (selectedPath === null || selectedPath === activePath || enhancingPath !== null) return;
     try {
       await activeSessionViewRef.current?.flushPendingEdits();
-      await enhanceSession(selectedPath);
+      await enhanceSession(selectedPath, style);
     } catch (err) {
       // Already surfaced through the enhance-progress "error" event; the
       // rejection here would only duplicate that toast.
@@ -1504,6 +1510,33 @@ function App() {
                         ? "Summarize again"
                         : "Summarize"}
                   </DropdownMenuItem>
+                  {/* The user's summary styles (prompts.toml), one submenu
+                      away; the plain item above keeps the note's own style. */}
+                  {prompts.summary_styles.length > 0 && (
+                    <DropdownMenuSub>
+                      <DropdownMenuSubTrigger
+                        disabled={
+                          viewingActiveSession ||
+                          enhancingPath !== null ||
+                          sessionData === null ||
+                          sessionData.transcript.trim().length === 0
+                        }
+                      >
+                        <Sparkles />
+                        Summarize as
+                      </DropdownMenuSubTrigger>
+                      <DropdownMenuSubContent>
+                        <DropdownMenuItem onSelect={() => void handleEnhanceSelected(STANDARD_STYLE)}>
+                          {STANDARD_STYLE_NAME}
+                        </DropdownMenuItem>
+                        {prompts.summary_styles.map((style) => (
+                          <DropdownMenuItem key={style.id} onSelect={() => void handleEnhanceSelected(style.id)}>
+                            {style.name}
+                          </DropdownMenuItem>
+                        ))}
+                      </DropdownMenuSubContent>
+                    </DropdownMenuSub>
+                  )}
                   <DropdownMenuItem
                     disabled={!sessionData || sessionData.transcript.trim().length === 0}
                     onSelect={() => {
@@ -1601,6 +1634,7 @@ function App() {
                 audio_path: null,
                 summary: "",
                 summary_model: null,
+                summary_style: null,
                 people: [],
               }}
               liveLines={lines}

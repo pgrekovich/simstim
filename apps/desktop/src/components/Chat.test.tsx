@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ChatConversation,
@@ -17,6 +17,9 @@ import {
 import { listen } from "@tauri-apps/api/event";
 
 vi.mock("@/lib/ipc", () => ({
+  getPrompts: vi.fn().mockResolvedValue({ summary_instructions: "", summary_styles: [], quick_questions: [] }),
+  savePrompts: vi.fn().mockResolvedValue({ summary_instructions: "", summary_styles: [], quick_questions: [] }),
+  restoreDefaultPrompts: vi.fn().mockResolvedValue({ summary_instructions: "", summary_styles: [], quick_questions: [] }),
   chatAsk: vi.fn().mockResolvedValue(undefined),
   chatCancel: vi.fn().mockResolvedValue(undefined),
   chatClear: vi.fn().mockResolvedValue(undefined),
@@ -59,6 +62,7 @@ const answered: ChatMessage[] = [
     followups: [],
     label: null,
     asked_at: null,
+    question_name: null,
   },
   {
     role: "assistant",
@@ -70,6 +74,7 @@ const answered: ChatMessage[] = [
     followups: ["What changed since June?"],
     label: "claude/opus",
     asked_at: null,
+    question_name: null,
   },
 ];
 
@@ -172,7 +177,7 @@ describe("ChatConversation", () => {
     fireEvent.change(input, { target: { value: "what did I miss?" } });
     fireEvent.keyDown(input, { key: "Enter" });
 
-    expect(chatAsk).toHaveBeenCalledExactlyOnceWith("/notes/call.md", "what did I miss?", "00:15:04");
+    expect(chatAsk).toHaveBeenCalledExactlyOnceWith("/notes/call.md", "what did I miss?", "00:15:04", undefined);
     expect(screen.getByText("what did I miss?")).toBeInTheDocument();
     expect(screen.getByText(/You asked · 00:15:04/i)).toBeInTheDocument();
     expect((input as HTMLInputElement).value).toBe("");
@@ -266,6 +271,7 @@ describe("ChatConversation", () => {
       "/notes/call.md",
       "What changed since June?",
       undefined,
+      undefined,
     );
   });
 
@@ -282,7 +288,123 @@ describe("ChatConversation", () => {
     );
 
     await waitFor(() =>
-      expect(chatAsk).toHaveBeenCalledExactlyOnceWith(null, "berlin rollout", undefined),
+      expect(chatAsk).toHaveBeenCalledExactlyOnceWith(null, "berlin rollout", undefined, undefined),
     );
+  });
+});
+
+describe("ChatConversation: quick questions", () => {
+  const quick = [
+    { id: "miss", name: "What did I miss", prompt: "I stepped away. What was said?", scope: "call" as const },
+    { id: "smart", name: "Make me smart", prompt: "Explain the terms in this call.", scope: "call" as const },
+    { id: "email", name: "Draft a follow-up email", prompt: "Draft a short follow-up email.", scope: "call" as const },
+    { id: "jira", name: "Find related Jira issues", prompt: "Search Jira.", scope: "call" as const },
+    { id: "time", name: "Find a time to meet", prompt: "Propose three times.", scope: "call" as const },
+  ];
+
+  it("offers the first four as chips, sends the prompt under the question's name", async () => {
+    render(
+      <ChatConversation
+        scopePath="/notes/call.md"
+        variant="drawer"
+        sessions={sessions}
+        placeholder="Ask about this call..."
+        quickQuestions={quick}
+        onOpenCitation={vi.fn()}
+      />,
+    );
+    const chips = await screen.findByLabelText("Quick questions", { selector: "div" });
+    expect(within(chips).getAllByRole("button").map((b) => b.textContent)).toEqual([
+      "What did I miss",
+      "Make me smart",
+      "Draft a follow-up email",
+      "Find related Jira issues",
+      "1 more",
+    ]);
+    fireEvent.click(within(chips).getByRole("button", { name: "Make me smart" }));
+    expect(chatAsk).toHaveBeenCalledExactlyOnceWith(
+      "/notes/call.md",
+      "Explain the terms in this call.",
+      undefined,
+      "Make me smart",
+    );
+    // The pending question shows its name, not the prompt it sent.
+    expect(screen.getByText("Make me smart", { selector: "p" })).toBeInTheDocument();
+    expect(screen.queryByText("Explain the terms in this call.")).toBeNull();
+  });
+
+  it("opens a filtered list on / and picks with Enter; a stored quick question renders by name", async () => {
+    vi.mocked(chatHistory).mockResolvedValue({
+      messages: [
+        {
+          role: "user",
+          text: "Search Jira.",
+          sources: [],
+          followups: [],
+          label: null,
+          asked_at: null,
+          question_name: "Find related Jira issues",
+        },
+        { ...answered[1], text: "Two issues: SIM-12 and SIM-40." },
+      ],
+      running: false,
+    });
+    render(
+      <ChatConversation
+        scopePath="/notes/call.md"
+        variant="drawer"
+        sessions={sessions}
+        placeholder="Ask about this call..."
+        quickQuestions={quick}
+        onOpenCitation={vi.fn()}
+      />,
+    );
+    expect(await screen.findByText("Find related Jira issues", { selector: "p" })).toBeInTheDocument();
+    expect(screen.queryByText("Search Jira.")).toBeNull();
+
+    const input = screen.getByRole("textbox", { name: "Ask about this call..." });
+    fireEvent.change(input, { target: { value: "/time" } });
+    const list = screen.getByRole("listbox", { name: "Quick questions" });
+    expect(within(list).getAllByRole("option").map((o) => o.textContent)).toEqual([
+      "Find a time to meetPropose three times.",
+    ]);
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(chatAsk).toHaveBeenCalledExactlyOnceWith(
+      "/notes/call.md",
+      "Propose three times.",
+      undefined,
+      "Find a time to meet",
+    );
+    expect(input).toHaveValue("");
+    expect(screen.queryByRole("listbox")).toBeNull();
+  });
+
+  it("shows the lightning button only when there are quick questions, and it opens the list", async () => {
+    const { rerender } = render(
+      <ChatConversation
+        scopePath={null}
+        variant="pane"
+        sessions={sessions}
+        placeholder="Ask anything..."
+        onOpenCitation={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "Quick questions" })).toBeNull();
+    rerender(
+      <ChatConversation
+        scopePath={null}
+        variant="pane"
+        sessions={sessions}
+        placeholder="Ask anything..."
+        quickQuestions={quick.slice(0, 2)}
+        onOpenCitation={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Quick questions" }));
+    expect(screen.getByRole("textbox", { name: "Ask anything..." })).toHaveValue("/");
+    expect(within(screen.getByRole("listbox", { name: "Quick questions" })).getAllByRole("option")).toHaveLength(2);
+    // Escape closes it and clears the slash.
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Ask anything..." }), { key: "Escape" });
+    expect(screen.queryByRole("listbox")).toBeNull();
   });
 });

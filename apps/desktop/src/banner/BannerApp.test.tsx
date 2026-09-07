@@ -10,6 +10,9 @@ import * as ipc from "@/lib/ipc";
  * (`listen` for banner-state pushes, `emitTo` toward the main window).
  */
 vi.mock("@/lib/ipc", () => ({
+  getPrompts: vi.fn().mockResolvedValue({ summary_instructions: "", summary_styles: [], quick_questions: [] }),
+  savePrompts: vi.fn().mockResolvedValue({ summary_instructions: "", summary_styles: [], quick_questions: [] }),
+  restoreDefaultPrompts: vi.fn().mockResolvedValue({ summary_instructions: "", summary_styles: [], quick_questions: [] }),
   getConfig: vi.fn().mockResolvedValue({ theme: "system" }),
   bannerCurrentState: vi.fn().mockResolvedValue({ kind: "hidden" }),
   bannerDismiss: vi.fn().mockResolvedValue(undefined),

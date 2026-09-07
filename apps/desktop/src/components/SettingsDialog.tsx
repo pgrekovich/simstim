@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
+import { PromptsSettings } from "@/components/PromptsSettings";
 import { cn } from "@/lib/utils";
 import {
   deleteModel,
@@ -1002,6 +1003,10 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                 </span>
               )}
             </section>
+
+            {/* Prompts: the user's own words for the assistant (2026-09-07).
+                Lives in its own component; it edits prompts.toml whole. */}
+            <PromptsSettings open={isOpen} />
 
             {/* Storage: the user's own data first (kilobytes of Markdown next
                 to gigabytes of audio is the point), then the models, which

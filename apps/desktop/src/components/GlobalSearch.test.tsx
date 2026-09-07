@@ -4,6 +4,9 @@ import { GlobalSearch, highlightSegments, parseTranscriptSnippet } from "@/compo
 import { searchSessions, type SearchHit, type SessionMeta } from "@/lib/ipc";
 
 vi.mock("@/lib/ipc", () => ({
+  getPrompts: vi.fn().mockResolvedValue({ summary_instructions: "", summary_styles: [], quick_questions: [] }),
+  savePrompts: vi.fn().mockResolvedValue({ summary_instructions: "", summary_styles: [], quick_questions: [] }),
+  restoreDefaultPrompts: vi.fn().mockResolvedValue({ summary_instructions: "", summary_styles: [], quick_questions: [] }),
   searchSessions: vi.fn(),
 }));
 

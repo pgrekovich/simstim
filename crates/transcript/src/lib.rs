@@ -63,6 +63,11 @@ pub struct Transcript {
     /// `summary` (e.g. "claude"). Only rendered while `summary` is
     /// non-empty.
     summary_model: Option<String>,
+    /// The `summary_style:` frontmatter value: the id of the user's summary
+    /// style (prompts.toml) that wrote `summary`, `None` for the built-in
+    /// standard prompt. Remembered so "Again" repeats the same style. Only
+    /// rendered while `summary` is non-empty.
+    summary_style: Option<String>,
     /// The `title_by:` frontmatter value: what machine wrote the CURRENT
     /// title (an enhance provider label, or "calendar" for a verbatim
     /// calendar-event name). `None` means the title is the user's own (or
@@ -95,6 +100,7 @@ impl Transcript {
             transcript_prefix: None,
             summary: String::new(),
             summary_model: None,
+            summary_style: None,
             title_by: None,
             people: Vec::new(),
         }
@@ -106,6 +112,13 @@ impl Transcript {
     pub fn set_summary(&mut self, text: String, model: Option<String>) {
         self.summary_model = if text.trim().is_empty() { None } else { model };
         self.summary = text;
+    }
+
+    /// Sets which summary style wrote the summary (see the field's doc
+    /// comment); `None` means the built-in standard prompt. Like the model
+    /// label it only renders while a summary exists.
+    pub fn set_summary_style(&mut self, style: Option<String>) {
+        self.summary_style = style.filter(|s| !s.trim().is_empty());
     }
 
     pub fn set_title(&mut self, title: String) {
@@ -298,6 +311,11 @@ impl Transcript {
         {
             out.push_str(&format!("summary_model: {model}\n"));
         }
+        if !summary.is_empty()
+            && let Some(style) = &self.summary_style
+        {
+            out.push_str(&format!("summary_style: {style}\n"));
+        }
         out.push_str("---\n\n## Notes\n\n");
         let notes = self.notes.trim();
         if !notes.is_empty() {
@@ -458,6 +476,10 @@ pub struct SessionData {
     /// The `summary_model:` frontmatter value; only ever `Some` while
     /// `summary` is non-empty.
     pub summary_model: Option<String>,
+    /// The `summary_style:` frontmatter value: the user's summary style
+    /// that wrote `summary`, `None` for the built-in prompt (and whenever
+    /// `summary` is empty). See [`Transcript::set_summary_style`].
+    pub summary_style: Option<String>,
     /// The `title_by:` frontmatter value: what machine wrote the current
     /// title, `None` when the title is the user's own or the automatic
     /// default. See [`Transcript::set_title_by`].
@@ -553,6 +575,11 @@ pub fn parse_session(path: &Path) -> Result<SessionData> {
     } else {
         fields.get("summary_model").cloned()
     };
+    let summary_style = if summary.is_empty() {
+        None
+    } else {
+        fields.get("summary_style").cloned()
+    };
 
     let transcript = body[transcript_content_start..].trim().to_string();
 
@@ -566,6 +593,7 @@ pub fn parse_session(path: &Path) -> Result<SessionData> {
         audio_from_secs,
         summary,
         summary_model,
+        summary_style,
         people,
     })
 }
@@ -696,6 +724,36 @@ mod tests {
 
     mod title_provenance {
         use super::*;
+
+        /// `summary_style:` round-trips next to `summary_model:`, is absent
+        /// for the built-in prompt, and drops with the summary (a file with
+        /// no summary never carries either line).
+        #[test]
+        fn round_trips_summary_style_and_drops_it_with_the_summary() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("styled.md");
+            let mut t = Transcript::new(t0());
+            t.set_summary("- only actions".into(), Some("claude".into()));
+            t.set_summary_style(Some("action-items".into()));
+            t.save(&path).unwrap();
+            let text = std::fs::read_to_string(&path).unwrap();
+            assert!(text.contains("summary_model: claude\nsummary_style: action-items\n"), "{text}");
+            let parsed = parse_session(&path).unwrap();
+            assert_eq!(parsed.summary_style.as_deref(), Some("action-items"));
+
+            // Standard prompt: no line at all.
+            t.set_summary_style(None);
+            t.save(&path).unwrap();
+            assert!(!std::fs::read_to_string(&path).unwrap().contains("summary_style"));
+            assert_eq!(parse_session(&path).unwrap().summary_style, None);
+
+            // No summary: the style line is meaningless and is not written.
+            t.set_summary_style(Some("action-items".into()));
+            t.set_summary(String::new(), Some("claude".into()));
+            t.save(&path).unwrap();
+            let text = std::fs::read_to_string(&path).unwrap();
+            assert!(!text.contains("summary_style") && !text.contains("summary_model"), "{text}");
+        }
 
         /// `title_by:` round-trips, and a file without it (every pre-existing
         /// note) parses to `None` and renders byte-identically to before the

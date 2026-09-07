@@ -192,6 +192,11 @@ export interface SessionData {
   /** What generated `summary` ("claude" / "codex"), `null` without one. */
   summary_model: string | null;
   /**
+   * The summary style (a `SummaryStyle.id` from prompts.toml) that wrote
+   * `summary`; `null` for the built-in prompt or without a summary.
+   */
+  summary_style: string | null;
+  /**
    * Who was on the call: the `people:` frontmatter list, written from the
    * calendar event the enhance lookup matched. `[]` without one.
    */
@@ -463,8 +468,12 @@ export function storageStats(): Promise<StorageStats> {
  * provider CLI, and a second enhance while one is running. Resolves with the
  * generated summary text once it's on disk.
  */
-export function enhanceSession(path: string): Promise<string> {
-  return invoke("enhance_session", { path });
+/**
+ * `style` is a `SummaryStyle.id`, `"standard"` for the built-in prompt, or
+ * omitted to repeat whatever style the note remembers (what "Again" does).
+ */
+export function enhanceSession(path: string, style?: string): Promise<string> {
+  return invoke("enhance_session", { path, style: style ?? null });
 }
 
 /** Which local and cloud summary providers are ready. Mirrors `enhance::list_enhance_providers`. */
@@ -552,6 +561,11 @@ export interface ChatMessage {
    * recording clock for a mid-call ask); `null` otherwise.
    */
   asked_at: string | null;
+  /**
+   * A quick question's name (prompts.toml), shown instead of the prompt
+   * text the message actually sent; `null` on typed questions and answers.
+   */
+  question_name: string | null;
 }
 
 /** Mirrors `chat::ChatHistory`: a scope's messages plus its in-flight flag. */
@@ -586,8 +600,50 @@ export function chatAsk(
   path: string | null,
   question: string,
   askedAt?: string,
+  questionName?: string,
 ): Promise<void> {
-  return invoke("chat_ask", { path, question, askedAt });
+  return invoke("chat_ask", { path, question, askedAt, questionName: questionName ?? null });
+}
+
+/** Mirrors `prompts::SummaryStyle`: one way of writing a note's Summary section. */
+export interface SummaryStyle {
+  id: string;
+  name: string;
+  prompt: string;
+}
+
+/** Where a quick question is offered: the open call, the notes folder, or both. */
+export type QuickScope = "call" | "notes" | "both";
+
+/** Mirrors `prompts::QuickQuestion`: one chat shortcut. */
+export interface QuickQuestion {
+  id: string;
+  name: string;
+  prompt: string;
+  scope: QuickScope;
+}
+
+/** Mirrors `prompts::Prompts`: the whole of the user's `prompts.toml`. */
+export interface Prompts {
+  /** Standing instructions appended to every summary prompt. */
+  summary_instructions: string;
+  summary_styles: SummaryStyle[];
+  quick_questions: QuickQuestion[];
+}
+
+/** The user's prompts, seeded with defaults on first read. Rejects with the parse error of a broken hand edit. */
+export function getPrompts(): Promise<Prompts> {
+  return invoke("get_prompts");
+}
+
+/** Replaces the whole prompts document; resolves to what was saved. */
+export function savePrompts(prompts: Prompts): Promise<Prompts> {
+  return invoke("save_prompts", { prompts });
+}
+
+/** Back to the seeded defaults, discarding every edit. */
+export function restoreDefaultPrompts(): Promise<Prompts> {
+  return invoke("restore_default_prompts");
 }
 
 /** The scope's conversation so far, for seeding a freshly mounted view. */

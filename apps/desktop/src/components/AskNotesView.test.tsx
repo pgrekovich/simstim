@@ -5,6 +5,9 @@ import { AskNotesView, formatHours } from "@/components/AskNotesView";
 import { chatClear, chatHistory, storageStats } from "@/lib/ipc";
 
 vi.mock("@/lib/ipc", () => ({
+  getPrompts: vi.fn().mockResolvedValue({ summary_instructions: "", summary_styles: [], quick_questions: [] }),
+  savePrompts: vi.fn().mockResolvedValue({ summary_instructions: "", summary_styles: [], quick_questions: [] }),
+  restoreDefaultPrompts: vi.fn().mockResolvedValue({ summary_instructions: "", summary_styles: [], quick_questions: [] }),
   chatAsk: vi.fn().mockResolvedValue(undefined),
   chatCancel: vi.fn().mockResolvedValue(undefined),
   chatClear: vi.fn().mockResolvedValue(undefined),

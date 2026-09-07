@@ -244,6 +244,7 @@ pub struct ContinueFrom {
     /// the note, same as notes and the transcript prefix do.
     pub summary: String,
     pub summary_model: Option<String>,
+    pub summary_style: Option<String>,
     /// Whether the existing title was machine-given (`title_by:`
     /// frontmatter); carried through so recording into a note doesn't
     /// silently promote a model-written title to a user-owned one.
@@ -270,6 +271,7 @@ pub fn load_continue_from(path: &Path) -> anyhow::Result<ContinueFrom> {
         previous_duration_secs: meta.duration_secs.unwrap_or(0),
         summary: data.summary,
         summary_model: data.summary_model,
+        summary_style: data.summary_style,
         title_by: data.title_by,
         people: data.people,
     })
@@ -531,6 +533,7 @@ fn run_worker(
             transcript.set_raw_date(seed.raw_date);
             transcript.set_transcript_prefix(seed.transcript_prefix);
             transcript.set_summary(seed.summary, seed.summary_model);
+            transcript.set_summary_style(seed.summary_style);
             transcript.set_people(seed.people);
             transcript.set_duration_secs(seed.previous_duration_secs);
             Some((seed.previous_duration_secs, seed.base_offset_secs))

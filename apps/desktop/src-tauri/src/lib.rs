@@ -8,6 +8,7 @@ pub mod enhance;
 pub mod models;
 pub mod menu_bar;
 pub mod onboarding;
+pub mod prompts;
 pub mod retranscribe;
 pub mod session;
 pub mod sessions;
@@ -705,6 +706,9 @@ pub fn run() {
             config::set_enhance_use_calendar,
             enhance::list_enhance_providers,
             enhance::enhance_session,
+            prompts::get_prompts,
+            prompts::save_prompts,
+            prompts::restore_default_prompts,
             chat::chat_ask,
             chat::chat_history,
             chat::chat_clear,

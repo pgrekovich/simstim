@@ -408,6 +408,7 @@ pub(crate) fn build_prompt(
     notes: &str,
     transcript: &str,
     propose_title: bool,
+    list_people: bool,
     event: Option<&CalendarEvent>,
 ) -> String {
     let notes_are_empty = notes.trim().is_empty();
@@ -424,7 +425,7 @@ pub(crate) fn build_prompt(
     let cyrillic_output = uses_cyrillic_output(notes, transcript);
     let language_rule = output_language_rule(cyrillic_output);
     let prompt_transcript = compact_transcript(transcript);
-    let extra_rules = build_extra_rules(propose_title, event, cyrillic_output);
+    let extra_rules = build_extra_rules(propose_title, list_people, event, cyrillic_output);
     let final_check = if cyrillic_output {
         "Пиши только на языке расшифровки кириллицей; не переводи на английский. Используй только явные утверждения. Сохраняй направление из источника в цель и область действия каждого компонента. Позднее уточнение «не X, а Y» отменяет X. Не смешивай текущее состояние, предпочтительный план и fallback. Условие остается условием. Действие допустимо только при явном обязательстве владельца. Не заполняй раздел ради формата: сомнительное и побочные истории исключи"
     } else {
@@ -498,10 +499,17 @@ pub(crate) fn build_prompt(
 }
 
 /// The optional trailing prompt rules: the matched calendar event as source
-/// data, and the TITLE output contract, in the branch's language. Empty
-/// when neither applies.
+/// data, the TITLE output contract and the PEOPLE output contract, in the
+/// branch's language. Empty when none applies.
+///
+/// `list_people` is set when the calendar named nobody (no event, or an
+/// invitation carrying only a group address such as "internal@"): the
+/// model then lists the people it can actually find named in the
+/// transcript, so an all-hands still records who spoke (owner report: an
+/// empty roster is as useless as "with Internal").
 fn build_extra_rules(
     propose_title: bool,
+    list_people: bool,
     event: Option<&CalendarEvent>,
     cyrillic_output: bool,
 ) -> String {
@@ -553,7 +561,78 @@ fn build_extra_rules(
             );
         }
     }
+    if list_people {
+        if cyrillic_output {
+            rules.push_str(
+                "\nКалендарь не назвал участников этого звонка. Добавь одну строку вида \
+                 `PEOPLE: <имя>, <имя>` с людьми, которые участвовали в звонке, ровно так, \
+                 как их называют или к ним обращаются в расшифровке или заметках: только \
+                 имена, которые там действительно есть, никогда метки Me и Them, ничего \
+                 не угадывай, не больше 8. Если никто не назван, напиши просто `PEOPLE:`. \
+                 Поставь эту строку сразу после строки TITLE, если она есть, иначе первой; \
+                 после неё оставь пустую строку и выведи саму заметку.\n",
+            );
+        } else {
+            rules.push_str(
+                "\nThe calendar did not name the people on this call. Add one line \
+                 `PEOPLE: <name>, <name>` listing the people who took part, exactly as \
+                 they are named or addressed in the transcript or notes: only names that \
+                 actually appear there, never the labels Me or Them, never a guess, at \
+                 most 8. If nobody is named, write `PEOPLE:` alone. Put this line right \
+                 after the TITLE line when there is one, otherwise first; leave one empty \
+                 line after it, then output the note.\n",
+            );
+        }
+    }
     rules
+}
+
+/// Peels the requested leading `PEOPLE: ...` line off a model reply (after
+/// [`split_title_line`] took the TITLE line): `(people, summary body)`.
+/// Names are comma-separated, cleaned of quote and markdown wrapping,
+/// deduplicated, capped, and run through the same group-name filter as the
+/// calendar roster; the speaker labels can never become a person. A
+/// missing or malformed line means "no people": the whole reply is the
+/// summary, nothing is lost.
+pub(crate) fn split_people_line(text: &str) -> (Option<Vec<String>>, String) {
+    const MAX_PEOPLE: usize = 8;
+    const NOT_A_PERSON: &[&str] = &[
+        "me", "them", "i", "you", "user", "speaker", "unknown", "none", "я", "ты", "вы",
+        "пользователь", "никто", "нет",
+    ];
+    let trimmed = text.trim();
+    let Some(rest) = trimmed.strip_prefix("PEOPLE:") else {
+        return (None, trimmed.to_string());
+    };
+    let (line, body) = match rest.split_once('\n') {
+        Some((line, body)) => (line, body),
+        None => (rest, ""),
+    };
+    let body = body.trim();
+    if body.is_empty() {
+        return (None, trimmed.to_string());
+    }
+    let mut people: Vec<String> = Vec::new();
+    for raw in line.split(',') {
+        let name = raw
+            .trim()
+            .trim_matches(|c: char| matches!(c, '"' | '\'' | '`' | '*' | '«' | '»' | '[' | ']'))
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        if name.is_empty()
+            || NOT_A_PERSON.contains(&name.to_lowercase().as_str())
+            || people.iter().any(|seen| seen.eq_ignore_ascii_case(&name))
+        {
+            continue;
+        }
+        people.push(name);
+        if people.len() == MAX_PEOPLE {
+            break;
+        }
+    }
+    let people = drop_group_addresses(people);
+    ((!people.is_empty()).then_some(people), body.to_string())
 }
 
 /// Peels the requested leading `TITLE: ...` line off a model reply:
@@ -1041,11 +1120,19 @@ fn enhance_path_inner<R: tauri::Runtime>(
         // (owner rule: never rephrased or improved); the TITLE output
         // contract is only requested when the model must compose one.
         let compose_title = rename_title && event.is_none();
+        // The calendar's roster wins when it has one; otherwise the model
+        // names the people it finds in the transcript (see build_extra_rules).
+        let calendar_people = event
+            .as_ref()
+            .map(|event| event.attendees.clone())
+            .filter(|attendees| !attendees.is_empty());
+        let list_people = calendar_people.is_none();
         let prompt = build_prompt(
             &existing.title,
             &existing.notes,
             &existing.transcript,
             compose_title,
+            list_people,
             event.as_ref(),
         );
         let raw = run_provider(spec, model.as_deref(), &prompt)?;
@@ -1053,6 +1140,11 @@ fn enhance_path_inner<R: tauri::Runtime>(
             split_title_line(&raw)
         } else {
             (None, raw)
+        };
+        let (transcript_people, summary) = if list_people {
+            split_people_line(&summary)
+        } else {
+            (None, summary)
         };
         let proposed_title = if rename_title {
             event.as_ref().map(|event| event.title.clone()).or(composed_title)
@@ -1068,15 +1160,12 @@ fn enhance_path_inner<R: tauri::Runtime>(
                     .to_string(),
             );
         }
-        // The matched event's attendee list is saved into the note's
-        // `people:` frontmatter (owner request: who was on the call belongs
-        // in the file, for search and context). Only a lookup that actually
-        // carried attendees replaces the line; a miss preserves what an
+        // Who was on the call goes into the note's `people:` frontmatter
+        // (owner request: it belongs in the file, for search and context):
+        // the calendar's attendees when it named any, else the names the
+        // model found in the transcript. Nothing found preserves what an
         // earlier enhance saved (see `set_summary_at`'s docs).
-        let people = event
-            .as_ref()
-            .map(|event| event.attendees.clone())
-            .filter(|attendees| !attendees.is_empty());
+        let people = calendar_people.or(transcript_people);
         crate::sessions::set_summary_at(
             md_path,
             &summary,
@@ -1145,7 +1234,7 @@ mod tests {
 
         #[test]
         fn notes_lead_and_transcript_backs() {
-            let p = build_prompt("Weekly sync", "- budget approved", "[00:00:01] Me: hi", false, None);
+            let p = build_prompt("Weekly sync", "- budget approved", "[00:00:01] Me: hi", false, false, None);
             let notes_at = p.find("- budget approved").unwrap();
             let transcript_at = p.find("[00:00:01] Me: hi").unwrap();
             assert!(
@@ -1158,7 +1247,7 @@ mod tests {
 
         #[test]
         fn empty_notes_ask_for_a_structured_summary_instead() {
-            let p = build_prompt("Untitled", "   ", "[00:00:01] Them: hello", false, None);
+            let p = build_prompt("Untitled", "   ", "[00:00:01] Them: hello", false, false, None);
             assert!(p.contains("took no notes"));
             assert!(p.contains("under 140 words"));
             assert!(p.contains("at most 3 bullets"));
@@ -1171,6 +1260,7 @@ mod tests {
                 "Weekly sync",
                 "",
                 "[00:00:01] Me: Давайте выпустим новую версию в пятницу и проверим тесты",
+                false,
                 false,
                 None,
             );
@@ -1211,10 +1301,10 @@ mod tests {
 
         #[test]
         fn title_contract_appears_only_when_requested_in_both_languages() {
-            let plain = build_prompt("Untitled", "", "[00:00:01] Me: hi", false, None);
+            let plain = build_prompt("Untitled", "", "[00:00:01] Me: hi", false, false, None);
             assert!(!plain.contains("TITLE:"));
 
-            let english = build_prompt("Untitled", "", "[00:00:01] Me: hi", true, None);
+            let english = build_prompt("Untitled", "", "[00:00:01] Me: hi", true, false, None);
             assert!(english.contains("TITLE: <title>"), "{english}");
             assert!(english.contains("at most 8 words"));
 
@@ -1223,10 +1313,60 @@ mod tests {
                 "",
                 "[00:00:01] Me: Давайте выпустим новую версию в пятницу и проверим тесты",
                 true,
+                false,
                 None,
             );
             assert!(cyrillic.contains("TITLE: <название>"), "{cyrillic}");
             assert!(cyrillic.contains("не больше 8 слов"));
+        }
+
+        #[test]
+        fn people_contract_appears_only_when_requested_in_both_languages() {
+            let plain = build_prompt("Untitled", "", "[00:00:01] Me: hi", false, false, None);
+            assert!(!plain.contains("PEOPLE:"));
+
+            let english = build_prompt("Untitled", "", "[00:00:01] Me: hi", true, true, None);
+            assert!(english.contains("PEOPLE: <name>, <name>"), "{english}");
+            assert!(english.contains("never the labels Me or Them"));
+            // TITLE is asked for first, PEOPLE right after it.
+            assert!(english.find("TITLE: <title>").unwrap() < english.find("PEOPLE:").unwrap());
+
+            let cyrillic = build_prompt(
+                "Untitled",
+                "",
+                "[00:00:01] Me: Давайте выпустим новую версию в пятницу и проверим тесты",
+                false,
+                true,
+                None,
+            );
+            assert!(cyrillic.contains("PEOPLE: <имя>, <имя>"), "{cyrillic}");
+            assert!(cyrillic.contains("никогда метки Me и Them"));
+        }
+
+        #[test]
+        fn people_line_is_peeled_cleaned_and_filtered() {
+            let (people, body) = split_people_line(
+                "PEOPLE: Алиса, \"Zu\", Them, Me, internal, Алиса, Pavel Hrakovich\n\nСтатус: ok",
+            );
+            assert_eq!(people.unwrap(), vec!["Алиса", "Zu", "Pavel Hrakovich"]);
+            assert_eq!(body, "Статус: ok");
+
+            // Nobody named: no people, the note is untouched.
+            let (people, body) = split_people_line("PEOPLE:\n\n- decided X");
+            assert!(people.is_none());
+            assert_eq!(body, "- decided X");
+
+            // No line at all: the whole reply is the summary.
+            let (people, body) = split_people_line("- decided X");
+            assert!(people.is_none());
+            assert_eq!(body, "- decided X");
+
+            // TITLE first, then PEOPLE, as the prompt orders them.
+            let (title, rest) = split_title_line("TITLE: Budget review\nPEOPLE: Dana\n\nbody");
+            assert_eq!(title.as_deref(), Some("Budget review"));
+            let (people, body) = split_people_line(&rest);
+            assert_eq!(people.unwrap(), vec!["Dana"]);
+            assert_eq!(body, "body");
         }
 
         /// A matched event enters the prompt as source data in both
@@ -1239,7 +1379,7 @@ mod tests {
                 title: "Q3 Budget Review".to_string(),
                 attendees: vec!["Pavel".to_string(), "Dana".to_string()],
             };
-            let english = build_prompt("Untitled", "", "[00:00:01] Me: hi", false, Some(&event));
+            let english = build_prompt("Untitled", "", "[00:00:01] Me: hi", false, false, Some(&event));
             assert!(english.contains("\"Q3 Budget Review\""), "{english}");
             assert!(english.contains("participants: Pavel, Dana"));
             assert!(english.contains("This IS the meeting"));
@@ -1250,6 +1390,7 @@ mod tests {
                 "Untitled",
                 "",
                 "[00:00:01] Me: Давайте выпустим новую версию в пятницу и проверим тесты",
+                false,
                 false,
                 Some(&event),
             );
@@ -1520,6 +1661,7 @@ mod tests {
             "Test call",
             "- agreed to ship v2 friday",
             "[00:00:01] Me: let's ship version two on friday\n[00:00:04] Them: deal, friday it is",
+            false,
             false,
             None,
         );

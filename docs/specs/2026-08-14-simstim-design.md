@@ -703,7 +703,12 @@ implemented the same day and binding from here on:
 - **The empty pane is the Record button.** Copy summary lives in the
   Summary tab's provenance line. `people:` frontmatter (the calendar event's
   attendees) is saved, searched, shown under the title and given to the
-  call chat.
+  call chat. Mailing lists and group aliases ("internal@", or the bare list
+  name the connector sometimes returns) are never people, filtered both when
+  saving and when rendering. When the calendar names nobody, the summary
+  run also returns a `PEOPLE:` line with the names actually found in the
+  transcript, so an all-hands still records who spoke; the calendar's own
+  roster wins whenever it has one.
 
 Not done, still owed to the review: a shared "Finishing your note" status
 in the note itself, naming "Them" from `people:` on 1:1 calls, a Share

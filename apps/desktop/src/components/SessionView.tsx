@@ -881,7 +881,7 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
   const tabList = (
     <TabsList ref={tabListRef} className="h-[34px] shrink-0 gap-[3px] rounded-full bg-foreground/[0.06] p-[3px] dark:bg-foreground/[0.07]">
       <TabsTrigger
-        className="h-7 gap-[7px] rounded-full px-[13px] font-mono text-[11px] font-normal hover:bg-foreground/[0.05] data-[state=active]:bg-background data-[state=active]:font-semibold data-[state=active]:tracking-[0.04em] data-[state=active]:shadow-[0_1px_2px_rgb(30_27_22/0.14)] dark:data-[state=active]:bg-foreground/[0.14]"
+        className="h-7 gap-[7px] rounded-full px-[13px] font-mono text-[11px] font-normal hover:bg-foreground/[0.05] data-[state=active]:bg-background data-[state=active]:font-semibold data-[state=active]:tracking-[0.04em] data-[state=active]:shadow-[0_1px_2px_rgb(0_0_0/0.14)] dark:data-[state=active]:bg-foreground/[0.14]"
         value="notes"
       >
         Notes
@@ -892,7 +892,7 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
           step detail ("Summarizing part 2 of 7...") lives in the tooltip. */}
       {(summary || enhanceBusy) && (
         <TabsTrigger
-          className="h-7 gap-[7px] rounded-full px-[13px] font-mono text-[11px] font-normal hover:bg-foreground/[0.05] data-[state=active]:bg-background data-[state=active]:font-semibold data-[state=active]:tracking-[0.04em] data-[state=active]:shadow-[0_1px_2px_rgb(30_27_22/0.14)] dark:data-[state=active]:bg-foreground/[0.14]"
+          className="h-7 gap-[7px] rounded-full px-[13px] font-mono text-[11px] font-normal hover:bg-foreground/[0.05] data-[state=active]:bg-background data-[state=active]:font-semibold data-[state=active]:tracking-[0.04em] data-[state=active]:shadow-[0_1px_2px_rgb(0_0_0/0.14)] dark:data-[state=active]:bg-foreground/[0.14]"
           value="summary"
           disabled={!summary}
           title={enhanceBusy ? enhanceProgress ?? "Summarizing..." : undefined}
@@ -904,7 +904,7 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
         </TabsTrigger>
       )}
       <TabsTrigger
-        className="h-7 gap-[7px] rounded-full px-[13px] font-mono text-[11px] font-normal hover:bg-foreground/[0.05] data-[state=active]:bg-background data-[state=active]:font-semibold data-[state=active]:tracking-[0.04em] data-[state=active]:shadow-[0_1px_2px_rgb(30_27_22/0.14)] dark:data-[state=active]:bg-foreground/[0.14]"
+        className="h-7 gap-[7px] rounded-full px-[13px] font-mono text-[11px] font-normal hover:bg-foreground/[0.05] data-[state=active]:bg-background data-[state=active]:font-semibold data-[state=active]:tracking-[0.04em] data-[state=active]:shadow-[0_1px_2px_rgb(0_0_0/0.14)] dark:data-[state=active]:bg-foreground/[0.14]"
         value="transcript"
       >
         {isActive && <span aria-hidden="true" className="recording-tally size-[5px] rounded-full bg-destructive" />}

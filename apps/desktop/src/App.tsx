@@ -1521,7 +1521,7 @@ function App() {
         {status.kind === "error" && (
           <div
             role="alert"
-            className="absolute right-5 top-16 z-40 flex w-[min(420px,calc(100%-40px))] items-start gap-3 rounded-[9px] border border-destructive/25 bg-card p-3.5 text-card-foreground shadow-[0_10px_30px_rgb(30_27_22/0.16)]"
+            className="absolute right-5 top-16 z-40 flex w-[min(420px,calc(100%-40px))] items-start gap-3 rounded-[9px] border border-destructive/25 bg-card p-3.5 text-card-foreground shadow-[0_10px_30px_rgb(0_0_0/0.16)]"
           >
             <CircleAlert aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-destructive" />
             <div className="min-w-0 flex-1">
@@ -1602,7 +1602,7 @@ function App() {
             <div className="flex h-full items-center justify-center">
               <div
                 role="alert"
-                className="flex w-full max-w-md items-start gap-3 rounded-[9px] border border-destructive/25 bg-card p-4 text-card-foreground shadow-[0_8px_24px_rgb(30_27_22/0.1)]"
+                className="flex w-full max-w-md items-start gap-3 rounded-[9px] border border-destructive/25 bg-card p-4 text-card-foreground shadow-[0_8px_24px_rgb(0_0_0/0.1)]"
               >
                 <CircleAlert
                   aria-hidden="true"

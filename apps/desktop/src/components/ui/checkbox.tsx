@@ -26,7 +26,7 @@ function Checkbox({
         )}
         {...props}
       >
-        <span className="size-4 rounded-full bg-background shadow-[0_1px_2px_rgb(30_27_22/0.25)] transition-transform" />
+        <span className="size-4 rounded-full bg-background shadow-[0_1px_2px_rgb(0_0_0/0.25)] transition-transform" />
         {children}
       </CheckboxPrimitive.Root>
     )

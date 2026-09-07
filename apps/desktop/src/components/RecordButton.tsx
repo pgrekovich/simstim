@@ -69,7 +69,7 @@ export function RecordButton({
         size === "compact" ? "h-[30px] rounded-full px-3.5 text-[11.5px]" : "h-12 rounded-full px-8 text-sm",
         recording
           ? "border border-destructive/25 bg-destructive/10 text-destructive hover:bg-destructive/16"
-          : "bg-foreground text-background hover:bg-foreground/90"
+          : "bg-primary text-primary-foreground hover:bg-primary/90"
       )}
     >
       {recording ? (

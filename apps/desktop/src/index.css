@@ -248,95 +248,110 @@
     --color-quiet-foreground: var(--quiet-foreground);
 }
 
-/* The paper/tape palette from the interface redesign, tuned 2026-09-07: the
-   dark surfaces sit closer to neutral (the old olive-brown black read as
-   dirty next to system windows; warmth now lives in the text and the ochre),
-   muted text clears 4.5:1 on paper, and success is its own warm green token
-   instead of a cool stock one. `:root` is light and
-   `.dark` is dark; src/lib/theme.ts toggles the class from config and the
-   system preference. Fonts stay local so the app makes no network request. */
+/* The palette follows Apple's Human Interface Guidelines (2026-09-07 owner
+   ruling, replacing the paper/tape palette of the interface redesign, which
+   lives on in git history): system grays for surfaces, the system font
+   everywhere, the blue accent, blue selection with white text, the system
+   red and green. Opaque on purpose: the app is cross-platform, so no
+   vibrancy. `:root` is light and `.dark` is dark; src/lib/theme.ts toggles
+   the class from config and the system preference. */
 :root {
     --radius: 0.5rem;
-    --font-ui: "Helvetica Neue", -apple-system, BlinkMacSystemFont, sans-serif;
-    --font-reading: "Source Serif 4", "New York", "Iowan Old Style", Georgia, serif;
-    --font-machine: "Spline Sans Mono", "SFMono-Regular", Menlo, Monaco, monospace;
-    --background: #F6F4EF;
-    --foreground: #1E1B16;
-    --card: #EFEDE7;
-    --card-foreground: #2C2822;
-    --popover: #F6F4EF;
-    --popover-foreground: #1E1B16;
-    --primary: #1E1B16;
-    --primary-foreground: #F6F4EF;
-    --secondary: #EFEDE7;
-    --secondary-foreground: #1E1B16;
-    --muted: #EAE7E0;
-    --muted-foreground: #746E65;
-    --quiet-foreground: #4C4840;
-    --accent: #E8E4DC;
-    --accent-foreground: #1E1B16;
-    --destructive: #C33D2E;
-    --success: #4F7A3B;
-    --border: rgb(30 27 22 / 11%);
-    --input: rgb(30 27 22 / 14%);
-    --ring: rgb(30 27 22 / 28%);
-    --voice-remote: #A07B34;
-    --voice-remote-foreground: #6F5319;
+    --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", "Segoe UI", sans-serif;
+    --font-reading: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", "Segoe UI", sans-serif;
+    --font-machine: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+    --background: #FFFFFF;
+    --foreground: #1D1D1F;
+    --card: #F5F5F7;
+    --card-foreground: #1D1D1F;
+    --popover: #FFFFFF;
+    --popover-foreground: #1D1D1F;
+    --primary: #007AFF;
+    --primary-foreground: #FFFFFF;
+    --secondary: #F2F2F7;
+    --secondary-foreground: #1D1D1F;
+    --muted: #F2F2F7;
+    --muted-foreground: #6E6E73;
+    --quiet-foreground: #3A3A3C;
+    --accent: #E8E8ED;
+    --accent-foreground: #1D1D1F;
+    --destructive: #FF3B30;
+    --success: #34C759;
+    --border: rgb(0 0 0 / 10%);
+    --input: rgb(0 0 0 / 15%);
+    --ring: rgb(0 122 255 / 45%);
+    --voice-remote: #007AFF;
+    --voice-remote-foreground: #0062CC;
     --chart-1: oklch(0.646 0.222 41.116);
     --chart-2: oklch(0.6 0.118 184.704);
     --chart-3: oklch(0.398 0.07 227.392);
     --chart-4: oklch(0.828 0.189 84.429);
     --chart-5: oklch(0.769 0.188 70.08);
-    --sidebar: #EDEBE4;
-    --sidebar-foreground: #1E1B16;
-    --sidebar-primary: #1E1B16;
-    --sidebar-primary-foreground: #F6F4EF;
-    --sidebar-accent: #F6F4EF;
-    --sidebar-accent-foreground: #1E1B16;
-    --sidebar-border: rgb(30 27 22 / 10%);
-    --sidebar-ring: rgb(30 27 22 / 28%);
-    --scrollbar-thumb: rgb(30 27 22 / 16%);
-    --scrollbar-thumb-hover: rgb(30 27 22 / 30%);
+    --sidebar: #ECECEC;
+    --sidebar-foreground: #1D1D1F;
+    --sidebar-primary: #007AFF;
+    --sidebar-primary-foreground: #FFFFFF;
+    --sidebar-accent: #E2E2E6;
+    --sidebar-accent-foreground: #1D1D1F;
+    --sidebar-border: rgb(0 0 0 / 10%);
+    --sidebar-ring: rgb(0 122 255 / 45%);
+    --scrollbar-thumb: rgb(0 0 0 / 22%);
+    --scrollbar-thumb-hover: rgb(0 0 0 / 38%);
 }
 
 .dark {
-    --background: #181715;
-    --foreground: #F0EBDD;
-    --card: #201E1B;
-    --card-foreground: #DED8C8;
-    --popover: #201E1B;
-    --popover-foreground: #F0EBDD;
-    --primary: #F0EBDD;
-    --primary-foreground: #181715;
-    --secondary: #201E1B;
-    --secondary-foreground: #F0EBDD;
-    --muted: #27251F;
-    --muted-foreground: #A8A090;
-    --quiet-foreground: #B7B1A2;
-    --accent: #2C2A25;
-    --accent-foreground: #F0EBDD;
-    --destructive: #E05540;
-    --success: #9DBF78;
-    --border: rgb(233 228 214 / 9%);
-    --input: rgb(233 228 214 / 14%);
-    --ring: rgb(233 228 214 / 30%);
-    --voice-remote: #C9A24D;
-    --voice-remote-foreground: #E0BC6A;
+    --background: #1E1E1E;
+    --foreground: #E8E8ED;
+    --card: #2C2C2E;
+    --card-foreground: #E8E8ED;
+    --popover: #2C2C2E;
+    --popover-foreground: #E8E8ED;
+    --primary: #0A84FF;
+    --primary-foreground: #FFFFFF;
+    --secondary: #2C2C2E;
+    --secondary-foreground: #E8E8ED;
+    --muted: #2C2C2E;
+    --muted-foreground: #98989D;
+    --quiet-foreground: #AEAEB2;
+    --accent: #3A3A3C;
+    --accent-foreground: #E8E8ED;
+    --destructive: #FF453A;
+    --success: #30D158;
+    --border: rgb(255 255 255 / 10%);
+    --input: rgb(255 255 255 / 16%);
+    --ring: rgb(10 132 255 / 50%);
+    --voice-remote: #0A84FF;
+    --voice-remote-foreground: #64A9FF;
     --chart-1: oklch(0.87 0 0);
     --chart-2: oklch(0.556 0 0);
     --chart-3: oklch(0.439 0 0);
     --chart-4: oklch(0.371 0 0);
     --chart-5: oklch(0.269 0 0);
-    --sidebar: #131210;
-    --sidebar-foreground: #E9E4D6;
-    --sidebar-primary: #F0EBDD;
-    --sidebar-primary-foreground: #181715;
-    --sidebar-accent: #201E1B;
-    --sidebar-accent-foreground: #F0EBDD;
-    --sidebar-border: rgb(233 228 214 / 8%);
-    --sidebar-ring: rgb(233 228 214 / 30%);
-    --scrollbar-thumb: rgb(233 228 214 / 18%);
-    --scrollbar-thumb-hover: rgb(233 228 214 / 32%);
+    --sidebar: #262626;
+    --sidebar-foreground: #E8E8ED;
+    --sidebar-primary: #0A84FF;
+    --sidebar-primary-foreground: #FFFFFF;
+    --sidebar-accent: #333335;
+    --sidebar-accent-foreground: #E8E8ED;
+    --sidebar-border: rgb(255 255 255 / 10%);
+    --sidebar-ring: rgb(10 132 255 / 50%);
+    --scrollbar-thumb: rgb(255 255 255 / 24%);
+    --scrollbar-thumb-hover: rgb(255 255 255 / 40%);
+}
+
+/* HIG selection: the chosen sidebar row is the accent color with white
+   text, not a lifted card. Everything inside the row inherits. */
+[data-selected="true"] {
+    background: var(--primary) !important;
+    color: var(--primary-foreground) !important;
+    box-shadow: none !important;
+}
+[data-selected="true"] * {
+    color: inherit !important;
+}
+[data-selected="true"] .text-muted-foreground,
+[data-selected="true"] [class*="dark:text-"] {
+    color: rgb(255 255 255 / 78%) !important;
 }
 
 @layer base {
@@ -445,3 +460,4 @@
     animation: none !important;
   }
 }
+

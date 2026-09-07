@@ -74,6 +74,7 @@ import {
   type RetranscribeJob,
 } from "@/lib/retranscribeStatus";
 import { initTheme } from "@/lib/theme";
+import { cn } from "@/lib/utils";
 import { STANDARD_STYLE, STANDARD_STYLE_NAME, usePrompts } from "@/lib/prompts";
 
 /**
@@ -109,6 +110,16 @@ export interface PaneWidthSpec {
   min: number;
   max: number;
 }
+
+/**
+ * The toolbar's icon buttons: 28px like the compact Record button, the
+ * bar's one height, with the ink-tint hover the sidebar's icons use.
+ * `_ACTIVE` is the segmented control's selected tint, for a control whose
+ * panel or menu is currently open.
+ */
+const TOOLBAR_ICON_BUTTON =
+  "size-[28px] rounded-[7px] text-foreground hover:bg-foreground/[0.06] active:bg-foreground/[0.12] [&_svg]:size-4";
+const TOOLBAR_ICON_BUTTON_ACTIVE = "bg-foreground/[0.1] hover:bg-foreground/[0.14] dark:bg-foreground/[0.16] dark:hover:bg-foreground/[0.2]";
 
 export const SIDEBAR_WIDTH: PaneWidthSpec = {
   key: "simstim.sidebar-width",
@@ -1468,15 +1479,18 @@ function App() {
 
           {/* Ask this call (stage 4.2, design 8c): the drawer's visible
               entry point, right of Record like the mockup; ⌘J is the
-              shortcut, not the only way in. Filled while the drawer is
-              open, mirroring the mockup's dark chat square. */}
+              shortcut, not the only way in. Same 28px height as Record and
+              the rest of the bar; "open" is the segmented control's ink
+              tint, not a filled block (owner 2026-09-07: the black square
+              looked bigger than everything else in the bar). */}
           {showTopbar && selectedPath !== null && !askNotesOpen && (
             <Button
               variant="ghost"
               size="icon"
               aria-label="Ask this call"
+              aria-pressed={askCallOpen}
               title="Ask this call (⌘J)"
-              className={askCallOpen ? "bg-foreground text-background hover:bg-foreground/90 hover:text-background" : undefined}
+              className={cn(TOOLBAR_ICON_BUTTON, askCallOpen && TOOLBAR_ICON_BUTTON_ACTIVE)}
               onClick={() => setAskCallOpen((open) => !open)}
             >
               <MessageCircleQuestion className="size-4" />
@@ -1487,7 +1501,14 @@ function App() {
               only appear while the selected note owns the main pane. */}
           {showTopbar && <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon" aria-label="More actions">
+              {/* Radix stamps data-state="open" on the trigger: the same
+                  tint as the open Ask button, for as long as the menu is up. */}
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label="More actions"
+                className={cn(TOOLBAR_ICON_BUTTON, "data-[state=open]:bg-foreground/[0.1] data-[state=open]:hover:bg-foreground/[0.14]")}
+              >
                 <Ellipsis />
               </Button>
             </DropdownMenuTrigger>

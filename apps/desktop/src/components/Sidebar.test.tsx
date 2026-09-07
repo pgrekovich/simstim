@@ -296,3 +296,60 @@ describe("Sidebar: row context menu (macOS right-click reflex)", () => {
     );
   });
 });
+
+describe("Sidebar: Ask your notes row", () => {
+  it("is pinned above the list, opens the conversation, and is the one selected row while it is open", () => {
+    const onOpenAsk = vi.fn();
+    const { rerender } = render(
+      <Sidebar
+        width={280}
+        sessions={makeSessions()}
+        selectedPath="/tmp/a.md"
+        activePath={null}
+        onSelect={vi.fn()}
+        onNewSession={vi.fn()}
+        onDelete={vi.fn()}
+        onOpenAsk={onOpenAsk}
+        askActive={false}
+      />
+    );
+    const row = screen.getByRole("button", { name: /ask your notes/i });
+    // Outside the scrolling list: a long history must never hide the way back.
+    expect(row.closest(".overflow-y-auto")).toBeNull();
+    expect(row).not.toHaveAttribute("data-selected");
+    fireEvent.click(row);
+    expect(onOpenAsk).toHaveBeenCalledTimes(1);
+
+    // While the conversation owns the pane it wears the note rows' selection
+    // tint (App clears the note selection at the same time).
+    rerender(
+      <Sidebar
+        width={280}
+        sessions={makeSessions()}
+        selectedPath={null}
+        activePath={null}
+        onSelect={vi.fn()}
+        onNewSession={vi.fn()}
+        onDelete={vi.fn()}
+        onOpenAsk={onOpenAsk}
+        askActive
+      />
+    );
+    expect(screen.getByRole("button", { name: /ask your notes/i })).toHaveAttribute("data-selected", "true");
+    expect(screen.getByRole("button", { name: /session a/i })).not.toHaveAttribute("data-selected");
+  });
+
+  it("is absent when the app offers no conversation", () => {
+    render(
+      <Sidebar
+        sessions={makeSessions()}
+        selectedPath={null}
+        activePath={null}
+        onSelect={vi.fn()}
+        onNewSession={vi.fn()}
+        onDelete={vi.fn()}
+      />
+    );
+    expect(screen.queryByRole("button", { name: /ask your notes/i })).toBeNull();
+  });
+});

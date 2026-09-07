@@ -692,8 +692,12 @@ implemented the same day and binding from here on:
   live model only appears while missing. Two whisper choices stay (large-v3
   is materially better on Russian). No quantization suffix on screen.
 - **One field.** The command-K palette searches, asks the open call and asks
-  every note (two rows at its tail). The sidebar's pinned Ask your notes row
-  is gone; command-L and command-J remain as shortcuts to the surfaces.
+  every note (two rows at its tail). Command-L and command-J remain as
+  shortcuts to the surfaces. The sidebar's pinned Ask your notes row was cut
+  here and came back on 2026-09-07: the palette starts a conversation well,
+  but after opening a note there was no visible way back to it. The
+  conversation is a place, so it has a row above the list, selected (and the
+  note selection cleared) while it owns the pane.
 - **Trust while recording**: two dots, you and them, lit while Silero heard
   speech on that channel within six seconds. Reads the worker's existing VAD
   clock through `recording_activity`.

@@ -1332,7 +1332,9 @@ function App() {
       {!sidebarCollapsed && <Sidebar
         width={sidebarWidth}
         sessions={sessions}
-        selectedPath={selectedPath}
+        // One selection at a time: while the conversation owns the pane,
+        // no note row may look chosen (owner screenshot 2026-09-07).
+        selectedPath={askNotesOpen ? null : selectedPath}
         activePath={activePath}
         busyPaths={busyPaths}
         onSelect={(path) => {
@@ -1342,6 +1344,8 @@ function App() {
         onNewSession={handleNewSession}
         onCollapse={() => setSidebarCollapsed(true)}
         onOpenSearch={() => setSearchOpen(true)}
+        onOpenAsk={() => setAskNotesOpen(true)}
+        askActive={askNotesOpen}
         onDelete={handleDeleteSession}
         onOpenFile={(path) => void openPath(path)}
         onRevealInFinder={(path) => void revealItemInDir(path)}

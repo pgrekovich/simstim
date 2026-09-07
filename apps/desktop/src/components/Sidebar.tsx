@@ -1,4 +1,4 @@
-import { FileText, Folder, PanelLeftClose, Search, SquarePen, Trash2 } from "lucide-react";
+import { FileText, Folder, MessageCircleQuestion, PanelLeftClose, Search, SquarePen, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   ContextMenu,
@@ -31,10 +31,19 @@ interface SidebarProps {
   onCollapse?: () => void;
   /**
    * Opens the global search palette: the one field that searches, asks the
-   * open call and asks every note (2026-09-04 ruling; the pinned "Ask your
-   * notes" row that used to sit above the list is gone).
+   * open call and asks every note (2026-09-04 ruling).
    */
   onOpenSearch?: () => void;
+  /**
+   * Opens the Ask your notes conversation. The pinned row above the list
+   * came back on 2026-09-07: the palette starts a conversation well, but
+   * once the user opened a note there was no visible way back to it
+   * (owner: "I asked, went somewhere, wanted to return: how?"). The
+   * conversation is a place, so it has a row, like a note.
+   */
+  onOpenAsk?: () => void;
+  /** Whether that conversation currently owns the main pane (the row is selected). */
+  askActive?: boolean;
   /** Row context menu's "Move to Trash"; App owns the confirm dialog and the IPC call. */
   onDelete: (path: string) => void;
   /** Row context menu's "Open file": the note in the system editor. */
@@ -101,6 +110,8 @@ export function Sidebar({
   onNewSession,
   onCollapse,
   onOpenSearch = () => {},
+  onOpenAsk,
+  askActive = false,
   onDelete,
   onOpenFile,
   onRevealInFinder,
@@ -148,6 +159,30 @@ export function Sidebar({
           <SquarePen className="size-[15px]" />
         </Button>
       </div>
+
+      {/* Pinned above the list, never scrolling away with a long history
+          (owner ruling 2026-09-04). A row in the Notes idiom: the same
+          selection tint as a note when the conversation is open. */}
+      {onOpenAsk && (
+        <div className="shrink-0 px-3 pt-1">
+          <button
+            type="button"
+            onClick={onOpenAsk}
+            data-selected={askActive ? "true" : undefined}
+            aria-current={askActive ? "page" : undefined}
+            className={cn(
+              "flex h-[34px] w-full items-center gap-2 rounded-[7px] px-2.5 text-left text-[13px] font-semibold text-foreground",
+              askActive ? "hover:bg-primary/[0.18]" : "hover:bg-foreground/[0.05] active:bg-foreground/[0.10]"
+            )}
+          >
+            <MessageCircleQuestion aria-hidden="true" className="size-[15px] shrink-0 text-primary" />
+            <span className="min-w-0 flex-1 truncate">Ask your notes</span>
+            {width >= 205 && (
+              <span className="shrink-0 text-[11px] font-normal text-muted-foreground">⌘L</span>
+            )}
+          </button>
+        </div>
+      )}
 
       <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
         {sessions.length === 0 ? (

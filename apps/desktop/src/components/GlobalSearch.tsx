@@ -6,7 +6,7 @@ import {
   DialogDescription,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { cn } from "@/lib/utils";
+import { cn, formatDuration } from "@/lib/utils";
 import { searchSessions, type SearchHit, type SessionMeta } from "@/lib/ipc";
 
 interface GlobalSearchProps {
@@ -112,17 +112,6 @@ function formatDate(dateStr: string): string {
     month: "short",
     day: "numeric",
   });
-}
-
-function formatDuration(durationSecs: number | null): string | null {
-  if (durationSecs === null) return null;
-  const whole = Math.max(0, Math.floor(durationSecs));
-  const hours = Math.floor(whole / 3600);
-  const minutes = Math.floor((whole % 3600) / 60);
-  const seconds = whole % 60;
-  return hours > 0
-    ? `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`
-    : `${minutes}:${String(seconds).padStart(2, "0")}`;
 }
 
 function rowsFromHits(hits: SearchHit[], query: string): SearchRow[] {

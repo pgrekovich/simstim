@@ -66,7 +66,7 @@ describe("GlobalSearch", () => {
     );
 
     expect(screen.getByRole("dialog", { name: /search all notes/i })).toBeInTheDocument();
-    expect(screen.getByRole("option", { name: /weekly sync/i })).toHaveTextContent("1:05");
+    expect(screen.getByRole("option", { name: /weekly sync/i })).toHaveTextContent("1 min");
     expect(screen.getByRole("option", { name: /standup/i })).toBeInTheDocument();
     expect(searchSessions).not.toHaveBeenCalled();
   });

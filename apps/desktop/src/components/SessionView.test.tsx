@@ -831,7 +831,7 @@ describe("SessionView: title meta line (date and duration)", () => {
   it("formats same-year notes without the year and appends the duration", () => {
     expect(
       formatSessionMeta("2026-09-02T14:03:52", 611, new Date("2026-09-04T00:00:00")),
-    ).toBe("Sep 2, 14:03 · 10:11");
+    ).toBe("Sep 2, 14:03 · 10 min");
   });
 
   it("spells out the year for a note from another year and omits a missing duration", () => {

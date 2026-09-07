@@ -308,15 +308,26 @@ export function TranscriptView({
                       <Fragment key={item.index}>
                         {j > 0 && " "}
                         {onSeek ? (
-                          <button
+                          // A span, not a <button>: buttons are atomic inline
+                          // boxes and can never break across lines, so a
+                          // long chunk would push the next one onto its own
+                          // line instead of flowing like words.
+                          <span
                             ref={(element) => { lineRefs.current[item.index] = element; }}
-                            type="button"
+                            role="button"
+                            tabIndex={0}
                             title={item.timestamp}
                             onClick={() => onSeek(timestampToSeconds(item.timestamp))}
-                            className="transcript-chunk -mx-0.5 rounded-[4px] px-0.5 text-left align-baseline transition-colors [box-decoration-break:clone] hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter" || event.key === " ") {
+                                event.preventDefault();
+                                onSeek(timestampToSeconds(item.timestamp));
+                              }
+                            }}
+                            className="-mx-0.5 cursor-pointer rounded-[4px] px-0.5 transition-colors [box-decoration-break:clone] hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
                           >
                             {body}
-                          </button>
+                          </span>
                         ) : (
                           <span ref={(element) => { lineRefs.current[item.index] = element; }}>
                             {body}

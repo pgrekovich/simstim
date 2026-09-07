@@ -105,7 +105,7 @@ describe("Sidebar: session metadata", () => {
 
     const row = screen.getByRole("button", { name: /^session a/i });
     expect(row.classList.contains("flex-col")).toBe(true);
-    expect(row.textContent).toContain(" · 1:05");
+    expect(row.textContent).toContain(" · 1 min");
     expect(row.querySelector(".group-hover\\:opacity-0")).toBeNull();
   });
 });

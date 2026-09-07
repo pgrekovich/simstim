@@ -348,9 +348,3 @@
 .dark [data-selected="true"] {
     background: color-mix(in srgb, var(--primary) 24%, transparent) !important;
 }
-
-/* Transcript chunks are <button>s for click-to-seek; they must flow inside
-   the turn's paragraph like words, never wrap as blocks. */
-.transcript-chunk {
-    display: inline;
-}

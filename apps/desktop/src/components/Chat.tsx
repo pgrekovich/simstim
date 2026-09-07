@@ -128,6 +128,11 @@ export function ChatConversation({
   const [pendingAskedAt, setPendingAskedAt] = useState<string | null>(null);
   // The in-flight quick question's name (shown instead of its prompt).
   const [pendingName, setPendingName] = useState<string | null>(null);
+  // What the assistant is doing right now ("Reading 2026-09-03 All-hands.md")
+  // and how many tool calls it has made, from the backend's `step` events:
+  // a long agentic search must read as work in progress, not a hang.
+  const [step, setStep] = useState<string | null>(null);
+  const [stepCount, setStepCount] = useState(0);
   // The "/" menu's keyboard cursor, reset whenever the filter changes.
   const [menuIndex, setMenuIndex] = useState(0);
   // Mirror of `pendingQuestion` for the event listener: restoring a failed
@@ -174,9 +179,18 @@ export function ChatConversation({
       if (payload.scope !== scope) return;
       if (payload.phase === "running") {
         setRunning(true);
+        setStep(null);
+        setStepCount(0);
+        return;
+      }
+      if (payload.phase === "step") {
+        setStep(payload.message);
+        setStepCount((n) => n + 1);
         return;
       }
       setRunning(false);
+      setStep(null);
+      setStepCount(0);
       if (payload.phase === "error") {
         // Put the failed question back in the input for a retry; a cancel
         // ("cancelled") restores it quietly, without the error box.
@@ -215,7 +229,7 @@ export function ChatConversation({
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages, running, pendingQuestion]);
 
-  function send(question: string, name?: string) {
+  function send(question: string, name?: string, connectors?: boolean) {
     const trimmed = question.trim();
     if (trimmed === "" || running) return;
     const stamp = askedAt?.() ?? null;
@@ -228,12 +242,12 @@ export function ChatConversation({
     // Fire and forget: `chat-progress` events drive everything visible, and
     // the rejection is surfaced by the same "error" event (chat.rs emits
     // exactly one terminal event per ask, validation failures included).
-    chatAsk(scopePath, trimmed, stamp ?? undefined, name).catch(() => {});
+    chatAsk(scopePath, trimmed, stamp ?? undefined, name, connectors).catch(() => {});
   }
 
   /** A quick question: its prompt is the question, its name is what shows. */
   function sendQuick(question: QuickQuestion) {
-    send(question.prompt, question.name);
+    send(question.prompt, question.name, question.connectors);
   }
 
   // The composer's "/" menu: type "/" (or press the lightning button) and
@@ -450,8 +464,9 @@ export function ChatConversation({
                   )}
                 >
                   <span aria-hidden="true" className="working-spinner size-3 shrink-0 text-muted-foreground" />
-                  <span className="flex-1 text-[11px] tabular-nums text-muted-foreground">
-                    {scopePath === null ? "reading your notes" : "reading this call"}
+                  <span className="flex-1 truncate text-[11px] tabular-nums text-muted-foreground">
+                    {step ?? (scopePath === null ? "reading your notes" : "reading this call")}
+                    {stepCount > 1 && ` · ${stepCount} steps`}
                   </span>
                   <button
                     type="button"

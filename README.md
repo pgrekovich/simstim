@@ -47,7 +47,9 @@ are reapplied.
 Your prompts live next to it in `prompts.toml`: standing instructions added to
 every summary, summary styles (how a note's Summary section is written) and
 quick questions for the chat. Settings edits the same file; it is seeded with
-a few defaults on first read and is yours to edit, version or sync.
+a few defaults on first read and is yours to edit, version or sync. A quick
+question with `connectors = true` may use the connectors your Claude Code is
+signed into (Jira, calendar, ...) to look things up.
 
 ```toml
 output_dir = "~/Documents/simstim"

@@ -124,6 +124,14 @@ section replaced.
   cover less than the whole timeline (deleted audio, then continuation) must
   be handled explicitly, or the earlier text is lost. Hence `audio_from`.
 - **Model files are big** (0.5 to 3 GB). Never download one in a test.
+- **`claude -p` connects every configured MCP server** before answering,
+  and their tool schemas ride along in every request: with the owner's
+  eleven claude.ai connectors that was 160k tokens and seconds of startup
+  per call, for a summary that uses no tools at all. Pass
+  `--strict-mcp-config` on every CLI run that does not need connectors
+  (summaries, ordinary asks); only the calendar lookup and connector quick
+  questions may omit it. Restricting `--tools` also hides MCP tools, so a
+  connector run must leave the built-in set open and deny writers by name.
 
 ## Current state
 

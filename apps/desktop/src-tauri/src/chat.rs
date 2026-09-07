@@ -30,6 +30,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -95,8 +96,9 @@ struct Conversation {
 pub struct ChatState(Mutex<HashMap<String, Conversation>>);
 
 /// `chat-progress` event payload. Mirrors `ChatProgress` in `ipc.ts`.
-/// `running` fires once the scope's slot is claimed; exactly one terminal
-/// `done`/`error` follows. A cancelled ask terminates as `error` with the
+/// `running` fires once the scope's slot is claimed; any number of `step`
+/// events (one per tool call, `message` says what is being read) may
+/// follow; exactly one terminal `done`/`error` ends the ask. A cancelled ask terminates as `error` with the
 /// message "cancelled", which the UI treats as a quiet dismissal.
 #[derive(Debug, Clone, Serialize)]
 struct ChatProgressPayload {
@@ -507,36 +509,58 @@ fn validate_ask(
 /// stdin; both are granted read-only reach into `notes_dir` and nothing
 /// else. Returns the command plus the codex `-o` answer file (codex's
 /// stdout is logs; claude's stdout IS the answer).
+/// Built-in tools a connector question must never reach: everything that
+/// writes, runs or browses. `--disallowedTools` denies them even though the
+/// built-in set stays open (the CLI only lists MCP tools when `--tools` is
+/// not restricting the set; verified against the real CLI 2026-09-07).
+const CONNECTOR_DENIED_TOOLS: &str = "Bash,Write,Edit,MultiEdit,NotebookEdit,WebFetch,WebSearch,Task,Agent,TodoWrite,KillShell,BashOutput,Skill";
+
+/// `connectors`: the `--allowedTools` rules for the user's MCP servers when
+/// a quick question asked for them (see `prompts::QuickQuestion.connectors`),
+/// `None` for the ordinary read-only ask.
 fn build_command(
     provider: &str,
     binary: &Path,
     model: Option<&str>,
     notes_dir: &Path,
     workdir: &Path,
+    connectors: Option<&str>,
 ) -> Result<(Command, Option<PathBuf>), String> {
     let mut cmd = Command::new(binary);
     match provider {
         "claude" => {
             // A fresh empty cwd (same hygiene as enhance: no CLAUDE.md, no
             // git context) with the notes folder reachable via --add-dir.
-            // --tools restricts the built-in set to the three read-only
-            // file tools; --allowedTools pre-approves them so -p mode never
-            // stalls on a permission it can't ask for. JSON output, unlike
-            // enhance's text mode, because the result carries `modelUsage`:
-            // the owner wants every answer labeled with the EXACT model that
-            // wrote it, not the provider name (a bare `claude` hides which
-            // model the CLI's default resolved to).
-            cmd.args([
-                "-p",
-                "--output-format",
-                "json",
-                "--tools",
-                "Read,Grep,Glob",
-                "--allowedTools",
-                "Read,Grep,Glob",
-                "--add-dir",
-            ]);
+            // Streamed JSON, unlike enhance's text mode: every tool call
+            // arrives as an event (the UI shows what is being read) and the
+            // final `result` event carries `modelUsage`, so every answer is
+            // labeled with the EXACT model that wrote it.
+            cmd.args(["-p", "--output-format", "stream-json", "--verbose", "--add-dir"]);
             cmd.arg(notes_dir);
+            match connectors {
+                // The ordinary ask: --tools restricts the built-in set to
+                // the three read-only file tools, --allowedTools pre-approves
+                // them so -p mode never stalls on a permission it can't ask
+                // for, and --strict-mcp-config keeps the CLI from connecting
+                // every configured MCP server first (eleven connectors were
+                // 160k tokens of tool schemas and seconds of startup per
+                // ask, measured 2026-09-07).
+                None => {
+                    cmd.args([
+                        "--tools",
+                        "Read,Grep,Glob",
+                        "--allowedTools",
+                        "Read,Grep,Glob",
+                        "--strict-mcp-config",
+                    ]);
+                }
+                // A connector question: the user's MCP servers are in, the
+                // built-in writing tools are denied by name.
+                Some(rules) => {
+                    cmd.args(["--disallowedTools", CONNECTOR_DENIED_TOOLS, "--allowedTools"]);
+                    cmd.arg(format!("Read,Grep,Glob,{rules}"));
+                }
+            }
             if let Some(m) = model {
                 cmd.args(["--model", m]);
             }
@@ -563,11 +587,100 @@ fn build_command(
 /// Runs the prepared command over `prompt` with the poll-with-deadline kill
 /// discipline enhance uses, plus a cancel flag: `chat_cancel` flips it and
 /// the child is killed within one poll tick. Returns the trimmed answer.
+/// One line of the CLI's `stream-json` output, reduced to what the UI can
+/// show: `Step(text)` for a tool call ("Reading 2026-09-03 All-hands.md"),
+/// `Result(envelope)` for the final result event (the same JSON envelope
+/// `--output-format json` prints, so `parse_claude_json` reads it as
+/// before), `Nothing` for everything else (text deltas, system events, or a
+/// line that is not JSON at all, which is what codex prints).
+#[derive(Debug, PartialEq, Eq)]
+enum StreamLine {
+    Step(String),
+    Result(String),
+    Nothing,
+}
+
+fn parse_stream_line(line: &str) -> StreamLine {
+    let line = line.trim();
+    if line.is_empty() {
+        return StreamLine::Nothing;
+    }
+    let Ok(event) = serde_json::from_str::<serde_json::Value>(line) else {
+        return StreamLine::Nothing;
+    };
+    match event.get("type").and_then(|t| t.as_str()) {
+        Some("result") => StreamLine::Result(line.to_string()),
+        Some("assistant") => {
+            let blocks = event
+                .pointer("/message/content")
+                .and_then(|c| c.as_array())
+                .cloned()
+                .unwrap_or_default();
+            let steps: Vec<String> = blocks
+                .iter()
+                .filter(|b| b.get("type").and_then(|t| t.as_str()) == Some("tool_use"))
+                .map(|b| {
+                    step_message(
+                        b.get("name").and_then(|n| n.as_str()).unwrap_or("tool"),
+                        b.get("input").unwrap_or(&serde_json::Value::Null),
+                    )
+                })
+                .collect();
+            match steps.last() {
+                Some(step) => StreamLine::Step(step.clone()),
+                None => StreamLine::Nothing,
+            }
+        }
+        _ => StreamLine::Nothing,
+    }
+}
+
+/// A tool call in the user's words. File paths shrink to their file name;
+/// connector tools name the connector ("Google Calendar: list events").
+fn step_message(tool: &str, input: &serde_json::Value) -> String {
+    let str_field = |key: &str| input.get(key).and_then(|v| v.as_str()).map(str::to_string);
+    let base_name = |path: String| {
+        Path::new(&path)
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or(path)
+    };
+    match tool {
+        "Read" => match str_field("file_path") {
+            Some(path) => format!("Reading {}", base_name(path)),
+            None => "Reading a note".to_string(),
+        },
+        "Grep" => match str_field("pattern") {
+            Some(pattern) => format!("Searching for \u{201c}{pattern}\u{201d}"),
+            None => "Searching the notes".to_string(),
+        },
+        "Glob" => "Listing notes".to_string(),
+        name if name.starts_with("mcp__") => {
+            let mut parts = name.splitn(3, "__");
+            parts.next();
+            let server = parts
+                .next()
+                .unwrap_or("connector")
+                .trim_start_matches("claude_ai_")
+                .replace('_', " ");
+            let action = parts.next().unwrap_or("").replace(['_', '-'], " ");
+            if action.is_empty() {
+                format!("Asking {server}")
+            } else {
+                format!("{server}: {action}")
+            }
+        }
+        other => format!("Using {other}"),
+    }
+}
+
+/// `on_step` receives each tool call as it happens (see [`parse_stream_line`]).
 fn run_chat(
     mut cmd: Command,
     codex_out: Option<&Path>,
     prompt: &str,
     cancel: &AtomicBool,
+    on_step: &mut dyn FnMut(String),
 ) -> Result<String, String> {
     let mut child = cmd
         .stdin(Stdio::piped())
@@ -585,17 +698,36 @@ fn run_chat(
 
     let stdout = child.stdout.take().expect("stdout was piped");
     let stderr = child.stderr.take().expect("stderr was piped");
+    // stdout is read line by line as it streams: tool calls go to the UI
+    // at once through the channel, the final result envelope is kept apart
+    // from the rest so the answer parser sees exactly what `--output-format
+    // json` would have printed.
+    let (steps_tx, steps_rx) = mpsc::channel::<String>();
     let reader = std::thread::spawn(move || {
-        use std::io::Read;
+        use std::io::{BufRead, Read};
         let mut out = String::new();
+        let mut result_line: Option<String> = None;
+        for line in std::io::BufReader::new(stdout).lines().map_while(Result::ok) {
+            match parse_stream_line(&line) {
+                StreamLine::Step(step) => {
+                    let _ = steps_tx.send(step);
+                }
+                StreamLine::Result(envelope) => result_line = Some(envelope),
+                StreamLine::Nothing => {}
+            }
+            out.push_str(&line);
+            out.push('\n');
+        }
         let mut err = String::new();
-        let _ = std::io::BufReader::new(stdout).read_to_string(&mut out);
         let _ = std::io::BufReader::new(stderr).read_to_string(&mut err);
-        (out, err)
+        (result_line.unwrap_or(out), err)
     });
 
     let deadline = Instant::now() + CHAT_TIMEOUT;
     let status = loop {
+        while let Ok(step) = steps_rx.try_recv() {
+            on_step(step);
+        }
         match child.try_wait().map_err(|e| e.to_string())? {
             Some(status) => break status,
             None if cancel.load(Ordering::Relaxed) => {
@@ -651,6 +783,7 @@ fn ask_blocking<R: tauri::Runtime>(
     question: String,
     asked_at: Option<String>,
     question_name: Option<String>,
+    connectors: bool,
 ) {
     let result = ask_inner(
         app,
@@ -659,6 +792,7 @@ fn ask_blocking<R: tauri::Runtime>(
         &question,
         asked_at,
         question_name,
+        connectors,
     );
     match result {
         Ok(()) => emit_progress(app, &scope_key, "done", None),
@@ -673,6 +807,7 @@ fn ask_inner<R: tauri::Runtime>(
     question: &str,
     asked_at: Option<String>,
     question_name: Option<String>,
+    connectors: bool,
 ) -> Result<(), String> {
     // The ONE AI choice, shared with summaries (owner ruling): provider and
     // its per-provider model override both come from the enhance settings.
@@ -717,6 +852,25 @@ fn ask_inner<R: tauri::Runtime>(
     let result = (|| {
         let binary = binary.expect("validated above");
         let notes_dir = cfg.output_dir.clone();
+        // A connector question (Jira, calendar, ...) runs with the user's
+        // MCP servers allowlisted; claude only (codex has no connectors),
+        // and only when the CLI actually lists some. The prompt gets one
+        // extra line so the model knows the tools are meant to be used.
+        let connector_rules = if connectors && provider == "claude" {
+            let servers = crate::enhance::discover_mcp_servers(&binary);
+            (!servers.is_empty()).then(|| crate::enhance::mcp_allowed_tools(&servers))
+        } else {
+            None
+        };
+        let question_for_prompt = if connector_rules.is_some() {
+            format!(
+                "{question}\n\n(Your connector tools are available for this question. Use them \
+                 to look things up, never to create or change anything.)"
+            )
+        } else {
+            question.to_string()
+        };
+        let question = question_for_prompt.as_str();
         // The freshest on-disk state, read INSIDE the slot: for a live note
         // this is the transcript as of this ask (lines flush as they
         // finalize; reading violates nothing).
@@ -766,9 +920,17 @@ fn ask_inner<R: tauri::Runtime>(
             }
         };
         let workdir = tempfile::tempdir().map_err(|e| e.to_string())?;
-        let (cmd, codex_out) =
-            build_command(&provider, &binary, model.as_deref(), &notes_dir, workdir.path())?;
-        let raw = run_chat(cmd, codex_out.as_deref(), &prompt, &cancel)?;
+        let (cmd, codex_out) = build_command(
+            &provider,
+            &binary,
+            model.as_deref(),
+            &notes_dir,
+            workdir.path(),
+            connector_rules.as_deref(),
+        )?;
+        let raw = run_chat(cmd, codex_out.as_deref(), &prompt, &cancel, &mut |step| {
+            emit_progress(app, scope_key, "step", Some(step));
+        })?;
         // claude answers in its JSON envelope, which names the exact model
         // that wrote the reply; an unexpected non-JSON output degrades to
         // the raw text with the configured label.
@@ -848,12 +1010,21 @@ pub async fn chat_ask(
     question: String,
     asked_at: Option<String>,
     question_name: Option<String>,
+    connectors: Option<bool>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
     let scope = scope_key(path.as_deref());
     let note_path = path.map(PathBuf::from);
     tauri::async_runtime::spawn_blocking(move || {
-        ask_blocking(&app, scope, note_path, question, asked_at, question_name)
+        ask_blocking(
+            &app,
+            scope,
+            note_path,
+            question,
+            asked_at,
+            question_name,
+            connectors.unwrap_or(false),
+        )
     })
     .await
     .map_err(|e| format!("chat task failed: {e}"))
@@ -1187,6 +1358,7 @@ mod tests {
                 Some("opus"),
                 Path::new("/tmp/notes"),
                 Path::new("/tmp/work"),
+                None,
             )
             .unwrap();
             let args: Vec<String> = cmd
@@ -1195,11 +1367,16 @@ mod tests {
                 .collect();
             assert!(out.is_none());
             assert!(
-                args.windows(2).any(|w| w[0] == "--output-format" && w[1] == "json"),
-                "claude must answer in the JSON envelope that names the exact model"
+                args.windows(2).any(|w| w[0] == "--output-format" && w[1] == "stream-json"),
+                "claude must stream: tool calls for the UI, the result envelope naming the model"
             );
+            assert!(args.iter().any(|a| a == "--verbose"), "stream-json needs --verbose in -p mode");
             assert!(args.windows(2).any(|w| w[0] == "--tools" && w[1] == "Read,Grep,Glob"));
             assert!(args.windows(2).any(|w| w[0] == "--allowedTools" && w[1] == "Read,Grep,Glob"));
+            assert!(
+                args.iter().any(|a| a == "--strict-mcp-config"),
+                "an ordinary ask must not connect every MCP server first"
+            );
             assert!(args.windows(2).any(|w| w[0] == "--add-dir" && w[1] == "/tmp/notes"));
             assert!(args.windows(2).any(|w| w[0] == "--model" && w[1] == "opus"));
             assert_eq!(
@@ -1210,6 +1387,68 @@ mod tests {
         }
 
         #[test]
+        fn build_command_opens_connectors_only_for_a_connector_question() {
+            let (cmd, _) = build_command(
+                "claude",
+                Path::new("/usr/bin/claude"),
+                None,
+                Path::new("/tmp/notes"),
+                Path::new("/tmp/work"),
+                Some("mcp__claude_ai_Atlassian,mcp__claude_ai_Atlassian__*"),
+            )
+            .unwrap();
+            let args: Vec<String> = cmd
+                .get_args()
+                .map(|a| a.to_string_lossy().to_string())
+                .collect();
+            // MCP tools only show up when the built-in set is not restricted
+            // and the servers are connected, so neither flag may be present.
+            assert!(!args.iter().any(|a| a == "--tools"));
+            assert!(!args.iter().any(|a| a == "--strict-mcp-config"));
+            assert!(args.windows(2).any(|w| w[0] == "--allowedTools"
+                && w[1] == "Read,Grep,Glob,mcp__claude_ai_Atlassian,mcp__claude_ai_Atlassian__*"));
+            // Everything that writes, runs or browses stays denied by name.
+            let denied = args
+                .windows(2)
+                .find(|w| w[0] == "--disallowedTools")
+                .map(|w| w[1].clone())
+                .unwrap();
+            for tool in ["Bash", "Write", "Edit", "WebFetch", "Task"] {
+                assert!(denied.split(',').any(|t| t == tool), "{tool} must be denied");
+            }
+        }
+
+        #[test]
+        fn stream_lines_become_steps_and_the_result_envelope() {
+            let read = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"/notes/2026-09-03 14-01-09 call.md"}}]}}"#;
+            assert_eq!(
+                parse_stream_line(read),
+                StreamLine::Step("Reading 2026-09-03 14-01-09 call.md".to_string())
+            );
+            let grep = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Let me look."},{"type":"tool_use","name":"Grep","input":{"pattern":"salesforce","path":"/notes"}}]}}"#;
+            assert_eq!(
+                parse_stream_line(grep),
+                StreamLine::Step("Searching for \u{201c}salesforce\u{201d}".to_string())
+            );
+            let jira = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"mcp__claude_ai_Atlassian__searchJiraIssuesUsingJql","input":{}}]}}"#;
+            assert_eq!(
+                parse_stream_line(jira),
+                StreamLine::Step("Atlassian: searchJiraIssuesUsingJql".to_string())
+            );
+            // Text-only assistant events, system events and non-JSON lines are nothing.
+            let text = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Found."}]}}"#;
+            assert_eq!(parse_stream_line(text), StreamLine::Nothing);
+            assert_eq!(parse_stream_line(r#"{"type":"system","subtype":"init"}"#), StreamLine::Nothing);
+            assert_eq!(parse_stream_line("codex prints prose"), StreamLine::Nothing);
+            // The result event is kept whole: it is the JSON envelope.
+            let result = r#"{"type":"result","result":"Two notes.","modelUsage":{"claude-sonnet-5":{}}}"#;
+            assert_eq!(parse_stream_line(result), StreamLine::Result(result.to_string()));
+            let (text, model) = parse_claude_json(result).unwrap().unwrap();
+            assert_eq!(text, "Two notes.");
+            assert_eq!(model.as_deref(), Some("claude-sonnet-5"));
+        }
+
+        #[test]
         fn build_command_runs_codex_read_only_in_the_notes_folder() {
             let (cmd, out) = build_command(
                 "codex",
@@ -1217,6 +1456,7 @@ mod tests {
                 None,
                 Path::new("/tmp/notes"),
                 Path::new("/tmp/work"),
+                None,
             )
             .unwrap();
             let args: Vec<String> = cmd
@@ -1258,8 +1498,8 @@ mod tests {
             "who owns the DPA rewrite?",
         );
         let (cmd, out) =
-            build_command("claude", &binary, None, notes.path(), workdir.path()).unwrap();
-        let raw = run_chat(cmd, out.as_deref(), &prompt, &AtomicBool::new(false)).unwrap();
+            build_command("claude", &binary, None, notes.path(), workdir.path(), None).unwrap();
+        let raw = run_chat(cmd, out.as_deref(), &prompt, &AtomicBool::new(false), &mut |_| {}).unwrap();
         let (reply, model) = parse_claude_json(&raw)
             .expect("the CLI must answer in its JSON envelope")
             .expect("the CLI reported an error");

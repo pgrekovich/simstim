@@ -778,6 +778,24 @@ Decisions (proposed, owner: "звучит разумно, гоу"):
   styles write only the machine-owned Summary section, questions write
   nothing to disk.
 
+- **Connectors are opt-in per question.** The CLI only exposes MCP tools
+  when its built-in tool set is not restricted, so an ordinary ask (three
+  read-only file tools) cannot reach Jira or a calendar at all. A quick
+  question with `connectors = true` (the seeded Jira and find-a-time ones)
+  runs with every MCP server the CLI lists allowlisted, the built-in
+  writing tools denied by name, and one prompt line saying "look things up,
+  never create or change anything". Off by default: it is slower to start.
+- **Speed (owner report 2026-09-07: "Ask your notes hung, everything got
+  slower").** Measured: a one-word `claude -p` run loaded 160k tokens of
+  tool schemas from the eleven claude.ai connectors and took 10.7 s / $0.96;
+  with `--strict-mcp-config` 7.0 s / $0.04 and 11k tokens. Every summary
+  and every ask paid that on each model turn. Summaries and ordinary asks
+  now pass `--strict-mcp-config`; only the calendar lookup and connector
+  questions connect servers. The chat also streams the CLI's tool calls
+  (`--output-format stream-json`) as `step` progress events, so the
+  thinking box says "Reading 2026-09-03 All-hands.md · 7 steps" instead of
+  a bare spinner for a minute.
+
 Not done: a default style for the automatic run after a call (today:
 standard, or the note's remembered style); reordering rows by drag; sharing
 prompts between machines is "sync the dotfile".

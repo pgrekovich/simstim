@@ -25,6 +25,8 @@ interface Row {
   prompt: string;
   /** Quick questions only. */
   scope: QuickScope;
+  /** Quick questions only: run with the user's connectors (Jira, calendar, ...). */
+  connectors: boolean;
 }
 
 interface Doc {
@@ -38,8 +40,8 @@ let nextKey = 1;
 function toDoc(prompts: Prompts): Doc {
   return {
     instructions: prompts.summary_instructions,
-    styles: prompts.summary_styles.map((s) => ({ key: nextKey++, id: s.id, name: s.name, prompt: s.prompt, scope: "call" })),
-    questions: prompts.quick_questions.map((q) => ({ key: nextKey++, id: q.id, name: q.name, prompt: q.prompt, scope: q.scope })),
+    styles: prompts.summary_styles.map((s) => ({ key: nextKey++, id: s.id, name: s.name, prompt: s.prompt, scope: "call", connectors: false })),
+    questions: prompts.quick_questions.map((q) => ({ key: nextKey++, id: q.id, name: q.name, prompt: q.prompt, scope: q.scope, connectors: q.connectors })),
   };
 }
 
@@ -69,7 +71,13 @@ export function toPrompts(doc: Doc): { prompts: Prompts; assigned: Map<number, s
     prompts: {
       summary_instructions: doc.instructions,
       summary_styles: styles.map((r) => ({ id: r.id, name: r.name.trim(), prompt: r.prompt.trim() })),
-      quick_questions: questions.map((r) => ({ id: r.id, name: r.name.trim(), prompt: r.prompt.trim(), scope: r.scope })),
+      quick_questions: questions.map((r) => ({
+        id: r.id,
+        name: r.name.trim(),
+        prompt: r.prompt.trim(),
+        scope: r.scope,
+        connectors: r.connectors,
+      })),
     },
     assigned,
   };
@@ -184,7 +192,7 @@ export function PromptsSettings({ open }: { open: boolean }) {
   }, []);
 
   function addRow(list: "styles" | "questions") {
-    const row: Row = { key: nextKey++, id: "", name: "", prompt: "", scope: "call" };
+    const row: Row = { key: nextKey++, id: "", name: "", prompt: "", scope: "call", connectors: false };
     setDoc((current) => (current === null ? current : { ...current, [list]: [...current[list], row] }));
     setExpanded(row.key);
   }
@@ -253,6 +261,7 @@ export function PromptsSettings({ open }: { open: boolean }) {
                 {list === "questions" && !isOpen && (
                   <span className="shrink-0 text-[11px] text-muted-foreground">
                     {QUICK_SCOPE_OPTIONS.find((o) => o.value === row.scope)?.label}
+                    {row.connectors && " · connectors"}
                   </span>
                 )}
               </button>
@@ -310,6 +319,23 @@ export function PromptsSettings({ open }: { open: boolean }) {
                     onChange={(e) => editRow(list, row.key, { prompt: e.target.value })}
                     className={cn(FIELD_CLASS, "resize-y")}
                   />
+                  {list === "questions" && (
+                    <label className="flex items-start gap-2 text-[12px] text-foreground">
+                      <input
+                        type="checkbox"
+                        checked={row.connectors}
+                        onChange={(e) => editRow(list, row.key, { connectors: e.target.checked })}
+                        className="mt-[3px] size-3.5 accent-primary"
+                      />
+                      <span className="flex flex-col gap-px">
+                        <span>Use my connectors</span>
+                        <span className="text-[11px] leading-[1.45] text-muted-foreground">
+                          Jira, calendar, Slack and whatever else Claude Code is connected to, to look things
+                          up. Slower to start; leave off for questions about the notes alone.
+                        </span>
+                      </span>
+                    </label>
+                  )}
                   <div className="flex items-center justify-between">
                     <button
                       type="button"

@@ -868,21 +868,33 @@ fn summary_label(spec: &ProviderSpec, model: Option<&str>) -> String {
 /// CLIs), then falls back to the human-readable listing (`name: command -
 /// status` per line).
 fn discover_calendar_servers(claude: &Path) -> Vec<String> {
-    if let Ok(out) = Command::new(claude).args(["mcp", "list", "--json"]).output() {
-        if out.status.success() {
-            if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&out.stdout) {
-                return filter_calendar_names(mcp_server_names(&value));
+    filter_calendar_names(discover_mcp_servers(claude))
+}
+
+/// Every MCP server the CLI knows, by name, from `claude mcp list`. Used
+/// whole by the chat's connector questions (the user chose to point a
+/// question at their connectors) and filtered down to calendars by the
+/// summary's lookup. Best-effort: empty when the CLI can't say.
+pub(crate) fn discover_mcp_servers(claude: &Path) -> Vec<String> {
+    let mut names = (|| {
+        if let Ok(out) = Command::new(claude).args(["mcp", "list", "--json"]).output() {
+            if out.status.success() {
+                if let Ok(value) = serde_json::from_slice::<serde_json::Value>(&out.stdout) {
+                    return mcp_server_names(&value);
+                }
             }
         }
-    }
-    let Ok(out) = Command::new(claude).args(["mcp", "list"]).output() else {
-        return Vec::new();
-    };
-    if !out.status.success() {
-        return Vec::new();
-    }
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    filter_calendar_names(parse_mcp_list_text(&stdout))
+        let Ok(out) = Command::new(claude).args(["mcp", "list"]).output() else {
+            return Vec::new();
+        };
+        if !out.status.success() {
+            return Vec::new();
+        }
+        parse_mcp_list_text(&String::from_utf8_lossy(&out.stdout))
+    })();
+    names.sort();
+    names.dedup();
+    names
 }
 
 /// Server names out of the human-readable `claude mcp list` output, one
@@ -931,6 +943,12 @@ fn filter_calendar_names(mut names: Vec<String>) -> Vec<String> {
 /// Both documented rule shapes are emitted per server (`mcp__name` and
 /// `mcp__name__*`) so the allowlist works across CLI versions.
 pub(crate) fn calendar_allowed_tools(servers: &[String]) -> String {
+    mcp_allowed_tools(servers)
+}
+
+/// The `--allowedTools` rules covering every tool of the given servers (the
+/// chat's connector questions use this over the whole server list).
+pub(crate) fn mcp_allowed_tools(servers: &[String]) -> String {
     servers
         .iter()
         .map(|name| normalize_server_name(name))
@@ -975,7 +993,13 @@ fn run_provider(spec: &ProviderSpec, model: Option<&str>, prompt: &str) -> Resul
     let codex_out = workdir.path().join("last-message.txt");
     match spec.id {
         "claude" => {
-            cmd.args(["-p", "--output-format", "text"]);
+            // A summary uses no tools at all, so the CLI must not connect
+            // every configured MCP server first: with eleven claude.ai
+            // connectors that was 160k tokens of tool schemas per request
+            // (measured 2026-09-07: $0.96 vs $0.04 for a one-word reply)
+            // and seconds of startup. Only the calendar lookup, which does
+            // need a connector, runs without this flag.
+            cmd.args(["-p", "--output-format", "text", "--strict-mcp-config"]);
             if let Some(m) = model {
                 cmd.args(["--model", m]);
             }

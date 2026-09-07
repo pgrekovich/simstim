@@ -583,7 +583,12 @@ export interface ChatHistory {
  */
 export interface ChatProgress {
   scope: string;
-  phase: "running" | "done" | "error";
+  /**
+   * `running` once the ask claims the scope; any number of `step` events
+   * follow (one per tool call, `message` says what is being read, e.g.
+   * "Reading 2026-09-03 All-hands.md"); exactly one `done`/`error` ends it.
+   */
+  phase: "running" | "step" | "done" | "error";
   message: string | null;
 }
 
@@ -601,8 +606,15 @@ export function chatAsk(
   question: string,
   askedAt?: string,
   questionName?: string,
+  connectors?: boolean,
 ): Promise<void> {
-  return invoke("chat_ask", { path, question, askedAt, questionName: questionName ?? null });
+  return invoke("chat_ask", {
+    path,
+    question,
+    askedAt,
+    questionName: questionName ?? null,
+    connectors: connectors ?? false,
+  });
 }
 
 /** Mirrors `prompts::SummaryStyle`: one way of writing a note's Summary section. */
@@ -621,6 +633,12 @@ export interface QuickQuestion {
   name: string;
   prompt: string;
   scope: QuickScope;
+  /**
+   * Whether the ask runs with the user's connectors (the CLI's MCP servers:
+   * Jira, calendar, ...) available, read-only by instruction. Off, the ask
+   * has only the file tools and never connects a server, which keeps it fast.
+   */
+  connectors: boolean;
 }
 
 /** Mirrors `prompts::Prompts`: the whole of the user's `prompts.toml`. */

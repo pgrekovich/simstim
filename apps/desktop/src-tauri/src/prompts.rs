@@ -47,6 +47,12 @@ pub struct QuickQuestion {
     pub prompt: String,
     /// `"call" | "notes" | "both"`.
     pub scope: String,
+    /// Whether the ask runs with the user's connectors (the CLI's MCP
+    /// servers: Jira, calendar, ...) allowlisted, read-only by instruction.
+    /// Off, an ask has only the three file tools and never connects a
+    /// server, which is what keeps ordinary questions fast.
+    #[serde(default)]
+    pub connectors: bool,
 }
 
 /// The whole `prompts.toml`. Mirrors `Prompts` in `ipc.ts`.
@@ -99,36 +105,42 @@ impl Default for Prompts {
                     name: "What did I miss".into(),
                     prompt: "I stepped away. In a few bullets, what was said in the most recent stretch of this call: decisions, requests aimed at me, numbers and names. Then one line on what is being discussed right now so I can rejoin.".into(),
                     scope: "call".into(),
+                    connectors: false,
                 },
                 QuickQuestion {
                     id: "make-me-smart".into(),
                     name: "Make me smart".into(),
                     prompt: "Explain the terms, products, people and background in this call that I might not know, in one or two sentences each, using my other notes when they help. Then point out anything that contradicts what I was told in earlier calls.".into(),
                     scope: "call".into(),
+                    connectors: false,
                 },
                 QuickQuestion {
                     id: "follow-up-email".into(),
                     name: "Draft a follow-up email".into(),
                     prompt: "Draft a short follow-up email from me to the other side of this call: thank them briefly, restate what we agreed, list who does what by when, and ask the one question that stayed open. Plain, warm, no filler. Match the language of the call.".into(),
                     scope: "call".into(),
+                    connectors: false,
                 },
                 QuickQuestion {
                     id: "related-jira".into(),
                     name: "Find related Jira issues".into(),
                     prompt: "Using your Jira tools, find the issues related to what was discussed in this call: search by the projects, features, people and identifiers mentioned. List each with its key, title, status and why it is related. If you have no Jira tools, say so in one line instead of guessing.".into(),
                     scope: "call".into(),
+                    connectors: true,
                 },
                 QuickQuestion {
                     id: "find-a-time".into(),
                     name: "Find a time to meet".into(),
                     prompt: "This call implied a follow-up meeting. Using your calendar tools, propose three concrete times in the next two weeks when I am free for it, working hours only, and name who should be invited based on the call. If you have no calendar tools, say so in one line instead of guessing.".into(),
                     scope: "call".into(),
+                    connectors: true,
                 },
                 QuickQuestion {
                     id: "open-loops".into(),
                     name: "Open loops".into(),
                     prompt: "Across my notes, list the promises, requests and action items from the last month that never got a follow-up in a later call: who owes what to whom, from which call. Newest first, at most 10.".into(),
                     scope: "notes".into(),
+                    connectors: false,
                 },
             ],
         }
@@ -290,6 +302,20 @@ mod tests {
         // cover the two chat scopes.
         assert!(loaded.quick_questions.iter().any(|q| q.scope == "call"));
         assert!(loaded.quick_questions.iter().any(|q| q.scope == "notes"));
+        // Only the questions that need Jira or a calendar open connectors.
+        let with: Vec<&str> = loaded
+            .quick_questions
+            .iter()
+            .filter(|q| q.connectors)
+            .map(|q| q.id.as_str())
+            .collect();
+        assert_eq!(with, ["related-jira", "find-a-time"]);
+        // An older file without the field reads as "no connectors".
+        let bare: Prompts = toml::from_str(
+            "[[quick_questions]]\nid = \"x\"\nname = \"X\"\nprompt = \"p\"\nscope = \"call\"\n",
+        )
+        .unwrap();
+        assert!(!bare.quick_questions[0].connectors);
     }
 
     #[test]

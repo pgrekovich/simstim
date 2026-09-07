@@ -6,9 +6,9 @@ const prompts: Prompts = {
   summary_instructions: "",
   summary_styles: [{ id: "action-items", name: "Action items", prompt: "..." }],
   quick_questions: [
-    { id: "miss", name: "What did I miss", prompt: "...", scope: "call" },
-    { id: "loops", name: "Open loops", prompt: "...", scope: "notes" },
-    { id: "smart", name: "Make me smart", prompt: "...", scope: "both" },
+    { id: "miss", name: "What did I miss", prompt: "...", scope: "call", connectors: false },
+    { id: "loops", name: "Open loops", prompt: "...", scope: "notes", connectors: false },
+    { id: "smart", name: "Make me smart", prompt: "...", scope: "both", connectors: false },
   ],
 };
 

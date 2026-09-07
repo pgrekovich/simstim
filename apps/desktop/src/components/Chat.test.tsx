@@ -177,7 +177,7 @@ describe("ChatConversation", () => {
     fireEvent.change(input, { target: { value: "what did I miss?" } });
     fireEvent.keyDown(input, { key: "Enter" });
 
-    expect(chatAsk).toHaveBeenCalledExactlyOnceWith("/notes/call.md", "what did I miss?", "00:15:04", undefined);
+    expect(chatAsk).toHaveBeenCalledExactlyOnceWith("/notes/call.md", "what did I miss?", "00:15:04", undefined, undefined);
     expect(screen.getByText("what did I miss?")).toBeInTheDocument();
     expect(screen.getByText(/You asked · 00:15:04/i)).toBeInTheDocument();
     expect((input as HTMLInputElement).value).toBe("");
@@ -272,6 +272,7 @@ describe("ChatConversation", () => {
       "What changed since June?",
       undefined,
       undefined,
+      undefined,
     );
   });
 
@@ -288,18 +289,18 @@ describe("ChatConversation", () => {
     );
 
     await waitFor(() =>
-      expect(chatAsk).toHaveBeenCalledExactlyOnceWith(null, "berlin rollout", undefined, undefined),
+      expect(chatAsk).toHaveBeenCalledExactlyOnceWith(null, "berlin rollout", undefined, undefined, undefined),
     );
   });
 });
 
 describe("ChatConversation: quick questions", () => {
   const quick = [
-    { id: "miss", name: "What did I miss", prompt: "I stepped away. What was said?", scope: "call" as const },
-    { id: "smart", name: "Make me smart", prompt: "Explain the terms in this call.", scope: "call" as const },
-    { id: "email", name: "Draft a follow-up email", prompt: "Draft a short follow-up email.", scope: "call" as const },
-    { id: "jira", name: "Find related Jira issues", prompt: "Search Jira.", scope: "call" as const },
-    { id: "time", name: "Find a time to meet", prompt: "Propose three times.", scope: "call" as const },
+    { id: "miss", name: "What did I miss", prompt: "I stepped away. What was said?", scope: "call" as const, connectors: false },
+    { id: "smart", name: "Make me smart", prompt: "Explain the terms in this call.", scope: "call" as const, connectors: false },
+    { id: "email", name: "Draft a follow-up email", prompt: "Draft a short follow-up email.", scope: "call" as const, connectors: false },
+    { id: "jira", name: "Find related Jira issues", prompt: "Search Jira.", scope: "call" as const, connectors: false },
+    { id: "time", name: "Find a time to meet", prompt: "Propose three times.", scope: "call" as const, connectors: false },
   ];
 
   it("offers the first four as chips, sends the prompt under the question's name", async () => {
@@ -327,6 +328,7 @@ describe("ChatConversation: quick questions", () => {
       "Explain the terms in this call.",
       undefined,
       "Make me smart",
+      false,
     );
     // The pending question shows its name, not the prompt it sent.
     expect(screen.getByText("Make me smart", { selector: "p" })).toBeInTheDocument();
@@ -374,6 +376,7 @@ describe("ChatConversation: quick questions", () => {
       "Propose three times.",
       undefined,
       "Find a time to meet",
+      false,
     );
     expect(input).toHaveValue("");
     expect(screen.queryByRole("listbox")).toBeNull();
@@ -406,5 +409,31 @@ describe("ChatConversation: quick questions", () => {
     // Escape closes it and clears the slash.
     fireEvent.keyDown(screen.getByRole("textbox", { name: "Ask anything..." }), { key: "Escape" });
     expect(screen.queryByRole("listbox")).toBeNull();
+  });
+});
+
+describe("ChatConversation: progress steps", () => {
+  it("shows what the assistant is reading and counts the steps while it works", async () => {
+    render(
+      <ChatConversation
+        scopePath={null}
+        variant="pane"
+        sessions={sessions}
+        placeholder="Ask anything..."
+        onOpenCitation={vi.fn()}
+      />,
+    );
+    await waitFor(() => expect(chatHistory).toHaveBeenCalled());
+    emitProgress({ scope: "all", phase: "running", message: null });
+    expect(screen.getByText("reading your notes")).toBeInTheDocument();
+    emitProgress({ scope: "all", phase: "step", message: "Searching for \u201csalesforce\u201d" });
+    expect(screen.getByText("Searching for \u201csalesforce\u201d")).toBeInTheDocument();
+    emitProgress({ scope: "all", phase: "step", message: "Reading 2026-09-03 14-01-09 call.md" });
+    expect(screen.getByText("Reading 2026-09-03 14-01-09 call.md · 2 steps")).toBeInTheDocument();
+    // Another scope's steps are not ours.
+    emitProgress({ scope: "/notes/other.md", phase: "step", message: "Reading other.md" });
+    expect(screen.queryByText(/Reading other.md/)).toBeNull();
+    emitProgress({ scope: "all", phase: "done", message: null });
+    await waitFor(() => expect(screen.queryByText(/steps/)).toBeNull());
   });
 });

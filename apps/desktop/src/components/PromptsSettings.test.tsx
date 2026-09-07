@@ -22,8 +22,8 @@ const seeded: Prompts = {
     { id: "brief", name: "Brief", prompt: "A two-minute brief." },
   ],
   quick_questions: [
-    { id: "what-did-i-miss", name: "What did I miss", prompt: "I stepped away.", scope: "call" },
-    { id: "open-loops", name: "Open loops", prompt: "Promises without follow-up.", scope: "notes" },
+    { id: "what-did-i-miss", name: "What did I miss", prompt: "I stepped away.", scope: "call", connectors: false },
+    { id: "open-loops", name: "Open loops", prompt: "Promises without follow-up.", scope: "notes", connectors: false },
   ],
 };
 
@@ -82,7 +82,18 @@ describe("PromptsSettings", () => {
       name: "Make me smart",
       prompt: "Explain the terms.",
       scope: "both",
+      connectors: false,
     });
+  });
+
+  it("lets a question use the connectors and marks the row", async () => {
+    render(<PromptsSettings open />);
+    fireEvent.click(await screen.findByRole("button", { name: /what did I miss/i }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /use my connectors/i }));
+    await waitFor(() => expect(ipc.savePrompts).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(ipc.savePrompts).mock.calls[0][0].quick_questions[0].connectors).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    expect(screen.getByRole("button", { name: /what did I miss/i })).toHaveTextContent("This call · connectors");
   });
 
   it("deletes a style at once and restores the defaults only after the native confirm", async () => {

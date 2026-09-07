@@ -864,7 +864,7 @@ describe("SessionView: title meta line (date and duration)", () => {
     ).toBeVisible();
   });
 
-  it("appends who was on the call after the date and duration", () => {
+  it("lists who was on the call on its own line under the date", () => {
     render(
       <SessionView
         path="/tmp/call.md"
@@ -882,8 +882,8 @@ describe("SessionView: title meta line (date and duration)", () => {
       />
     );
 
-    const expected = `${formatSessionMeta("2026-09-02T14:03:52", 611)!} · with Anna Berg, Mark`;
-    expect(screen.getByText(expected)).toBeVisible();
+    expect(screen.getByText(formatSessionMeta("2026-09-02T14:03:52", 611)!)).toBeVisible();
+    expect(screen.getByText("with Anna Berg, Mark")).toBeVisible();
   });
 
   it("shows no meta line while the session is being recorded", () => {
@@ -932,5 +932,32 @@ describe("SessionView: copy summary", () => {
 
     expect(writeText).toHaveBeenCalledExactlyOnceWith("### Decisions\n- ship v2 friday");
     await waitFor(() => expect(screen.getByRole("button", { name: /copy summary/i })).toHaveTextContent("Copied"));
+  });
+});
+
+describe("SessionView: copy transcript", () => {
+  it("puts every timestamped line on the clipboard from the player bar", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+    render(
+      <SessionView
+        path="/tmp/call.md"
+        isActive={false}
+        initialData={{
+          ...baseData,
+          audio_path: "/tmp/call.m4a",
+          transcript: "[00:00:01] Me: hi\n[00:00:04] Them: hello",
+        }}
+        liveLines={[]}
+        interimMe=""
+        interimThem=""
+        retranscribingJob={null}
+      />
+    );
+
+    fireEvent.click(screen.getByRole("tab", { name: "Transcript" }));
+    fireEvent.click(screen.getByRole("button", { name: /copy transcript/i }));
+    expect(writeText).toHaveBeenCalledExactlyOnceWith("[00:00:01] Me: hi\n[00:00:04] Them: hello");
+    await waitFor(() => expect(screen.getByRole("button", { name: /copy transcript/i })).toHaveTextContent("Copied"));
   });
 });

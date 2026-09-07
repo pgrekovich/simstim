@@ -64,8 +64,8 @@ function highlightedText(
         data-current-match={active ? "true" : undefined}
         className={
           active
-            ? "rounded-[3px] bg-destructive px-0.5 text-primary-foreground"
-            : "rounded-[3px] bg-[rgb(168_132_60_/_28%)] px-0.5 text-inherit dark:bg-[rgb(201_162_77_/_28%)]"
+            ? "rounded-[3px] bg-[#FFCC00] px-0.5 text-black"
+            : "rounded-[3px] bg-[rgb(255_204_0_/_35%)] px-0.5 text-inherit"
         }
       >
         {text.slice(match.start, match.end)}
@@ -176,6 +176,52 @@ export function nearestLineIndex(lines: string[], timestamp: string): number {
   return best;
 }
 
+/**
+ * One speaker turn in the Voice Memos layout (2026-09-07 HIG pass): the
+ * speaker and the turn's first timestamp sit in a narrow left gutter, the
+ * words flow as one paragraph to the right. "Them" takes the accent color,
+ * "Me" the ink, so a glance down the gutter shows who talked.
+ */
+function TurnRow({
+  speaker,
+  timestamp,
+  draft = false,
+  children,
+}: {
+  speaker: "Me" | "Them";
+  timestamp: string;
+  draft?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <div className="grid grid-cols-[64px_minmax(0,1fr)] gap-x-3">
+      <div className="flex flex-col items-end gap-[1px] pt-[2px] text-right">
+        <span
+          className={
+            speaker === "Them"
+              ? "text-[11.5px] font-semibold leading-[1.4] text-[var(--voice-remote-foreground)]"
+              : "text-[11.5px] font-semibold leading-[1.4] text-foreground"
+          }
+        >
+          {speaker}
+        </span>
+        <span className="text-[11px] leading-[1.4] tabular-nums text-muted-foreground">
+          {timestamp}
+        </span>
+      </div>
+      <p
+        className={
+          draft
+            ? "whitespace-pre-wrap text-[15px] italic leading-[1.55] text-muted-foreground"
+            : "whitespace-pre-wrap text-[15px] leading-[1.55] text-foreground"
+        }
+      >
+        {children}
+      </p>
+    </div>
+  );
+}
+
 export function TranscriptView({
   lines,
   interimMe,
@@ -233,8 +279,8 @@ export function TranscriptView({
     <Card className="min-h-0 flex-1 flex-col overflow-hidden border-0 bg-transparent p-0 shadow-none">
       <div ref={scrollRef} onScroll={handleScroll} className="h-full overflow-y-auto px-6 pb-5 pt-[6px]">
         {isEmpty ? (
-          <p className="flex h-full items-center justify-center text-center font-serif text-[14px] text-muted-foreground">
-            transcript will appear here
+          <p className="flex h-full items-center justify-center text-center text-[14px] text-muted-foreground">
+            The transcript will appear here.
           </p>
         ) : (
           <div className="flex flex-col gap-[14px]">
@@ -244,77 +290,53 @@ export function TranscriptView({
                   <p
                     key={block.index}
                     ref={(element) => { lineRefs.current[block.index] = element; }}
-                    className="whitespace-pre-wrap font-serif text-[15px] leading-[1.6] text-card-foreground"
+                    className="whitespace-pre-wrap text-[15px] leading-[1.55] text-foreground"
                   >
                     {highlightedText(block.raw, block.index, matches, activeMatchIndex)}
                   </p>
                 );
               }
               return (
-                <div key={block.items[0].index} className="flex flex-col gap-[3px]">
-                  <span className="flex items-baseline gap-[9px]">
-                    <span
-                      className={
-                        block.speaker === "Them"
-                          ? "inline-flex h-[17px] items-center rounded-[4px] border border-[var(--voice-remote)] px-[7px] text-[10px] font-semibold uppercase tracking-[0.04em] text-[var(--voice-remote-foreground)]"
-                          : "inline-flex h-[17px] items-center rounded-[4px] border border-foreground bg-foreground px-[7px] text-[10px] font-semibold uppercase tracking-[0.04em] text-background"
-                      }
-                    >
-                      {block.speaker}
-                    </span>
-                    <span className="font-mono text-[10px] text-muted-foreground">
-                      {block.items[0].timestamp}
-                    </span>
-                  </span>
+                <TurnRow key={block.items[0].index} speaker={block.speaker} timestamp={block.items[0].timestamp}>
                   {/* One flowing paragraph per turn; every ASR chunk inside
                       stays its own seekable fragment (its timestamp is on
                       the hover title, since only the turn's first one is
-                      printed). */}
-                  <p className="whitespace-pre-wrap font-serif text-[15px] leading-[1.6] text-card-foreground">
-                    {block.items.map((item, j) => {
-                      const body = highlightedText(item.text, item.index, matches, activeMatchIndex);
-                      return (
-                        <Fragment key={item.index}>
-                          {j > 0 && " "}
-                          {onSeek ? (
-                            <button
-                              ref={(element) => { lineRefs.current[item.index] = element; }}
-                              type="button"
-                              title={item.timestamp}
-                              onClick={() => onSeek(timestampToSeconds(item.timestamp))}
-                              className="-mx-0.5 inline rounded-[5px] px-0.5 text-left align-baseline transition-colors [box-decoration-break:clone] hover:bg-foreground/[0.05] focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
-                            >
-                              {body}
-                            </button>
-                          ) : (
-                            <span ref={(element) => { lineRefs.current[item.index] = element; }}>
-                              {body}
-                            </span>
-                          )}
-                        </Fragment>
-                      );
-                    })}
-                  </p>
-                </div>
+                      printed in the gutter). */}
+                  {block.items.map((item, j) => {
+                    const body = highlightedText(item.text, item.index, matches, activeMatchIndex);
+                    return (
+                      <Fragment key={item.index}>
+                        {j > 0 && " "}
+                        {onSeek ? (
+                          <button
+                            ref={(element) => { lineRefs.current[item.index] = element; }}
+                            type="button"
+                            title={item.timestamp}
+                            onClick={() => onSeek(timestampToSeconds(item.timestamp))}
+                            className="transcript-chunk -mx-0.5 rounded-[4px] px-0.5 text-left align-baseline transition-colors [box-decoration-break:clone] hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                          >
+                            {body}
+                          </button>
+                        ) : (
+                          <span ref={(element) => { lineRefs.current[item.index] = element; }}>
+                            {body}
+                          </span>
+                        )}
+                      </Fragment>
+                    );
+                  })}
+                </TurnRow>
               );
             })}
             {interimMe && (
-              <div className="flex flex-col gap-[3px]">
-                <span className="flex items-baseline gap-[9px]">
-                  <span className="inline-flex h-[17px] items-center rounded-[4px] border border-foreground bg-foreground px-[7px] text-[10px] font-semibold uppercase not-italic tracking-[0.04em] text-background">Me</span>
-                  <span className="font-mono text-[10px] not-italic text-muted-foreground">···</span>
-                </span>
-                <p className="whitespace-pre-wrap font-serif text-[15px] italic leading-[1.6] text-muted-foreground">{interimMe}</p>
-              </div>
+              <TurnRow speaker="Me" timestamp="···" draft>
+                {interimMe}
+              </TurnRow>
             )}
             {interimThem && (
-              <div className="flex flex-col gap-[3px]">
-                <span className="flex items-baseline gap-[9px]">
-                  <span className="inline-flex h-[17px] items-center rounded-[4px] border border-[var(--voice-remote)] px-[7px] text-[10px] font-semibold uppercase not-italic tracking-[0.04em] text-[var(--voice-remote-foreground)]">Them</span>
-                  <span className="font-mono text-[10px] not-italic text-muted-foreground">···</span>
-                </span>
-                <p className="whitespace-pre-wrap font-serif text-[15px] italic leading-[1.6] text-muted-foreground">{interimThem}</p>
-              </div>
+              <TurnRow speaker="Them" timestamp="···" draft>
+                {interimThem}
+              </TurnRow>
             )}
           </div>
         )}

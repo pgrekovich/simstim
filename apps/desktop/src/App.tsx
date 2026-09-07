@@ -4,6 +4,7 @@ import { ask } from "@tauri-apps/plugin-dialog";
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import {
   CircleAlert,
+  ClipboardCopy,
   Ellipsis,
   FileText,
   Folder,
@@ -13,6 +14,7 @@ import {
   Settings,
   Sparkles,
   SquarePen,
+  Trash2,
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -1498,6 +1500,15 @@ function App() {
                         ? "Summarize again"
                         : "Summarize"}
                   </DropdownMenuItem>
+                  <DropdownMenuItem
+                    disabled={!sessionData || sessionData.transcript.trim().length === 0}
+                    onSelect={() => {
+                      if (sessionData) void navigator.clipboard?.writeText(sessionData.transcript.trim()).catch(() => {});
+                    }}
+                  >
+                    <ClipboardCopy />
+                    Copy transcript
+                  </DropdownMenuItem>
                   <DropdownMenuItem onSelect={() => void openPath(selectedPath)}>
                     <FileText />
                     Open file
@@ -1505,6 +1516,15 @@ function App() {
                   <DropdownMenuItem onSelect={() => void revealItemInDir(selectedPath)}>
                     <Folder />
                     Show in Finder
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    disabled={viewingActiveSession || selectedPath in busyPaths}
+                    className="text-destructive focus:text-destructive [&_svg]:text-destructive"
+                    onSelect={() => void handleDeleteSession(selectedPath)}
+                  >
+                    <Trash2 />
+                    Move to Trash
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
                 </>

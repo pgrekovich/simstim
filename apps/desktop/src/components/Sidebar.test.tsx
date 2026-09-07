@@ -127,12 +127,10 @@ describe("Sidebar: selected styling", () => {
     const rowA = screen.getByRole("button", { name: /session a/i });
     const rowB = screen.getByRole("button", { name: /session b/i });
 
-    // Exact classList tokens, not substring matching: the hover variants
-    // carry the same base names at different opacities.
-    expect(rowB.classList.contains("bg-background")).toBe(true);
-    expect(rowB.querySelector(".font-medium")).not.toBeNull();
-    expect(rowA.classList.contains("bg-background")).toBe(false);
-    expect(rowA.querySelector(".font-medium")).toBeNull();
+    // Selection is the data attribute index.css tints (Notes-style soft
+    // accent under ordinary text), never a filled block with white type.
+    expect(rowB).toHaveAttribute("data-selected", "true");
+    expect(rowA).not.toHaveAttribute("data-selected");
     // No left rule on any row: a border on a rounded row reads as a bracket.
     expect(rowA.className).not.toContain("border-l");
     expect(rowB.className).not.toContain("border-l");
@@ -157,10 +155,10 @@ describe("Sidebar: selected styling", () => {
     // Regression test: a lower-opacity hover shared with the selected row
     // would win the cascade on hover and visibly dim it instead of
     // reinforcing it, so each state carries its own hover step.
-    expect(rowB.classList.contains("hover:bg-background/80")).toBe(true);
+    expect(rowB.classList.contains("hover:bg-primary/[0.18]")).toBe(true);
     expect(rowB.classList.contains("hover:bg-foreground/[0.05]")).toBe(false);
     expect(rowA.classList.contains("hover:bg-foreground/[0.05]")).toBe(true);
-    expect(rowA.classList.contains("hover:bg-background/80")).toBe(false);
+    expect(rowA.classList.contains("hover:bg-primary/[0.18]")).toBe(false);
   });
 });
 
@@ -208,42 +206,20 @@ describe("Sidebar: collapse button", () => {
 });
 
 describe("Sidebar: delete button", () => {
-  it("calls onDelete with the row's path, and never onSelect, when its trash button is clicked", () => {
-    const onSelect = vi.fn();
-    const onDelete = vi.fn();
+  it("has no hover trash button: deletion lives in the row's context menu and the toolbar menu", () => {
     render(
       <Sidebar
         sessions={makeSessions()}
         selectedPath={null}
         activePath={null}
-        onSelect={onSelect}
-        onNewSession={vi.fn()}
-        onDelete={onDelete}
-      />
-    );
-
-    const trashButtons = screen.getAllByRole("button", { name: /move to trash/i });
-    expect(trashButtons).toHaveLength(2);
-    trashButtons[1].click();
-    expect(onDelete).toHaveBeenCalledExactlyOnceWith("/tmp/b.md");
-    expect(onSelect).not.toHaveBeenCalled();
-  });
-
-  it("offers no trash button for the recording row (the backend refuses deleting it anyway)", () => {
-    render(
-      <Sidebar
-        sessions={makeSessions()}
-        selectedPath={null}
-        activePath="/tmp/a.md"
         onSelect={vi.fn()}
         onNewSession={vi.fn()}
         onDelete={vi.fn()}
       />
     );
-
-    // Only Session B's row (not recording) gets one.
-    expect(screen.getAllByRole("button", { name: /move to trash/i })).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: /move to trash/i })).toBeNull();
   });
+
 });
 
 describe("Sidebar: global search", () => {

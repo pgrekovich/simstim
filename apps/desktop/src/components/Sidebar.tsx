@@ -35,7 +35,7 @@ interface SidebarProps {
    * notes" row that used to sit above the list is gone).
    */
   onOpenSearch?: () => void;
-  /** Row-hover trash button; App owns the confirm dialog and the IPC call. */
+  /** Row context menu's "Move to Trash"; App owns the confirm dialog and the IPC call. */
   onDelete: (path: string) => void;
   /** Row context menu's "Open file": the note in the system editor. */
   onOpenFile?: (path: string) => void;
@@ -156,8 +156,8 @@ export function Sidebar({
           </p>
         ) : (
           groups.map((group) => (
-            <div key={group.label} className="flex flex-col gap-px">
-              <div className="px-2 pb-2 pt-[14px] text-[11px] font-semibold text-muted-foreground">
+            <div key={group.label} className="flex flex-col">
+              <div className="px-2 pb-1.5 pt-[18px] text-[13px] font-semibold text-foreground">
                 {group.label}
               </div>
               {group.sessions.map((session) => {
@@ -168,25 +168,22 @@ export function Sidebar({
                 const busyWord = recording ? undefined : busyPaths?.[session.path];
                 const duration = formatDuration(session.duration_secs);
                 return (
-                  // A wrapper div, not one button: the delete affordance is
-                  // its own overlaid button (nesting buttons is invalid
-                  // HTML), revealed on row hover in place of the timestamp.
-                  // The whole row also answers a right click (macOS reflex)
-                  // with the same actions the toolbar overflow menu offers
-                  // for the OPEN note, so any listed note is one gesture
-                  // from its file.
+                  // The row answers a right click (macOS reflex) with the
+                  // same actions the toolbar overflow menu offers for the
+                  // OPEN note; there is no hover trash icon (owner ruling
+                  // 2026-09-07: the menu is enough, and Notes has none).
                   <ContextMenu key={session.path}>
                     <ContextMenuTrigger asChild>
-                  <div className="group relative">
+                  <div className="group relative border-b border-border last:border-b-0">
                     <button
                       type="button"
                       onClick={() => onSelect(session.path)}
                       data-selected={selected ? "true" : undefined}
                       className={cn(
-                        "h-auto w-full rounded-[7px] px-2.5 py-2 text-left font-normal",
+                        "h-auto w-full rounded-[7px] px-2.5 py-[7px] text-left font-normal",
                         selected
-                          ? "bg-background text-foreground shadow-[0_1px_2px_rgb(0_0_0/0.07)] hover:bg-background/80"
-                          : "text-quiet-foreground hover:bg-foreground/[0.05] hover:text-foreground active:bg-foreground/[0.10]",
+                          ? "text-foreground hover:bg-primary/[0.18]"
+                          : "text-foreground hover:bg-foreground/[0.05] active:bg-foreground/[0.10]",
                         recording
                           ? "flex items-center gap-2 bg-background shadow-[0_1px_2px_rgb(0_0_0/0.07)] dark:border dark:border-destructive/[0.28] dark:bg-destructive/[0.14]"
                           : busyWord
@@ -202,7 +199,7 @@ export function Sidebar({
                             className="recording-tally size-1.5 shrink-0 rounded-full bg-destructive"
                           />
                           <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                            <span className="truncate text-[12.5px] font-medium text-foreground">{session.title}</span>
+                            <span className="truncate text-[13px] font-semibold text-foreground">{session.title}</span>
                             <span className="text-[11px] text-destructive">recording</span>
                           </span>
                         </>
@@ -217,13 +214,13 @@ export function Sidebar({
                             className="working-spinner size-3 shrink-0 text-muted-foreground"
                           />
                           <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                            <span className="truncate text-[12.5px] text-inherit">{session.title}</span>
+                            <span className="truncate text-[13px] font-semibold text-inherit">{session.title}</span>
                             <span className="text-[11px] tabular-nums text-muted-foreground">{busyWord}</span>
                           </span>
                         </>
                       ) : (
                         <>
-                          <span className={cn("w-full truncate pr-6 text-[12.5px]", selected && "font-medium")}>{session.title}</span>
+                          <span className="w-full truncate text-[13px] font-semibold">{session.title}</span>
                           <span className="text-[11px] tabular-nums text-muted-foreground">
                             {formatTime(session.date)}
                             {duration && ` · ${duration}`}
@@ -231,25 +228,6 @@ export function Sidebar({
                         </>
                       )}
                     </button>
-                    {!recording && !busyWord && (
-                      <button
-                        type="button"
-                        // The accessible name deliberately does NOT include
-                        // the session title: row queries (tests and screen
-                        // readers alike) match rows by title, and a delete
-                        // button carrying the same words would collide with
-                        // its own row (14 existing queries broke that way).
-                        aria-label="Move to Trash"
-                        title="Move to Trash"
-                        onClick={() => onDelete(session.path)}
-                        // pointer-events gating, not just opacity: an
-                        // invisible-but-clickable overlay would steal clicks
-                        // aimed at the timestamp area of the row button.
-                        className="pointer-events-none absolute right-1.5 top-1.5 rounded p-1 text-muted-foreground opacity-0 hover:text-destructive focus-visible:pointer-events-auto focus-visible:opacity-100 group-hover:pointer-events-auto group-hover:opacity-100"
-                      >
-                        <Trash2 className="size-3.5" />
-                      </button>
-                    )}
                   </div>
                     </ContextMenuTrigger>
                     <ContextMenuContent>

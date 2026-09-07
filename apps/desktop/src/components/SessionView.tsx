@@ -29,6 +29,7 @@ import {
   type SessionData,
 } from "@/lib/ipc";
 import { formatDuration } from "@/lib/utils";
+import { describePeople } from "@/lib/people";
 import { isTranscriptUpdatedButAudioDeleteFailed, type RetranscribeJob } from "@/lib/retranscribeStatus";
 
 /** Global Constraints (Task 6): notes save 500ms after the last keystroke. */
@@ -303,6 +304,7 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
   const [enhanceClicking, setEnhanceClicking] = useState(false);
   // "copied" flashes in the provenance line for a beat after Copy summary.
   const [summaryCopied, setSummaryCopied] = useState(false);
+  const [transcriptCopied, setTranscriptCopied] = useState(false);
   const copiedTimerRef = useRef<number | null>(null);
   useEffect(
     () => () => {
@@ -635,6 +637,20 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
       .catch(() => {});
   }
 
+  /** The whole transcript as the file has it, one timestamped line per chunk. */
+  function handleCopyTranscript() {
+    const text = transcriptLines.join("\n").trim();
+    if (!text) return;
+    void navigator.clipboard
+      ?.writeText(text)
+      .then(() => {
+        setTranscriptCopied(true);
+        if (copiedTimerRef.current !== null) window.clearTimeout(copiedTimerRef.current);
+        copiedTimerRef.current = window.setTimeout(() => setTranscriptCopied(false), 1500);
+      })
+      .catch(() => {});
+  }
+
   async function handleEnhance() {
     if (isActive || enhanceBusy) return;
     setEnhanceClicking(true);
@@ -767,12 +783,11 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
   // The date/duration meta plus who was on the call (`people:` frontmatter,
   // saved by the enhance calendar lookup). One quiet line; a long roster
   // truncates rather than wraps under the title.
-  const sessionMeta = [
-    formatSessionMeta(initialData.date, durationSecs),
-    initialData.people.length > 0 ? `with ${initialData.people.join(", ")}` : null,
-  ]
-    .filter(Boolean)
-    .join(" · ");
+  const sessionMeta = formatSessionMeta(initialData.date, durationSecs);
+  // Who was on the call, on its own line so a big meeting never truncates
+  // the date: readable names (emails become "M. Suwald"), the first few
+  // spelled out and the rest counted, the full roster on hover.
+  const people = describePeople(initialData.people);
 
   const titleInput = (
     <textarea
@@ -879,9 +894,9 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
   ) : null;
 
   const tabList = (
-    <TabsList ref={tabListRef} className="h-[28px] shrink-0 gap-[2px] rounded-[7px] bg-foreground/[0.06] p-[2px] dark:bg-foreground/[0.1]">
+    <TabsList ref={tabListRef} className="h-[32px] shrink-0 gap-0 rounded-full bg-foreground/[0.06] p-[3px] dark:bg-foreground/[0.08]">
       <TabsTrigger
-        className="h-6 gap-[6px] rounded-[5px] px-[12px] text-[13px] font-medium text-quiet-foreground hover:text-foreground data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-[0_1px_2px_rgb(0_0_0/0.2)] dark:data-[state=active]:bg-[#636366] dark:data-[state=active]:text-white"
+        className="h-[26px] gap-[6px] rounded-full px-[14px] text-[13.5px] font-normal text-foreground hover:bg-foreground/[0.05] data-[state=active]:bg-foreground/[0.1] data-[state=active]:font-medium data-[state=active]:text-foreground data-[state=active]:shadow-none dark:data-[state=active]:bg-foreground/[0.16]"
         value="notes"
       >
         Notes
@@ -892,7 +907,7 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
           step detail ("Summarizing part 2 of 7...") lives in the tooltip. */}
       {(summary || enhanceBusy) && (
         <TabsTrigger
-          className="h-6 gap-[6px] rounded-[5px] px-[12px] text-[13px] font-medium text-quiet-foreground hover:text-foreground data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-[0_1px_2px_rgb(0_0_0/0.2)] dark:data-[state=active]:bg-[#636366] dark:data-[state=active]:text-white"
+          className="h-[26px] gap-[6px] rounded-full px-[14px] text-[13.5px] font-normal text-foreground hover:bg-foreground/[0.05] data-[state=active]:bg-foreground/[0.1] data-[state=active]:font-medium data-[state=active]:text-foreground data-[state=active]:shadow-none dark:data-[state=active]:bg-foreground/[0.16]"
           value="summary"
           disabled={!summary}
           title={enhanceBusy ? enhanceProgress ?? "Summarizing..." : undefined}
@@ -904,7 +919,7 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
         </TabsTrigger>
       )}
       <TabsTrigger
-        className="h-6 gap-[6px] rounded-[5px] px-[12px] text-[13px] font-medium text-quiet-foreground hover:text-foreground data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-[0_1px_2px_rgb(0_0_0/0.2)] dark:data-[state=active]:bg-[#636366] dark:data-[state=active]:text-white"
+        className="h-[26px] gap-[6px] rounded-full px-[14px] text-[13.5px] font-normal text-foreground hover:bg-foreground/[0.05] data-[state=active]:bg-foreground/[0.1] data-[state=active]:font-medium data-[state=active]:text-foreground data-[state=active]:shadow-none dark:data-[state=active]:bg-foreground/[0.16]"
         value="transcript"
       >
         {isActive && <span aria-hidden="true" className="recording-tally size-[5px] rounded-full bg-destructive" />}
@@ -940,11 +955,17 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
 
         {/* The title belongs to the session, not to a single material tab. */}
         <div className="shrink-0 px-6 pt-0.5">
-          {titleInput}
-          {/* Hidden while recording: the live clock is in the Stop button,
-              and the placeholder date is blank anyway. */}
+          {/* The date sits centered above the title, the way Notes stamps a
+              note. Hidden while recording: the live clock is in the Stop
+              button, and the placeholder date is blank anyway. */}
           {!isActive && sessionMeta && (
-            <p className="mt-1 truncate text-[11px] tabular-nums text-muted-foreground">{sessionMeta}</p>
+            <p className="mb-2 text-center text-[11px] tabular-nums text-muted-foreground">{sessionMeta}</p>
+          )}
+          {titleInput}
+          {!isActive && people && (
+            <p className="mt-0.5 text-[11px] text-muted-foreground" title={people.full}>
+              with {people.summary}
+            </p>
           )}
         </div>
 
@@ -1045,16 +1066,29 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
               ref={playerRef}
               src={convertFileSrc(audioPath)}
               trailing={
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="shrink-0"
-                  disabled={isActive || retranscribeBusy}
-                  onClick={handleRetranscribe}
-                >
-                  {retranscribeBusy ? "Improving..." : "Improve transcript"}
-                </Button>
+                <>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="shrink-0"
+                    aria-label="Copy transcript"
+                    disabled={transcriptLines.length === 0}
+                    onClick={handleCopyTranscript}
+                  >
+                    {transcriptCopied ? "Copied" : "Copy"}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="shrink-0"
+                    disabled={isActive || retranscribeBusy}
+                    onClick={handleRetranscribe}
+                  >
+                    {retranscribeBusy ? "Improving..." : "Improve transcript"}
+                  </Button>
+                </>
               }
             />
           )}

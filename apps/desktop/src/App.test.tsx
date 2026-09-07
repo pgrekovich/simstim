@@ -1317,7 +1317,10 @@ describe("App: deleting a note from the sidebar (stage 0.10)", () => {
     await waitFor(() => expect(document.body.textContent).not.toContain("Start Recording"));
 
     const callsBefore = vi.mocked(ipc.listSessions).mock.calls.length;
-    fireEvent.click(screen.getByRole("button", { name: /move to trash/i }));
+    const trigger = screen.getByRole("button", { name: /more actions/i });
+    fireEvent.pointerDown(trigger);
+    fireEvent.click(trigger);
+    fireEvent.click(await screen.findByRole("menuitem", { name: /move to trash/i }));
 
     await waitFor(() =>
       expect(ipc.deleteSession).toHaveBeenCalledExactlyOnceWith("/tmp/doomed.md"),
@@ -1341,8 +1344,11 @@ describe("App: deleting a note from the sidebar (stage 0.10)", () => {
     vi.mocked(ask).mockResolvedValue(false);
 
     render(<App />);
-    await screen.findByRole("button", { name: /doomed call/i });
-    fireEvent.click(screen.getByRole("button", { name: /move to trash/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /doomed call/i }));
+    const trigger = await screen.findByRole("button", { name: /more actions/i });
+    fireEvent.pointerDown(trigger);
+    fireEvent.click(trigger);
+    fireEvent.click(await screen.findByRole("menuitem", { name: /move to trash/i }));
 
     await waitFor(() => expect(ask).toHaveBeenCalledTimes(1));
     expect(ipc.deleteSession).not.toHaveBeenCalled();
@@ -1356,8 +1362,11 @@ describe("App: deleting a note from the sidebar (stage 0.10)", () => {
     );
 
     render(<App />);
-    await screen.findByRole("button", { name: /doomed call/i });
-    fireEvent.click(screen.getByRole("button", { name: /move to trash/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /doomed call/i }));
+    const trigger = await screen.findByRole("button", { name: /more actions/i });
+    fireEvent.pointerDown(trigger);
+    fireEvent.click(trigger);
+    fireEvent.click(await screen.findByRole("menuitem", { name: /move to trash/i }));
 
     await waitFor(() =>
       expect(document.body.textContent).toContain("being re-transcribed"),

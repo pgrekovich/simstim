@@ -12,6 +12,7 @@ pub mod prompts;
 pub mod retranscribe;
 pub mod session;
 pub mod sessions;
+mod session_files;
 
 use config::Config;
 use models::DownloadState;
@@ -237,9 +238,11 @@ fn start_recording(
     let mut guard = state.recording.lock().unwrap();
     let active_path = guard.as_ref().map(|r| r.path.clone());
     let finalizing_path = path.as_deref().and_then(|p| state.finalizing_match(p));
-    if let Some(conflict) =
-        recording_start_conflict(path.as_deref(), active_path.as_deref(), finalizing_path.as_deref())
-    {
+    if let Some(conflict) = recording_start_conflict(
+        path.as_deref(),
+        active_path.as_deref(),
+        finalizing_path.as_deref(),
+    ) {
         return Err(conflict.into());
     }
     if guard.is_some() {
@@ -255,15 +258,17 @@ fn start_recording(
             .unwrap_or(cfg.active_model.as_str());
         return Err(format!("model not downloaded: {name}"));
     }
-    let (out, continue_from) = match &path {
-        Some(p) => {
-            let seed = session::load_continue_from(p).map_err(|e| e.to_string())?;
-            (p.clone(), Some(seed))
+    let out = path
+        .clone()
+        .unwrap_or_else(|| simstim_transcript::output_path(&cfg.output_dir, chrono::Local::now()));
+    let lease = session_files::record(&out).map_err(|e| e.to_string())?;
+    let continue_from = if path.is_some() {
+        Some(session::load_continue_from(&out).map_err(|e| e.to_string())?)
+    } else {
+        if out.exists() {
+            return Err("a note already exists for this moment; try again in a second".into());
         }
-        None => (
-            simstim_transcript::output_path(&cfg.output_dir, chrono::Local::now()),
-            None,
-        ),
+        None
     };
     let (tx, rx) = std::sync::mpsc::channel();
     let mic = simstim_capture::mic::start_mic(tx.clone()).map_err(|e| e.to_string())?;
@@ -272,9 +277,10 @@ fn start_recording(
     let line_emitter = app.clone();
     let interim_emitter = app.clone();
     let error_emitter = app.clone();
-    let session = session::Session::start_with_title(
+    let session = session::Session::start_with_lease(
         rx,
         out.clone(),
+        Some(lease),
         continue_from,
         title,
         pending_edits.clone(),
@@ -331,13 +337,25 @@ fn update_active_session(
 #[tauri::command]
 async fn stop_recording(app: AppHandle) -> Result<String, String> {
     let state = app.state::<AppState>();
+    let recording = {
+        let mut active = state.recording.lock().unwrap();
+        let recording = active.take().ok_or("not recording")?;
+        // Publish finalization before releasing the active-state lock, so
+        // no reader can mistake an unfinished audio file for a saved one.
+        state
+            .finalizing
+            .lock()
+            .unwrap()
+            .push(recording.path.clone());
+        recording
+    };
     let Recording {
         session,
         mic,
         speaker,
         path,
         ..
-    } = state.recording.lock().unwrap().take().ok_or("not recording")?;
+    } = recording;
 
     // Important fix-review finding: `session.stop()` below blocks on the
     // final transcript save and (for a call with audio) a FLAC encode --
@@ -348,7 +366,6 @@ async fn stop_recording(app: AppHandle) -> Result<String, String> {
     // written `.wav` as if the recording were already fully saved. Mark it
     // as finalizing here, before the blocking call, and clear it right
     // after -- on every path, success or error, so it never gets stuck set.
-    state.finalizing.lock().unwrap().push(path.clone());
 
     // Capture is no longer active from this point onward, even if flushing
     // or encoding the session fails. Clear detector lifecycle state on every

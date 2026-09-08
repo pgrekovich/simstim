@@ -196,7 +196,7 @@ describe("App: guided first run", () => {
     ]);
 
     render(<App />);
-    expect(await screen.findByText("Your calls stay on this Mac.")).toBeVisible();
+    expect(await screen.findByText("Your audio stays on this Mac.")).toBeVisible();
     fireEvent.keyDown(window, { key: "n", metaKey: true });
     expect(ipc.createSession).not.toHaveBeenCalled();
   });

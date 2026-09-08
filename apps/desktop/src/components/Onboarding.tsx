@@ -307,11 +307,11 @@ export function Onboarding({ config, models, onOpenSettings, onComplete }: Onboa
       <div className="flex min-h-0 flex-1 justify-center overflow-y-auto px-8 pb-10 pt-4">
         <section className="my-auto w-full max-w-[620px]">
           <h1 className="font-serif text-[34px] font-semibold leading-[1.12] tracking-[-0.025em]">
-            Your calls stay on this Mac.
+            Your audio stays on this Mac.
           </h1>
           <p className="mt-4 text-[15px] leading-[1.65] text-muted-foreground">
             Simstim records only when you click Record. Every call becomes a plain Markdown
-            note, with its audio, in a folder you own. Nothing is uploaded.
+            note, with its audio, in a folder you own. Audio is never uploaded.
           </p>
 
           <div className="mt-7 flex items-center gap-4 rounded-[10px] border border-border bg-card/50 px-4 py-3">
@@ -388,7 +388,7 @@ export function Onboarding({ config, models, onOpenSettings, onComplete }: Onboa
                   </span>
                   <span className="mt-0.5 block text-[11.5px] leading-[1.5] text-muted-foreground">
                     After each call, {summaryProvider.name} writes decisions and action items
-                    from the note's text. Text only, never audio. Change it anytime in Settings.
+                    by sending the note's text to your AI provider. Never audio. Turn this off to keep text local.
                   </span>
                 </span>
                 <Checkbox

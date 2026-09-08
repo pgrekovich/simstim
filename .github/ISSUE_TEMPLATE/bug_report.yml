@@ -1,0 +1,32 @@
+name: Bug report
+description: Something did not work as expected.
+body:
+  - type: markdown
+    attributes:
+      value: Please use fictional examples. Do not attach private recordings, transcripts, API keys or account details.
+  - type: input
+    id: version
+    attributes:
+      label: simstim version
+      placeholder: v0.11.0-beta.1
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: Mac and macOS version
+      placeholder: MacBook Air M2, macOS 15.6
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: What happened?
+      description: Steps to reproduce, what you expected, and what happened instead. Include the model or AI CLI version if relevant.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Sanitized error or screenshot
+      description: Check for private information before attaching anything.

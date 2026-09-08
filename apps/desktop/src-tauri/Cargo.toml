@@ -1,8 +1,10 @@
 [package]
 name = "desktop"
 version = "0.1.0"
-description = "A Tauri App"
-authors = ["you"]
+description = "Local call transcription to Markdown, with your own AI tools"
+license = "MIT"
+repository = "https://github.com/pgrekovich/simstim"
+authors = ["Pavel Hrakovich"]
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html

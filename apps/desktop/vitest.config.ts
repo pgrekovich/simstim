@@ -15,6 +15,9 @@ export default defineConfig({
   },
   test: {
     environment: "jsdom",
+    // Node's experimental storage globals conflict with jsdom on Node 24.
+    // Keep the browser implementation provided by jsdom in every worker.
+    execArgv: ["--no-experimental-webstorage"],
     globals: true,
     setupFiles: ["./src/test/setup.ts"],
   },

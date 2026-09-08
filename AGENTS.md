@@ -9,8 +9,7 @@ Edit `AGENTS.md`, never the symlink.
 ## What this is
 
 A local-first macOS app that transcribes calls in real time and writes them as
-plain `.md` files in a folder the user owns. Built for one user (Pavel), open
-source when it is good enough.
+plain `.md` files in a folder the user owns. Built for one user (Pavel), preparing the first public beta.
 
 It exists because every alternative failed the same way: Granola streams your
 audio to cloud ASR and stores notes on its servers; Meetily and Anarlog are
@@ -26,10 +25,12 @@ breaking one, stop and ask the owner.
    user's folder. Never introduce SQLite or any index/cache as a source of
    truth. Obsidian, ripgrep, git and other agents must work on the output with
    zero export steps.
-2. **Local by default.** Audio never leaves the machine. Any cloud step is
-   opt-in, BYO-key, text-only.
-3. **No accounts, no telemetry, no upsell.** Nothing to log into, nothing
-   phones home. The only network calls are model downloads.
+2. **Local by default.** Audio never leaves the machine. Cloud AI is optional
+   and text-only, through the user's configured Claude Code or Codex CLI.
+   Onboarding makes automatic summaries an explicit, reversible choice.
+3. **No simstim accounts, telemetry or upsell.** Use the user's existing AI
+   subscriptions or API setup, subject to provider limits. Network activity
+   is model downloads and optional AI/connector calls through those tools.
 4. **Never record silently.** Capture starts only on explicit user action.
 5. **Single writer per session file.** While a recording is live, only its
    worker writes that file; UI edits route through it. Past sessions are
@@ -38,6 +39,16 @@ breaking one, stop and ask the owner.
    its own section. The app never edits the transcript inline.
 7. **Crash-safe by construction.** Transcript segments hit disk as they
    finalize; audio flushes periodically. A kill loses at most the last chunk.
+
+## Product boundary
+
+Your calls. Your files. Your AI. simstim handles capture, transcription and
+reliable files. The user's existing Claude, ChatGPT or other harness handles
+PDFs, sharing, presentations and other downstream work. Do not build an
+export service, AI credit system or integration marketplace into the recorder.
+Built-in AI is a convenience; disabling it leaves useful local files for any
+tool, including local models. In-app connector operations are restricted reads;
+broader actions belong in the user's own assistant.
 
 ## Architecture map
 
@@ -144,3 +155,7 @@ reintroducing any of what it removed. Stage 4.3 added the user's own prompts
 quick questions; `src-tauri/src/prompts.rs`). Read the status lines and
 Known issues in the spec for exactly where things stand and what is
 deliberately unfixed.
+
+Stage 4.4 is implemented on `codex/stage-4.4-beta-readiness`; all four gates
+and local bundle checks passed. Owner e2e and public release are pending.
+See `docs/beta-release.md` for the automated gates and owner acceptance steps.

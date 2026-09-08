@@ -5,6 +5,38 @@
 > simstim (Gibson, Neuromancer): replaying someone's recorded sensory
 > experience. This app replays your calls as text.
 
+## Current beta direction (2026-09-09)
+
+Status: stage 4.4 implemented; all four gates and local app/DMG checks passed
+on 2026-09-09. Owner e2e and public release pending. See `docs/plans/2026-09-09-stage-4.4-beta-readiness.md`
+and `docs/beta-release.md`.
+
+The owner's clarified product promise is **Your calls. Your files. Your AI.**
+The recorder captures reliable local audio and Markdown. Existing Claude,
+ChatGPT or other harnesses handle PDFs, presentations, sharing and downstream
+automation. Built-in Claude Code/Codex bridges are optional convenience, using
+the user's configured subscription or API account under provider limits.
+Disabling automatic summaries leaves recording, transcription, notes,
+playback and ordinary search local. There is no simstim AI plan or account.
+
+This section and the September 4 product cut supersede historical references
+below to a local summarizer, BYO-key-only AI, cloud ASR, summaries off by default,
+or all network traffic consisting of model downloads. Audio stays local;
+onboarding visibly offers automatic summaries, and optional AI sends text
+through the user's own CLI. The current defaults are documented in
+`docs/configuration.md`.
+
+Beta file ownership covers each complete read/modify/write and recording
+finalization. Background processing holds the audio timeline stable through
+cleanup: the user may edit their notes, but continuation into that same note
+waits until transcription or summarization finishes. External editors do not
+participate in the in-process gate and should work on finished files.
+
+Connector runs preapprove exact read operations and deny unknown operations,
+without inheriting blanket user/project permission settings. Broader actions
+remain in the user's own assistant. The CLI and configured servers are trusted
+software; the bridge is not a sandbox for malicious connector implementations.
+
 ## Vision
 
 A local-first, cross-platform, high-performance desktop app that transcribes
@@ -231,7 +263,8 @@ Out of 0.7: meeting detection, tray, hotkeys, enhance, calendar.
 - Compression costs about 4 percent WER versus lossless (measured on English/German/French/Spanish; Russian unmeasured). AAC 32 kbps is the default because raising the bitrate does not recover that accuracy (AAC 64k measured at 4.3 percent vs 3.8 percent for 32k), so the real choice is lossless or not.
 - Continuing a recording into a note whose audio is in the other format re-encodes the combined audio into the current format.
 - FLAC block padding accumulates at seams when continuing a session: each segment's trailing block pads to up to 256ms of silence, so N continuations add up to N-1 seams of padding (accepted as a size cost, exact sync is preserved).
-- The first built-in Qwen M1 e2e exposed slow, English and poorly grounded
+- Historical, superseded by the September 4 removal of the local summarizer:
+  the first built-in Qwen M1 e2e exposed slow, English and poorly grounded
   summaries on a 41 KB Russian transcript. The branch now compacts inference
   input without changing the saved transcript, uses an adaptive 8K, 16K or 32K
   context, detects the spoken language and rejects a wrong-script result. The

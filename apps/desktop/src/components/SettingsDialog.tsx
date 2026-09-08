@@ -882,9 +882,10 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
             <section id="settings-summaries" className="flex flex-col gap-1.5">
               <GroupHeading>Summaries</GroupHeading>
               <p className="max-w-[62ch] text-[11.5px] leading-[1.55] text-muted-foreground">
-                Written by an AI assistant already installed on this Mac, from the note's text
-                and transcript. Text only, never audio. The same assistant answers Ask your
-                notes (⌘L) and Ask this call (⌘J).
+                Use Claude Code or Codex with the account you already set up. Summaries and
+                questions send text to that provider, never audio. Your provider's usage
+                limits apply. Turn off automatic summaries to keep text local; your files
+                also work with any assistant you use separately.
               </p>
               <Group>
                 {!summariesPossible ? (

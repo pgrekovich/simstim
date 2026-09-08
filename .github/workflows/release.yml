@@ -27,7 +27,7 @@ jobs:
 
       - name: Rust toolchain
         run: |
-          rustup toolchain install stable --profile minimal
+          rustup toolchain install stable --profile minimal --component clippy
           rustup default stable
 
       - uses: Swatinem/rust-cache@v2
@@ -46,12 +46,12 @@ jobs:
         working-directory: apps/desktop
         run: pnpm install --frozen-lockfile
 
-      # A tag that cannot pass its own tests is not a release. Clippy and
-      # pnpm test/build run in CI on every push; the release only re-runs
-      # the test suites that guard behavior.
+      # A tag must pass the same four gates as a branch. The frontend build
+      # runs below as Tauri's beforeBuildCommand before any artifact ships.
       - name: Test
         run: |
           cargo test --workspace
+          cargo clippy --workspace --all-targets -- -D warnings
           (cd apps/desktop && pnpm test)
 
       # An ephemeral keychain so the certificate never touches the runner's
@@ -91,18 +91,14 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
-          cat > /tmp/release-config.json <<EOF
-          {
-            "version": "${VERSION}",
-            "bundle": { "macOS": { "signingIdentity": "${SIGN_IDENTITY}" } }
-          }
-          EOF
+          python3 ../../scripts/release-config.py "$VERSION" /tmp/release-config.json \
+            --signing-identity "$SIGN_IDENTITY"
           pnpm tauri build --config /tmp/release-config.json
 
       - name: Verify the shipped bundle
         run: |
           set -euo pipefail
-          APP=target/release/bundle/macos/simstim.app
+          APP=target/release/bundle/macos/Simstim.app
           codesign --verify --deep --strict --verbose=2 "$APP"
           # Authority lines only appear at -dvv; -dv prints none and the
           # grep would fail on a correctly signed build.
@@ -121,7 +117,7 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
-          DMG="target/release/bundle/dmg/simstim_${VERSION}_aarch64.dmg"
+          DMG="target/release/bundle/dmg/Simstim_${VERSION}_aarch64.dmg"
           {
             scripts/release-notes.sh "$GITHUB_REF_NAME"
             printf '\n## Install\n\n'
@@ -140,7 +136,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" \
+          set -euo pipefail
+          # Positional arguments also handle an empty list on macOS Bash 3.
+          set --
+          if [[ "${GITHUB_REF_NAME#v}" == *-* ]]; then
+            set -- --prerelease --latest=false
+          fi
+          gh release create "$GITHUB_REF_NAME" "$@" \
             --title "$GITHUB_REF_NAME" \
             --notes-file release-notes.md \
-            "target/release/bundle/dmg/simstim_${GITHUB_REF_NAME#v}_aarch64.dmg"
+            "target/release/bundle/dmg/Simstim_${GITHUB_REF_NAME#v}_aarch64.dmg"

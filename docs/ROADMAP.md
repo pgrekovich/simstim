@@ -1,10 +1,10 @@
 # Roadmap
 
-Owner-ordered priorities as of 2026-09-01. Items are a ranked backlog that may
+Current direction as of 2026-09-09. Items are a ranked backlog that may
 move after real usage. Detailed history lives in the main spec's status lines
 and `docs/plans/`.
 
-## Shipped through stage 4.0
+## Shipped through stage 4.3
 
 - Local live transcription with exact `Me` and `Them` channel separation,
   plain Markdown storage, crash-safe audio, notes, titles and continuation.
@@ -14,8 +14,11 @@ and `docs/plans/`.
   and a menu-bar recording indicator. Recording still starts only on a click.
 - The paper-and-ink interface, folder-backed sidebar, full-text search,
   transcript-local find and active-window keyboard shortcuts.
-- Local Qwen summaries plus optional Claude Code and Codex providers, generated
-  titles and calendar connector context. User notes remain separate and sacred.
+- Optional Claude Code and Codex summaries, generated titles and calendar
+  connector context. User notes remain separate. The local summarizer was
+  removed in the September 4 product cut.
+- Questions over a call or the notes folder through the user's own AI CLI.
+  Custom summary instructions, styles and quick questions in `prompts.toml`.
 - One Linux-style TOML configuration file shared with the Settings UI.
 - A guided first run for choosing the notes folder, granting both audio
   permissions, downloading the required transcription model and optionally
@@ -24,17 +27,21 @@ and `docs/plans/`.
 There are no global shortcuts. Keyboard shortcuts work only while a simstim
 window is active, so browser and system shortcuts remain untouched.
 
-## Ranked backlog
+## Next: first public beta
 
-1. **Calendar metadata.** EventKit first for local event names and attendees.
-   Full Google OAuth only if EventKit proves insufficient. Cloud connector
-   context for summaries already exists and remains an explicit opt-in.
-2. **Richer transcript structure.** Consider generated chapters only after a
-   clear product contract and reliable round-trip behavior exist.
-3. **Windows, then Linux.** WASAPI loopback and session notifications first,
-   then PipeWire. Capture and detection stay behind the existing boundaries.
-4. **Public release polish.** Updater and public launch
-   once the owner is comfortable handing the app to someone else.
+Stage 4.4 prepares reliable file ownership, clearer privacy and AI setup,
+public documentation, a license and a prerelease workflow. The candidate
+must pass all four gates and the owner's real call test before release.
+See [the beta checklist](beta-release.md).
+
+The product boundary is explicit: simstim captures calls into usable files;
+the user's existing AI tools handle PDFs, sharing and other downstream work.
+No extra AI plan, export service or integration marketplace.
+
+After beta feedback, prioritize recording reliability, recognition quality
+and installation issues. Download resume, an updater and other quality-of-life
+work depend on what testers encounter. Calendar via EventKit, richer transcript
+structure and Windows/Linux remain future possibilities, not beta promises.
 
 ## Smaller known items
 

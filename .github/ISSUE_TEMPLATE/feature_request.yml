@@ -1,0 +1,15 @@
+name: Workflow improvement
+description: Explain a problem with recording, transcription or using your files.
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: Describe the problem and your current workaround. Downstream tasks such as PDF creation and sharing usually belong in your existing AI tools.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Suggested change
+      description: How would this keep the recorder simple?

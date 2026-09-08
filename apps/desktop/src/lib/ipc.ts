@@ -29,8 +29,7 @@ export interface AppConfig {
    * `"aac" | "flac"` (stage-0.7 format change): which format new recordings
    * are encoded to. Defaults to `"aac"` (owner decision after a measured
    * codec benchmark: ~17 MB/hour at 3.8% WER vs lossless, against FLAC's
-   * ~137 MB/hour at 0% WER). Toggled from the Settings dialog's audio
-   * format control, next to "Keep call audio".
+   * ~137 MB/hour at 0% added WER in the measured corpus). File-only setting.
    */
   audio_format: string;
   /**
@@ -44,9 +43,8 @@ export interface AppConfig {
   /**
    * Whether `stop_recording` automatically queues a re-transcribe job for
    * the session that just stopped (stage 0.9). Only actually fires when
-   * `keep_audio` is also on and the session has audio. Defaults to `false`.
-   * Toggled from the Settings dialog's Models section (Re-transcribe group)
-   * via `setAutoRetranscribe`.
+   * `keep_audio` is also on and the session has audio. Defaults to `true`.
+   * Advanced override in config.toml.
    */
   auto_retranscribe: boolean;
   /**

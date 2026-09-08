@@ -49,6 +49,12 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "resources": {
+      "../../../LICENSE": "licenses/simstim-MIT.txt",
+      "../../../THIRD_PARTY_NOTICES.md": "licenses/THIRD_PARTY_NOTICES.md",
+      "../src/assets/fonts/SourceSerif4-OFL.txt": "licenses/SourceSerif4-OFL.txt",
+      "../src/assets/fonts/SplineSansMono-OFL.txt": "licenses/SplineSansMono-OFL.txt"
+    }
   }
 }

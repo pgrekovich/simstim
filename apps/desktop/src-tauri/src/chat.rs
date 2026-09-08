@@ -513,7 +513,7 @@ fn validate_ask(
 /// writes, runs or browses. `--disallowedTools` denies them even though the
 /// built-in set stays open (the CLI only lists MCP tools when `--tools` is
 /// not restricting the set; verified against the real CLI 2026-09-07).
-const CONNECTOR_DENIED_TOOLS: &str = "Bash,Write,Edit,MultiEdit,NotebookEdit,WebFetch,WebSearch,Task,Agent,TodoWrite,KillShell,BashOutput,Skill";
+pub(crate) const CONNECTOR_DENIED_TOOLS: &str = "Bash,Write,Edit,MultiEdit,NotebookEdit,WebFetch,WebSearch,Task,Agent,TodoWrite,KillShell,BashOutput,Skill";
 
 /// `connectors`: the `--allowedTools` rules for the user's MCP servers when
 /// a quick question asked for them (see `prompts::QuickQuestion.connectors`),
@@ -557,6 +557,7 @@ fn build_command(
                 // A connector question: the user's MCP servers are in, the
                 // built-in writing tools are denied by name.
                 Some(rules) => {
+                    crate::enhance::restrict_connector_permissions(&mut cmd);
                     cmd.args(["--disallowedTools", CONNECTOR_DENIED_TOOLS, "--allowedTools"]);
                     cmd.arg(format!("Read,Grep,Glob,{rules}"));
                 }
@@ -865,7 +866,9 @@ fn ask_inner<R: tauri::Runtime>(
         let question_for_prompt = if connector_rules.is_some() {
             format!(
                 "{question}\n\n(Your connector tools are available for this question. Use them \
-                 to look things up, never to create or change anything.)"
+                 to look things up, never to create or change anything. If a tool is denied, \
+                 explain that this connector operation is not supported inside simstim; \
+                 the user can continue in their own assistant.)"
             )
         } else {
             question.to_string()
@@ -1394,7 +1397,7 @@ mod tests {
                 None,
                 Path::new("/tmp/notes"),
                 Path::new("/tmp/work"),
-                Some("mcp__claude_ai_Atlassian,mcp__claude_ai_Atlassian__*"),
+                Some("mcp__claude_ai_Atlassian__searchJiraIssuesUsingJql"),
             )
             .unwrap();
             let args: Vec<String> = cmd
@@ -1406,7 +1409,9 @@ mod tests {
             assert!(!args.iter().any(|a| a == "--tools"));
             assert!(!args.iter().any(|a| a == "--strict-mcp-config"));
             assert!(args.windows(2).any(|w| w[0] == "--allowedTools"
-                && w[1] == "Read,Grep,Glob,mcp__claude_ai_Atlassian,mcp__claude_ai_Atlassian__*"));
+                && w[1] == "Read,Grep,Glob,mcp__claude_ai_Atlassian__searchJiraIssuesUsingJql"));
+            assert!(args.windows(2).any(|w| w[0] == "--setting-sources" && w[1].is_empty()));
+            assert!(args.windows(2).any(|w| w[0] == "--permission-mode" && w[1] == "dontAsk"));
             // Everything that writes, runs or browses stays denied by name.
             let denied = args
                 .windows(2)

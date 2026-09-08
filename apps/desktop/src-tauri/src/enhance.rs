@@ -326,7 +326,9 @@ fn lookup_calendar_event(
     let prompt = calendar_lookup_prompt(start, end);
     let output = run_cli_capture(
         claude,
-        &["-p", "--output-format", "text", "--allowedTools", allowed_tools],
+        &["-p", "--output-format", "text", "--allowedTools", allowed_tools,
+          "--setting-sources", "", "--permission-mode", "dontAsk",
+          "--disallowedTools", crate::chat::CONNECTOR_DENIED_TOOLS],
         &prompt,
         CALENDAR_LOOKUP_TIMEOUT,
     )
@@ -939,22 +941,40 @@ fn filter_calendar_names(mut names: Vec<String>) -> Vec<String> {
     names
 }
 
-/// The `--allowedTools` value covering every tool of the given servers.
-/// Both documented rule shapes are emitted per server (`mcp__name` and
-/// `mcp__name__*`) so the allowlist works across CLI versions.
+/// Exact read operations supported by the in-app connector bridge. Never
+/// grant a whole server: the same MCP server can read AND send/delete.
+/// Unknown tools remain denied; broader workflows belong in the user's own
+/// interactive assistant. See docs/privacy.md for the trust boundary.
+const CONNECTOR_READ_TOOLS: &[&str] = &[
+    "search", "fetch", "read", "list", "get",
+    "list_calendars", "list_events", "get_event", "search_events", "get_free_busy",
+    "get_calendar", "list_calendar_events", "get_calendar_event", "find_free_time",
+    "searchJiraIssuesUsingJql", "getJiraIssue", "getJiraProjectIssueTypesMetadata",
+    "getAccessibleAtlassianResources", "getVisibleJiraProjects", "getConfluencePage",
+    "getConfluencePageDescendants", "getConfluenceSpaces", "searchConfluenceUsingCql",
+    "search_issues", "get_issue", "list_issues", "search_projects", "list_projects",
+    "get_project", "get_document", "list_documents", "search_documents",
+    "search_messages", "read_thread", "get_thread", "get_message", "list_messages",
+    "slack_search_messages", "slack_get_thread_replies", "slack_get_channel_history",
+    "search_email", "read_email", "search_contacts", "list_contacts",
+];
+
 pub(crate) fn calendar_allowed_tools(servers: &[String]) -> String {
     mcp_allowed_tools(servers)
 }
 
-/// The `--allowedTools` rules covering every tool of the given servers (the
-/// chat's connector questions use this over the whole server list).
 pub(crate) fn mcp_allowed_tools(servers: &[String]) -> String {
-    servers
-        .iter()
-        .map(|name| normalize_server_name(name))
-        .flat_map(|name| [format!("mcp__{name}"), format!("mcp__{name}__*")])
-        .collect::<Vec<_>>()
-        .join(",")
+    servers.iter().flat_map(|name| {
+        let server = normalize_server_name(name);
+        CONNECTOR_READ_TOOLS.iter().map(move |tool| format!("mcp__{server}__{tool}"))
+    }).collect::<Vec<_>>().join(",")
+}
+
+/// Ignore inherited blanket approvals, then deny any operation outside the
+/// exact allowlist. Credentials and MCP registrations belong to the CLI;
+/// simstim never reads them. There is no interactive approval surface here.
+pub(crate) fn restrict_connector_permissions(cmd: &mut Command) {
+    cmd.args(["--setting-sources", "", "--permission-mode", "dontAsk"]);
 }
 
 /// The CLI exposes a server's tools as `mcp__<normalized name>__<tool>`,
@@ -1203,6 +1223,7 @@ fn enhance_path_inner<R: tauri::Runtime>(
         .filter(|m| !m.is_empty())
         .map(str::to_string);
 
+    let _file_job = crate::session_files::process(md_path).map_err(|e| e.to_string())?;
     let existing = simstim_transcript::parse_session(md_path).map_err(|e| e.to_string())?;
     // Which style writes this summary: the one asked for, else the one the
     // note remembers; a deleted style quietly means standard.
@@ -1762,16 +1783,13 @@ mod tests {
     /// `mcp__claude_ai_Google_Calendar__list_events`); a plain local name
     /// passes through untouched.
     #[test]
-    fn calendar_allowed_tools_covers_both_rule_shapes_per_normalized_server() {
-        let servers = vec![
-            "google-calendar".to_string(),
-            "claude.ai Google Calendar".to_string(),
-        ];
-        assert_eq!(
-            calendar_allowed_tools(&servers),
-            "mcp__google-calendar,mcp__google-calendar__*,\
-             mcp__claude_ai_Google_Calendar,mcp__claude_ai_Google_Calendar__*"
-        );
+    fn calendar_allowed_tools_are_exact_reads_on_normalized_servers() {
+        let rules = calendar_allowed_tools(&["claude.ai Google Calendar".into()]);
+        let rules: Vec<_> = rules.split(',').collect();
+        assert!(rules.contains(&"mcp__claude_ai_Google_Calendar__list_events"));
+        assert!(!rules.contains(&"mcp__claude_ai_Google_Calendar__create_event"));
+        assert!(!rules.contains(&"mcp__claude_ai_Google_Calendar__delete_event"));
+        assert!(rules.iter().all(|r| !r.contains('*')));
     }
 
     #[test]

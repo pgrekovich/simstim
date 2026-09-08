@@ -411,6 +411,24 @@ impl Session {
         on_interim: impl Fn(Channel, String) + Send + 'static,
         on_error: impl Fn(String) + Send + 'static,
     ) -> Session {
+        Self::start_with_lease(chunk_rx, out_path, None, continue_from, new_title,
+            pending_edits, keep_audio, audio_format, on_line, on_interim, on_error)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn start_with_lease(
+        chunk_rx: Receiver<Chunk>,
+        out_path: PathBuf,
+        lease: Option<crate::session_files::RecordingLease>,
+        continue_from: Option<ContinueFrom>,
+        new_title: Option<String>,
+        pending_edits: Arc<Mutex<PendingEdits>>,
+        keep_audio: bool,
+        audio_format: AudioFormat,
+        on_line: impl Fn(String) + Send + 'static,
+        on_interim: impl Fn(Channel, String) + Send + 'static,
+        on_error: impl Fn(String) + Send + 'static,
+    ) -> Session {
         let stop_flag = Arc::new(AtomicBool::new(false));
         let worker_stop_flag = stop_flag.clone();
         let activity = Arc::new(RecordingActivity::new());
@@ -420,6 +438,12 @@ impl Session {
         // for model/VAD loading or any audio setup that follows it.
         let (initial_save_tx, initial_save_rx) = std::sync::mpsc::sync_channel(0);
         let handle = std::thread::spawn(move || {
+            // Ownership outlives the UI's recording slot and is released only
+            // after run_worker finishes its final transcript and audio save.
+            let _lease = match lease {
+                Some(lease) => lease,
+                None => crate::session_files::record(&out_path)?,
+            };
             run_worker(
                 chunk_rx,
                 out_path,

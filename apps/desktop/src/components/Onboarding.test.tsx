@@ -199,7 +199,7 @@ describe("Onboarding (one screen)", () => {
     expect(toggle).toBeChecked();
     // The saved provider was claude; only codex is here, so the config follows.
     await waitFor(() => expect(ipc.setEnhanceProvider).toHaveBeenCalledWith("codex"));
-    expect(screen.getByText(/text only, never audio/i)).toBeVisible();
+    expect(screen.getByText(/never audio. turn this off to keep text local/i)).toBeVisible();
 
     fireEvent.click(toggle);
     await waitFor(() => expect(ipc.setAutoEnhance).toHaveBeenCalledWith(false));

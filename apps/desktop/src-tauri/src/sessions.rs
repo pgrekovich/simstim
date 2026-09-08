@@ -180,13 +180,8 @@ pub fn read_session_at(path: &Path, finalizing: Option<&Path>) -> Result<Session
 /// belongs exclusively to the session worker while recording is in
 /// progress, per the single-writer rule.
 ///
-/// Note: this and `rewrite_transcript_at` (the re-transcribe pipeline's own
-/// writer) are not mutually exclusive once a session is neither recording
-/// nor finalizing -- a title/notes save and a re-transcribe's final write
-/// could in theory land within the same millisecond, and whichever's
-/// `Transcript::save` call renders last wins outright (each is an atomic
-/// whole-file write-then-rename, so the result is never a corrupt/partial
-/// file, just one save's content instead of a merge of both).
+/// Every inactive read/modify/write is serialized by `session_files`, which
+/// also rejects paths reserved by a recording worker through finalization.
 pub fn save_session_at(
     path: &Path,
     title: &str,
@@ -250,36 +245,38 @@ pub fn save_session_at(
 /// always the Parakeet default, and a plain title/notes edit through this
 /// function must not silently reset that back.
 fn rewrite_session(path: &Path, title: &str, notes: &str) -> Result<()> {
-    let existing = parse_session(path)?;
-    let meta = parse_meta(path)?;
-    let started_at = DateTime::parse_from_rfc3339(&existing.date)
-        .map(|dt| dt.with_timezone(&Local))
-        .unwrap_or_else(|_| Local::now());
+    crate::session_files::edit(path, || {
+        let existing = parse_session(path)?;
+        let meta = parse_meta(path)?;
+        let started_at = DateTime::parse_from_rfc3339(&existing.date)
+            .map(|dt| dt.with_timezone(&Local))
+            .unwrap_or_else(|_| Local::now());
 
-    let mut transcript = Transcript::new(started_at);
-    transcript.set_raw_date(existing.date.clone());
-    transcript.set_title(title.to_string());
-    // A machine-given title stays marked as such only while the user leaves
-    // it alone: saving a DIFFERENT title is the user renaming the note, and
-    // from then on no enhance may replace it (rule 6).
-    transcript.set_title_by(if title == existing.title {
-        existing.title_by.clone()
-    } else {
-        None
-    });
-    transcript.set_notes(notes.to_string());
-    transcript.set_asr(meta.asr.clone());
-    if let Some(duration_secs) = meta.duration_secs {
-        transcript.set_duration_secs(duration_secs);
-    }
-    if let Some(audio_from_secs) = meta.audio_from_secs {
-        transcript.set_audio_from_secs(audio_from_secs);
-    }
-    transcript.set_summary(existing.summary.clone(), existing.summary_model.clone());
-    transcript.set_summary_style(existing.summary_style.clone());
-    transcript.set_people(existing.people.clone());
-    transcript.set_raw_transcript(existing.transcript.clone());
-    transcript.save(path)
+        let mut transcript = Transcript::new(started_at);
+        transcript.set_raw_date(existing.date.clone());
+        transcript.set_title(title.to_string());
+        // A machine-given title stays marked as such only while the user leaves
+        // it alone: saving a DIFFERENT title is the user renaming the note, and
+        // from then on no enhance may replace it (rule 6).
+        transcript.set_title_by(if title == existing.title {
+            existing.title_by.clone()
+        } else {
+            None
+        });
+        transcript.set_notes(notes.to_string());
+        transcript.set_asr(meta.asr.clone());
+        if let Some(duration_secs) = meta.duration_secs {
+            transcript.set_duration_secs(duration_secs);
+        }
+        if let Some(audio_from_secs) = meta.audio_from_secs {
+            transcript.set_audio_from_secs(audio_from_secs);
+        }
+        transcript.set_summary(existing.summary.clone(), existing.summary_model.clone());
+        transcript.set_summary_style(existing.summary_style.clone());
+        transcript.set_people(existing.people.clone());
+        transcript.set_raw_transcript(existing.transcript.clone());
+        transcript.save(path)
+    })
 }
 
 /// Rewrites `path`'s `## Transcript` section with `new_transcript` (already
@@ -310,53 +307,56 @@ fn rewrite_session(path: &Path, title: &str, notes: &str) -> Result<()> {
 /// returns `Err` WITHOUT writing anything: never guess and risk losing text
 /// on an unknown shape.
 ///
-/// Note: see `save_session_at`'s doc comment for the same last-writer-wins
-/// millisecond window against this function specifically -- not corrupting
-/// data either way, just an ordering race neither side locks against.
+/// The file gate covers both parsing and saving, so simultaneous notes or
+/// summary edits are carried forward rather than overwritten.
 pub fn rewrite_transcript_at(path: &Path, new_transcript: &str, asr_id: &str) -> Result<()> {
-    let existing = parse_session(path)?;
-    let meta = parse_meta(path)?;
-    let started_at = DateTime::parse_from_rfc3339(&existing.date)
-        .map(|dt| dt.with_timezone(&Local))
-        .unwrap_or_else(|_| Local::now());
+    crate::session_files::edit(path, || {
+        let existing = parse_session(path)?;
+        let meta = parse_meta(path)?;
+        let started_at = DateTime::parse_from_rfc3339(&existing.date)
+            .map(|dt| dt.with_timezone(&Local))
+            .unwrap_or_else(|_| Local::now());
 
-    let final_transcript = match meta.audio_from_secs {
-        Some(audio_from_secs) if audio_from_secs > 0 => {
-            let kept =
-                simstim_transcript::split_transcript_at(&existing.transcript, audio_from_secs as f64)
-                    .ok_or_else(|| {
-                        anyhow!(
-                            "this session's earlier transcript couldn't be safely separated \
-                             from its continued recording -- re-transcribe was not run, to \
-                             avoid losing text"
-                        )
-                    })?;
-            if kept.is_empty() {
-                new_transcript.to_string()
-            } else {
-                format!("{kept}\n{new_transcript}")
+        let final_transcript = match meta.audio_from_secs {
+            Some(audio_from_secs) if audio_from_secs > 0 => {
+                let kept = simstim_transcript::split_transcript_at(
+                    &existing.transcript,
+                    audio_from_secs as f64,
+                )
+                .ok_or_else(|| {
+                    anyhow!(
+                        "this session's earlier transcript couldn't be safely separated \
+                                 from its continued recording -- re-transcribe was not run, to \
+                                 avoid losing text"
+                    )
+                })?;
+                if kept.is_empty() {
+                    new_transcript.to_string()
+                } else {
+                    format!("{kept}\n{new_transcript}")
+                }
             }
-        }
-        _ => new_transcript.to_string(),
-    };
+            _ => new_transcript.to_string(),
+        };
 
-    let mut transcript = Transcript::new(started_at);
-    transcript.set_raw_date(existing.date.clone());
-    transcript.set_title(existing.title.clone());
-    transcript.set_title_by(existing.title_by.clone());
-    transcript.set_notes(existing.notes.clone());
-    if let Some(duration_secs) = meta.duration_secs {
-        transcript.set_duration_secs(duration_secs);
-    }
-    if let Some(audio_from_secs) = meta.audio_from_secs {
-        transcript.set_audio_from_secs(audio_from_secs);
-    }
-    transcript.set_summary(existing.summary.clone(), existing.summary_model.clone());
-    transcript.set_summary_style(existing.summary_style.clone());
-    transcript.set_people(existing.people.clone());
-    transcript.set_asr(asr_id);
-    transcript.set_raw_transcript(final_transcript);
-    transcript.save(path)
+        let mut transcript = Transcript::new(started_at);
+        transcript.set_raw_date(existing.date.clone());
+        transcript.set_title(existing.title.clone());
+        transcript.set_title_by(existing.title_by.clone());
+        transcript.set_notes(existing.notes.clone());
+        if let Some(duration_secs) = meta.duration_secs {
+            transcript.set_duration_secs(duration_secs);
+        }
+        if let Some(audio_from_secs) = meta.audio_from_secs {
+            transcript.set_audio_from_secs(audio_from_secs);
+        }
+        transcript.set_summary(existing.summary.clone(), existing.summary_model.clone());
+        transcript.set_summary_style(existing.summary_style.clone());
+        transcript.set_people(existing.people.clone());
+        transcript.set_asr(asr_id);
+        transcript.set_raw_transcript(final_transcript);
+        transcript.save(path)
+    })
 }
 
 /// Whether `title` is one the APP generated rather than one the user
@@ -430,38 +430,40 @@ pub fn set_summary_at(
     people: Option<&[String]>,
     style: Option<&str>,
 ) -> Result<()> {
-    let existing = parse_session(path)?;
-    let meta = parse_meta(path)?;
-    let started_at = DateTime::parse_from_rfc3339(&existing.date)
-        .map(|dt| dt.with_timezone(&Local))
-        .unwrap_or_else(|_| Local::now());
+    crate::session_files::edit(path, || {
+        let existing = parse_session(path)?;
+        let meta = parse_meta(path)?;
+        let started_at = DateTime::parse_from_rfc3339(&existing.date)
+            .map(|dt| dt.with_timezone(&Local))
+            .unwrap_or_else(|_| Local::now());
 
-    let machine_owned = title_is_auto(&existing.title) || existing.title_by.is_some();
-    let (title, title_by) = match proposed_title {
-        Some(new_title) if machine_owned => (new_title.to_string(), Some(model.to_string())),
-        _ => (existing.title.clone(), existing.title_by.clone()),
-    };
+        let machine_owned = title_is_auto(&existing.title) || existing.title_by.is_some();
+        let (title, title_by) = match proposed_title {
+            Some(new_title) if machine_owned => (new_title.to_string(), Some(model.to_string())),
+            _ => (existing.title.clone(), existing.title_by.clone()),
+        };
 
-    let mut transcript = Transcript::new(started_at);
-    transcript.set_raw_date(existing.date.clone());
-    transcript.set_title(title);
-    transcript.set_title_by(title_by);
-    transcript.set_notes(existing.notes.clone());
-    transcript.set_asr(meta.asr.clone());
-    if let Some(duration_secs) = meta.duration_secs {
-        transcript.set_duration_secs(duration_secs);
-    }
-    if let Some(audio_from_secs) = meta.audio_from_secs {
-        transcript.set_audio_from_secs(audio_from_secs);
-    }
-    transcript.set_summary(summary.to_string(), Some(model.to_string()));
-    transcript.set_summary_style(style.map(str::to_string));
-    transcript.set_people(match people {
-        Some(fresh) => fresh.to_vec(),
-        None => existing.people.clone(),
-    });
-    transcript.set_raw_transcript(existing.transcript.clone());
-    transcript.save(path)
+        let mut transcript = Transcript::new(started_at);
+        transcript.set_raw_date(existing.date.clone());
+        transcript.set_title(title);
+        transcript.set_title_by(title_by);
+        transcript.set_notes(existing.notes.clone());
+        transcript.set_asr(meta.asr.clone());
+        if let Some(duration_secs) = meta.duration_secs {
+            transcript.set_duration_secs(duration_secs);
+        }
+        if let Some(audio_from_secs) = meta.audio_from_secs {
+            transcript.set_audio_from_secs(audio_from_secs);
+        }
+        transcript.set_summary(summary.to_string(), Some(model.to_string()));
+        transcript.set_summary_style(style.map(str::to_string));
+        transcript.set_people(match people {
+            Some(fresh) => fresh.to_vec(),
+            None => existing.people.clone(),
+        });
+        transcript.set_raw_transcript(existing.transcript.clone());
+        transcript.save(path)
+    })
 }
 
 /// Creates a new, empty session note for the user to type into without
@@ -486,14 +488,16 @@ pub fn create_session_in(dir: &Path) -> Result<PathBuf> {
 /// the real clock across two `Local::now()` calls.
 fn create_session_at(dir: &Path, now: DateTime<Local>) -> Result<PathBuf> {
     let path = simstim_transcript::output_path(dir, now);
-    if path.exists() {
-        return Err(anyhow!(
-            "a session file already exists for this moment: {}",
-            path.display()
-        ));
-    }
-    Transcript::new(now).save(&path)?;
-    Ok(path)
+    crate::session_files::edit(&path, || {
+        if path.exists() {
+            return Err(anyhow!(
+                "a session file already exists for this moment: {}",
+                path.display()
+            ));
+        }
+        Transcript::new(now).save(&path)?;
+        Ok(path.clone())
+    })
 }
 
 /// One matching line inside a [`SearchHit`]. Mirrors `SearchSnippet` in
@@ -615,15 +619,17 @@ fn validate_delete_session(
 /// stale fallback next to its encoded file, and deleting the note must not
 /// strand any of them.
 pub fn delete_session_at(md_path: &Path) -> Result<()> {
-    let mut doomed = vec![md_path.to_path_buf()];
-    let audio_candidates = [
-        crate::audio_sink::audio_path_for(md_path),
-        crate::audio_sink::m4a_path_for(md_path),
-        crate::audio_sink::wav_path_for(md_path),
-        crate::audio_sink::recording_wav_path_for(md_path),
-    ];
-    doomed.extend(audio_candidates.into_iter().filter(|p| p.is_file()));
-    trash::delete_all(&doomed).map_err(|e| anyhow!("couldn't move to Trash: {e}"))
+    crate::session_files::remove(md_path, || {
+        let mut doomed = vec![md_path.to_path_buf()];
+        let audio_candidates = [
+            crate::audio_sink::audio_path_for(md_path),
+            crate::audio_sink::m4a_path_for(md_path),
+            crate::audio_sink::wav_path_for(md_path),
+            crate::audio_sink::recording_wav_path_for(md_path),
+        ];
+        doomed.extend(audio_candidates.into_iter().filter(|p| p.is_file()));
+        trash::delete_all(&doomed).map_err(|e| anyhow!("couldn't move to Trash: {e}"))
+    })
 }
 
 #[tauri::command]
@@ -795,6 +801,61 @@ mod tests {
             t.add(Speaker::Me, 3.0, "hello".into());
             t.save(&path).unwrap();
             path
+        }
+
+        #[test]
+        fn simultaneous_section_updates_preserve_all_three_sections() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = note_with_summary(dir.path());
+            let barrier = std::sync::Barrier::new(3);
+            std::thread::scope(|scope| {
+                scope.spawn(|| {
+                    barrier.wait();
+                    rewrite_session(&path, "User title", "User notes").unwrap();
+                });
+                scope.spawn(|| {
+                    barrier.wait();
+                    set_summary_at(&path, "Fresh summary", "claude", None, None, None).unwrap();
+                });
+                scope.spawn(|| {
+                    barrier.wait();
+                    rewrite_transcript_at(&path, "[00:00:03] Me: Accurate words", "whisper-large-v3").unwrap();
+                });
+            });
+            let saved = parse_session(&path).unwrap();
+            assert_eq!(saved.title, "User title");
+            assert_eq!(saved.notes.trim(), "User notes");
+            assert_eq!(saved.summary.trim(), "Fresh summary");
+            assert_eq!(saved.transcript.trim(), "[00:00:03] Me: Accurate words");
+        }
+
+        #[test]
+        fn processing_blocks_deletion_without_touching_note_or_audio() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = note_with_summary(dir.path());
+            let audio = path.with_extension("m4a");
+            std::fs::write(&audio, b"retained audio").unwrap();
+            let before = std::fs::read(&path).unwrap();
+            let _job = crate::session_files::process(&path).unwrap();
+            assert!(delete_session_at(&path).is_err());
+            assert_eq!(std::fs::read(&path).unwrap(), before);
+            assert_eq!(std::fs::read(audio).unwrap(), b"retained audio");
+        }
+
+        #[test]
+        fn recording_lease_blocks_every_past_session_writer() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = note_with_summary(dir.path());
+            let before = std::fs::read(&path).unwrap();
+            let lease = crate::session_files::record(&path).unwrap();
+            assert!(rewrite_session(&path, "Wrong", "Wrong").is_err());
+            assert!(set_summary_at(&path, "Wrong", "claude", None, None, None).is_err());
+            assert!(rewrite_transcript_at(&path, "Wrong", "whisper").is_err());
+            assert!(delete_session_at(&path).is_err());
+            assert_eq!(std::fs::read(&path).unwrap(), before);
+            drop(lease);
+            rewrite_session(&path, "Saved", "After finalization").unwrap();
+            assert_eq!(parse_session(&path).unwrap().notes.trim(), "After finalization");
         }
 
         #[test]

@@ -1048,6 +1048,16 @@ async fn run_job<R: tauri::Runtime>(
     // corruption this closes off. A failure here reports through the usual
     // "error" phase and drops the job -- the pipeline is never reached, so
     // nothing is ever written or deleted for a job that fails this check.
+    let file_job = crate::session_files::process(&md_path);
+    let _file_job = match file_job {
+        Ok(lease) => lease,
+        Err(error) => {
+            let message = error.to_string();
+            emit_progress(&app, &path, "error", None, Some(message.clone()));
+            advance_queue(app.clone());
+            return Err(message);
+        }
+    };
     let state = app.state::<AppState>();
     let finalizing = state.finalizing_match(&md_path);
     let revalidated = revalidate_before_run(
@@ -1073,7 +1083,11 @@ async fn run_job<R: tauri::Runtime>(
     // returns.
     let audio_path_for_delete = audio_path.clone();
 
+    // A dropped async request does not cancel spawn_blocking. Both the
+    // worker and the caller retain ownership, through processing and cleanup.
+    let worker_file_job = _file_job.clone();
     let join_result = tauri::async_runtime::spawn_blocking(move || {
+        let _worker_file_job = worker_file_job;
         let progress_app = app_for_job.clone();
         let progress_path = path_for_job.clone();
         let on_progress = move |phase, channel, message| {
@@ -1088,16 +1102,8 @@ async fn run_job<R: tauri::Runtime>(
         // much narrower remaining race, in the handful of milliseconds
         // between that check and the write actually landing.
         //
-        // Residual TOCTOU: this check and `sessions::rewrite_transcript_at`'s
-        // own write are not atomic under one lock -- `AppState`'s mutex is
-        // only held for the instant of this read, not held across the
-        // filesystem write that follows. A recording could in theory start
-        // in the gap between this check passing and the write completing.
-        // Closing that fully would need a lock held across a filesystem
-        // write (or a different single-writer mechanism), which is more
-        // machinery than the practical risk here (a human clicking
-        // "record" inside a multi-millisecond window right as a
-        // re-transcribe finishes) justifies.
+        // The write itself also acquires the file gate. A live worker's
+        // lease blocks it even if recording starts after this UI-state check.
         let check_app = app_for_job;
         let before_write = move || -> Result<()> {
             let active = check_app.state::<AppState>().active_output_path();

@@ -8,8 +8,8 @@
 ## Current beta direction (2026-09-09)
 
 Status: stage 4.4 implemented; all four gates and local app/DMG checks passed
-on 2026-09-09. The owner approved merge and push; public release is explicitly
-deferred. See `docs/plans/2026-09-09-stage-4.4-beta-readiness.md`
+on 2026-09-09. The owner accepted stage 4.5 and approved merge, push and
+beta release later that day. See `docs/plans/2026-09-09-stage-4.4-beta-readiness.md`
 and `docs/beta-release.md`.
 
 The owner's clarified product promise is **Your calls. Your files. Your AI.**
@@ -880,7 +880,8 @@ insidegui/AudioCap, anarlog audio crates, OBS pipewire-audio-capture.
 
 ## Stage 4.5: optional AI setup without a terminal
 
-Status: implemented on `codex/stage-4.5-ai-setup`, pending owner clean-Mac e2e.
+Status: owner accepted stage 4.5 on 2026-09-09 and approved merge, push and
+release as `v0.11.0-beta.1`.
 
 A desktop Claude or ChatGPT installation does not provide the CLI bridge.
 Onboarding and Settings now offer Connect Claude / Connect ChatGPT. An

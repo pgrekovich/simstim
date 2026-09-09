@@ -159,10 +159,10 @@ deliberately unfixed.
 
 Stage 4.4 is implemented on `codex/stage-4.4-beta-readiness`; all four gates
 and local bundle checks passed. The owner approved merge and push on
-2026-09-09; public release is explicitly deferred.
+2026-09-09. The owner subsequently approved the beta release after stage 4.5 acceptance.
 See `docs/beta-release.md` for the automated gates and owner acceptance steps.
 
 Stage 4.5 adds optional official helper installation and provider-owned browser
 sign-in on the existing onboarding/settings screens. No simstim account,
-OAuth client or credential handling. Owner clean-Mac acceptance is pending;
-public release remains deferred. See `docs/plans/2026-09-09-stage-4.5-ai-setup.md`.
+OAuth client or credential handling. On 2026-09-09 the owner confirmed it works
+and approved commit, merge, push and beta release. See `docs/plans/2026-09-09-stage-4.5-ai-setup.md`.

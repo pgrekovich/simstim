@@ -124,7 +124,9 @@ jobs:
             printf 'Open the disk image, drag simstim into Applications, launch it. Signed\n'
             printf 'with a Developer ID and notarized by Apple, so there is nothing to\n'
             printf 'bypass. ASR models download inside the app on first run\n'
-            printf '(Settings > Models).\n\n'
+            printf '(onboarding).\n\n'
+            printf 'Optional AI: choose Connect Claude or Connect ChatGPT and finish browser sign-in.\n'
+            printf 'No terminal or Simstim account is required; AI setup can be skipped.\n\n'
             printf 'Requires macOS 14.2+ on Apple Silicon.\n\n'
             # shellcheck disable=SC2016 # literal markdown backticks, not expansion
             printf '%s\n\n```\n%s\n```\n' '`shasum -a 256`' \

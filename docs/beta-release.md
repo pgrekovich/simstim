@@ -6,17 +6,18 @@ Stage 4.4 prepares the project for its first public beta. The intended first
 beta tag is `v0.11.0-beta.1`; the repository remains private until the owner
 chooses to publish it. This checklist is release work, not onboarding UI.
 
-On 2026-09-09 the owner approved merge and push, with an explicit instruction
-not to release yet. Individual manual checks below are not independently
-recorded; keep them for the eventual public-release run.
+On 2026-09-09 the owner confirmed stage 4.5 works and approved commit, push
+and release as `v0.11.0-beta.1`. This supersedes the earlier release deferral.
+Individual manual checks below are not independently recorded. Repository
+visibility remains unchanged.
 
 ## Automated gates
 
 Verified locally on 2026-09-09:
 
-- [x] `cargo test --workspace`: 482 passed, 8 explicitly ignored.
+- [x] `cargo test --workspace`: 487 passed, 9 explicitly ignored.
 - [x] `cargo clippy --workspace --all-targets -- -D warnings`.
-- [x] `pnpm test` from `apps/desktop`: 223 passed on Node 24.
+- [x] `pnpm test` from `apps/desktop`: 228 passed.
 - [x] `pnpm build` from `apps/desktop`, also run by the native bundle build.
 - [x] Review the final diff and check local documentation links and bundled notices.
 - [x] Build the app and DMG; verify signature integrity, microphone entitlement,
@@ -32,7 +33,7 @@ Local artifacts:
 
 - `target/release/bundle/macos/Simstim.app`
 - `target/release/bundle/dmg/Simstim_0.11.0-beta.1_aarch64.dmg`
-- DMG SHA-256: `f46d73eaa67726e7bc7b9afa1f293b709f34b5bc5f3bd352eb801d0b2cc440b4`
+- The shipped DMG checksum is recorded in the GitHub release notes.
 
 This candidate is ad-hoc signed and has not been notarized. The public
 Developer ID signature and notarization are produced and checked by the

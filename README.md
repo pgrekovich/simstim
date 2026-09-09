@@ -9,7 +9,7 @@ plain Markdown file with its audio in a folder you choose. Open it in
 Obsidian, search it, back it up, or give it to the AI tools you already use.
 
 No simstim account, subscription, telemetry or AI credits. Open source, MIT.
-macOS 14.2+ on Apple Silicon. First public beta preparation is in progress.
+macOS 14.2+ on Apple Silicon. [Beta v0.11.0-beta.1](https://github.com/pgrekovich/simstim/releases/tag/v0.11.0-beta.1).
 
 [Download releases](https://github.com/pgrekovich/simstim/releases) ·
 [Example note](docs/examples/2026-09-09%2010-00-00%20call.md) ·

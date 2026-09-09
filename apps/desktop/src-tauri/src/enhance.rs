@@ -73,6 +73,7 @@ pub struct EnhanceProviderInfo {
     pub id: String,
     pub name: String,
     pub available: bool,
+    pub installed: bool,
     pub version: Option<String>,
 }
 
@@ -153,20 +154,10 @@ pub(crate) fn resolve_binary(binary: &str) -> Option<PathBuf> {
             candidates.push(dir.join(binary));
         }
     }
-    candidates.into_iter().find(|p| p.is_file())
-}
-
-/// `<binary> --version`, trimmed, or `None` if the binary is missing or
-/// errors. Used both for the Settings availability rows and as the "is it
-/// actually runnable" gate before an enhance.
-fn probe_version(binary: &str) -> Option<String> {
-    let path = resolve_binary(binary)?;
-    let out = Command::new(path).arg("--version").output().ok()?;
-    if !out.status.success() {
-        return None;
+    if let Some(managed) = crate::ai_setup::managed_binary(binary) {
+        candidates.insert(0, managed);
     }
-    let version = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    (!version.is_empty()).then_some(version)
+    candidates.into_iter().find(|p| p.is_file())
 }
 
 /// Async + `spawn_blocking`: probing spawns `--version` subprocesses, and a
@@ -179,11 +170,14 @@ pub async fn list_enhance_providers() -> Vec<EnhanceProviderInfo> {
         PROVIDERS
             .iter()
             .map(|spec| {
-                let version = probe_version(spec.binary);
+                let (version, available) = resolve_binary(spec.binary)
+                    .map(|path| crate::ai_setup::probe(spec.id, &path))
+                    .unwrap_or((None, false));
                 EnhanceProviderInfo {
                     id: spec.id.to_string(),
                     name: spec.name.to_string(),
-                    available: version.is_some(),
+                    available,
+                    installed: version.is_some(),
                     version,
                 }
             })
@@ -1390,6 +1384,12 @@ pub(crate) fn maybe_auto_enhance<R: tauri::Runtime>(app: tauri::AppHandle<R>, pa
         return;
     }
     tauri::async_runtime::spawn_blocking(move || {
+        // A downloaded but signed-out helper is skipped without an error after each call.
+        if !resolve_binary(&cfg.enhance_provider)
+            .is_some_and(|binary| crate::ai_setup::probe(&cfg.enhance_provider, &binary).1)
+        {
+            return;
+        }
         let _ = enhance_path_blocking(&app, &path, None);
     });
 }

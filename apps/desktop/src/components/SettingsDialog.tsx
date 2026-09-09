@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
+import { AiSetup } from "@/components/AiSetup";
 import { PromptsSettings } from "@/components/PromptsSettings";
 import { cn } from "@/lib/utils";
 import {
@@ -882,16 +883,23 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
             <section id="settings-summaries" className="flex flex-col gap-1.5">
               <GroupHeading>Summaries</GroupHeading>
               <p className="max-w-[62ch] text-[11.5px] leading-[1.55] text-muted-foreground">
-                Use Claude Code or Codex with the account you already set up. Summaries and
+                Use Claude or ChatGPT with your existing account. Summaries and
                 questions send text to that provider, never audio. Your provider's usage
                 limits apply. Turn off automatic summaries to keep text local; your files
                 also work with any assistant you use separately.
               </p>
+              {isOpen && <AiSetup providers={enhanceProviders} onConnected={async (provider) => {
+                const fresh = await listEnhanceProviders();
+                setEnhanceProviders(fresh);
+                if (fresh.some((p) => p.id === provider && p.available)) {
+                  await handleSetEnhanceProvider(provider);
+                }
+              }} />}
               <Group>
                 {!summariesPossible ? (
                   <Row
-                    label="No AI assistant found"
-                    description="Install Claude Code or Codex and Simstim picks it up on its own."
+                    label="Connect an AI assistant"
+                    description="Recording and transcription also work without AI."
                   />
                 ) : availableProviders.length === 1 ? (
                   <Row

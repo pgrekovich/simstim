@@ -7,6 +7,9 @@ import * as ipc from "@/lib/ipc";
 import type { AppConfig, ModelInfo } from "@/lib/ipc";
 
 vi.mock("@/lib/ipc", () => ({
+  aiSetupStatus: vi.fn().mockResolvedValue(null),
+  setupAi: vi.fn().mockResolvedValue(undefined),
+  cancelAiSetup: vi.fn().mockResolvedValue(undefined),
   getPrompts: vi.fn().mockResolvedValue({ summary_instructions: "", summary_styles: [], quick_questions: [] }),
   savePrompts: vi.fn().mockResolvedValue({ summary_instructions: "", summary_styles: [], quick_questions: [] }),
   restoreDefaultPrompts: vi.fn().mockResolvedValue({ summary_instructions: "", summary_styles: [], quick_questions: [] }),
@@ -211,7 +214,9 @@ describe("Onboarding (one screen)", () => {
   it("explains summaries plainly when no assistant is installed, without a switch", async () => {
     renderOnboarding([liveModel(true), whisperModel(true)]);
 
-    expect(await screen.findByText(/summaries need claude code or codex/i)).toBeVisible();
+    expect(await screen.findByRole("button", { name: "Connect Claude" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Connect ChatGPT" })).toBeVisible();
+    expect(ipc.setupAi).not.toHaveBeenCalled();
     expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
     expect(ipc.setEnhanceProvider).not.toHaveBeenCalled();
   });

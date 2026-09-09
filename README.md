@@ -33,8 +33,8 @@ of a call, preserving the recording, and turning it into useful text.
 Everything after that can happen in your own tools.
 
 For convenience, simstim can also summarize and answer questions through
-your installed **Claude Code or Codex CLI**, using the account you configured
-there. Eligible Claude and ChatGPT subscriptions can provide that access;
+**Claude Code or Codex**, using your own account. Connect an assistant
+in Settings; simstim can install the official helper for you. Eligible Claude and ChatGPT subscriptions can provide that access;
 your provider's limits and billing settings still apply. simstim adds no fee.
 
 Prefer another setup, including a local model? Turn off automatic summaries
@@ -73,9 +73,9 @@ pass becomes available when its model finishes downloading.
 Models are stored in `~/Library/Application Support/simstim/models/`.
 Notes default to `~/Documents/simstim`; an Obsidian vault works too.
 
-For built-in AI, install and sign in to Claude Code or Codex once, then
-choose it in Settings. Having only the Claude or ChatGPT desktop app does
-not guarantee the corresponding CLI is installed.
+For built-in AI, choose **Connect Claude** or **Connect ChatGPT** and finish
+the official browser sign-in. simstim sets up the needed helper without a
+terminal. No simstim account is needed; you can skip AI entirely.
 [AI setup and example workflows](docs/your-ai.md).
 
 ## What stays local

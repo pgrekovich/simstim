@@ -1,5 +1,6 @@
 // Fictional fixtures for screenshots of the real renderer. No native bridge,
 // recording, cloud AI, model download or filesystem mutation is available.
+const setupPreview = new URLSearchParams(location.search).has("setup");
 const date = "2026-09-09T10:00:00+02:00";
 const path = "/demo/2026-09-09 10-00-00 call.md";
 const note = {
@@ -32,10 +33,11 @@ export async function invoke(command: string, args?: Record<string, unknown>): P
       { id: config.retranscribe_model, name: "Whisper large-v3 turbo", size_mb: 874, downloaded: true, active: true, role: "retranscribe", technical_name: null, tagline: null, size_on_disk_bytes: 874000000, retired: false },
     ];
     case "list_enhance_providers": return [
-      { id: "claude", name: "Claude Code", available: true, version: "Preview" },
-      { id: "codex", name: "Codex", available: true, version: "Preview" },
+      { id: "claude", name: "Claude Code", available: !setupPreview, version: setupPreview ? null : "Preview" },
+      { id: "codex", name: "Codex", available: !setupPreview, version: setupPreview ? null : "Preview" },
     ];
     case "get_prompts": return { summary_instructions: "", summary_styles: [], quick_questions: [] };
+    case "ai_setup_status": return null;
     case "recording_activity": return null;
     case "chat_history": return { messages: [], running: false };
     case "storage_stats": return { note_count: 3, notes_bytes: 8192, audio_bytes: 0, audio_secs: 0 };

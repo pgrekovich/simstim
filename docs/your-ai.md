@@ -4,11 +4,24 @@ simstim makes the recording and the files. Your assistant does the rest.
 
 ## Built-in summaries and questions
 
-Install either [Claude Code](https://code.claude.com/docs/en/setup) or
-[Codex CLI](https://developers.openai.com/codex/cli/) using its official
-instructions. Run it once in your terminal and sign in. Then open simstim
-Settings and select the available assistant. A desktop chat app alone is
-not the CLI that simstim invokes.
+Choose **Connect Claude** or **Connect ChatGPT** during onboarding or in
+Settings. simstim downloads the official native helper if needed and starts
+its browser sign-in. Finish signing in with the provider, then return to
+simstim. There is no simstim account or password form, and no terminal,
+Homebrew or Node.js requirement. You can cancel or skip this setup.
+
+A working existing Claude Code or Codex installation is reused. A helper
+installed by simstim lives in `~/Library/Application Support/simstim/helpers/`
+and takes precedence on subsequent runs. Downloads come from Anthropic or
+OpenAI's GitHub releases and are checked against upstream SHA-256 metadata;
+Claude's native signature is also verified. Downloads happen only when you
+choose to connect. Installing a desktop chat app alone does not supply this
+helper. Provider authentication and credential storage remain with the
+unmodified official tool. Setup does not send notes or make model requests.
+
+If sign-in fails or expires, choose Connect again. Already authenticated
+assistants appear as available automatically. The provider's standard API
+and subscription authentication options remain available in its own tools.
 
 Claude Code can use eligible Claude subscriptions. Codex can sign in with
 ChatGPT for subscription access. Both also have separately billed API
@@ -22,7 +35,7 @@ Official references: [Claude subscription access](https://support.claude.com/en/
 
 Automatic summaries are a visible choice during onboarding and can be
 turned off in Settings. An explicit question still sends text to the chosen
-provider. Without a CLI, recording, local transcription, playback, notes and
+provider. Without a connected assistant, recording, local transcription, playback, notes and
 ordinary search continue to work.
 
 ## Use a different assistant

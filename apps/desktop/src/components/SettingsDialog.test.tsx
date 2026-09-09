@@ -5,6 +5,9 @@ import * as ipc from "@/lib/ipc";
 import type { AppConfig, ModelInfo } from "@/lib/ipc";
 
 vi.mock("@/lib/ipc", () => ({
+  aiSetupStatus: vi.fn().mockResolvedValue(null),
+  setupAi: vi.fn().mockResolvedValue(undefined),
+  cancelAiSetup: vi.fn().mockResolvedValue(undefined),
   getPrompts: vi.fn().mockResolvedValue({ summary_instructions: "", summary_styles: [], quick_questions: [] }),
   savePrompts: vi.fn().mockResolvedValue({ summary_instructions: "", summary_styles: [], quick_questions: [] }),
   restoreDefaultPrompts: vi.fn().mockResolvedValue({ summary_instructions: "", summary_styles: [], quick_questions: [] }),
@@ -324,7 +327,7 @@ describe("SettingsDialog: summaries", () => {
     ]);
     render(<SettingsDialog open onOpenChange={() => {}} />);
 
-    await screen.findByText("No AI assistant found");
+    await screen.findByText("Connect an AI assistant");
     expect(screen.getByRole("checkbox", { name: /summarize after each call/i })).toBeDisabled();
     expect(screen.getByRole("checkbox", { name: /let summaries title notes/i })).toBeDisabled();
     expect(screen.getByRole("checkbox", { name: /use calendar for context/i })).toBeDisabled();

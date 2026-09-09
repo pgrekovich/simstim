@@ -15,6 +15,9 @@ import { ask } from "@tauri-apps/plugin-dialog";
  * never invoked in these App-level tests).
  */
 vi.mock("@/lib/ipc", () => ({
+  aiSetupStatus: vi.fn().mockResolvedValue(null),
+  setupAi: vi.fn().mockResolvedValue(undefined),
+  cancelAiSetup: vi.fn().mockResolvedValue(undefined),
   getPrompts: vi.fn().mockResolvedValue({ summary_instructions: "", summary_styles: [], quick_questions: [] }),
   savePrompts: vi.fn().mockResolvedValue({ summary_instructions: "", summary_styles: [], quick_questions: [] }),
   restoreDefaultPrompts: vi.fn().mockResolvedValue({ summary_instructions: "", summary_styles: [], quick_questions: [] }),
@@ -215,6 +218,9 @@ describe("App: call detection via the banner window (stage 1.1)", () => {
 
   it("starts a new pre-titled recording from a banner-start event", async () => {
     render(<App />);
+    // The banner listener is registered before configuration and models load.
+    const start = await findStartControl();
+    await waitFor(() => expect(start).toBeEnabled());
     await emitBannerStart();
 
     await waitFor(() => expect(ipc.startRecording).toHaveBeenCalledTimes(1));

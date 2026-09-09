@@ -11,6 +11,7 @@ import {
   Settings,
   Volume2,
 } from "lucide-react";
+import { AiSetup } from "@/components/AiSetup";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Progress } from "@/components/ui/progress";
@@ -399,10 +400,14 @@ export function Onboarding({ config, models, onOpenSettings, onComplete }: Onboa
                 />
               </label>
             ) : (
-              <p className="text-[12.5px] leading-[1.5] text-muted-foreground">
-                Summaries need Claude Code or Codex installed on this Mac. Install one later and
-                Simstim picks it up on its own.
-              </p>
+              <AiSetup providers={enhanceProviders} onConnected={async (provider) => {
+                const fresh = await listEnhanceProviders();
+                if (fresh.some((p) => p.id === provider && p.available)) {
+                  await setEnhanceProvider(provider);
+                  setCurrentConfig((cfg) => ({ ...cfg, enhance_provider: provider }));
+                }
+                setEnhanceProviders(fresh);
+              }} />
             )}
           </div>
 

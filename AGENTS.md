@@ -30,7 +30,8 @@ breaking one, stop and ask the owner.
    Onboarding makes automatic summaries an explicit, reversible choice.
 3. **No simstim accounts, telemetry or upsell.** Use the user's existing AI
    subscriptions or API setup, subject to provider limits. Network activity
-   is model downloads and optional AI/connector calls through those tools.
+   is model downloads, explicitly requested official AI helper setup and
+   authentication, and optional AI/connector calls through those tools.
 4. **Never record silently.** Capture starts only on explicit user action.
 5. **Single writer per session file.** While a recording is live, only its
    worker writes that file; UI edits route through it. Past sessions are
@@ -160,3 +161,8 @@ Stage 4.4 is implemented on `codex/stage-4.4-beta-readiness`; all four gates
 and local bundle checks passed. The owner approved merge and push on
 2026-09-09; public release is explicitly deferred.
 See `docs/beta-release.md` for the automated gates and owner acceptance steps.
+
+Stage 4.5 adds optional official helper installation and provider-owned browser
+sign-in on the existing onboarding/settings screens. No simstim account,
+OAuth client or credential handling. Owner clean-Mac acceptance is pending;
+public release remains deferred. See `docs/plans/2026-09-09-stage-4.5-ai-setup.md`.

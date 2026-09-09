@@ -203,6 +203,8 @@ export interface SessionData {
 
 /** Mirrors `enhance::EnhanceProviderInfo`: one row of the Settings AI section. */
 export interface EnhanceProviderInfo {
+  /** Installed is distinct from authenticated/available. */
+  installed?: boolean;
   id: string;
   name: string;
   available: boolean;
@@ -766,3 +768,9 @@ export function updateActiveSession(title?: string, notes?: string): Promise<voi
 export function retranscribeSession(path: string): Promise<void> {
   return invoke("retranscribe_session", { path });
 }
+
+/** Vendor-owned setup; no credentials are passed over these commands. */
+export interface AiSetupStatus { provider: string; phase: "installing" | "signing_in"; }
+export function aiSetupStatus(): Promise<AiSetupStatus | null> { return invoke("ai_setup_status"); }
+export function setupAi(provider: string): Promise<void> { return invoke("setup_ai", { provider }); }
+export function cancelAiSetup(): Promise<void> { return invoke("cancel_ai_setup"); }

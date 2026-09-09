@@ -56,12 +56,19 @@ want to preserve manual changes to that section.
 Deleting a note in simstim moves it and its audio to the macOS Trash.
 An advanced `delete_audio_after_retranscribe` option is off by default;
 enabling it permanently deletes audio after a successful accurate pass.
-Removing the application does not delete your notes or models.
+Removing the application does not delete your notes, models or AI helpers.
+Helpers live in `~/Library/Application Support/simstim/helpers/`; provider
+credentials are stored separately by the provider's own tool.
 
 ## Network activity
 
 - Initial and explicitly requested speech-model downloads use the upstream
   Hugging Face/GitHub URLs in the model registry.
+- Explicit AI setup downloads official helpers from Anthropic or OpenAI
+  GitHub releases. The helper opens provider-owned browser authentication.
+  simstim does not read or store passwords or authentication tokens.
+- Assistant discovery runs the helper's version and authentication-status
+  commands. The provider controls any network activity of those commands.
 - Optional AI and connector calls use the CLI's configured providers.
 - Opening external links uses your normal browser.
 - The beta has no automatic update check; updates are downloaded manually.

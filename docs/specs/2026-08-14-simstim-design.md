@@ -877,3 +877,25 @@ produced 2026-08-14 in the planning session; key conclusions are inlined
 above. Primary sources worth revisiting when implementing capture:
 recall.ai blog on Core Audio taps, Apple "capturing system audio" docs,
 insidegui/AudioCap, anarlog audio crates, OBS pipewire-audio-capture.
+
+## Stage 4.5: optional AI setup without a terminal
+
+Status: implemented on `codex/stage-4.5-ai-setup`, pending owner clean-Mac e2e.
+
+A desktop Claude or ChatGPT installation does not provide the CLI bridge.
+Onboarding and Settings now offer Connect Claude / Connect ChatGPT. An
+explicit click reuses a working CLI or installs the official native binary
+into Application Support, then starts the vendor's official browser login.
+There is no additional screen, simstim account, OAuth client, password form
+or token handling. The local recorder remains usable with setup skipped.
+
+Availability requires the official authentication-status check, so an
+installed but signed-out helper no longer appears ready. Setup is cancellable
+and bounded; downloads require upstream SHA-256 verification, Claude also
+requires native signature verification, and activation uses atomic rename.
+Settings can resume displaying a running setup. No notes enter setup and no
+model request is used to check readiness. Existing provider authentication
+options remain available. This extends permitted network activity to explicit
+official helper downloads and authentication without adding simstim services.
+
+Implementation and clean-Mac acceptance: [stage plan](../plans/2026-09-09-stage-4.5-ai-setup.md).

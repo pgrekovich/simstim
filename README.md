@@ -51,15 +51,21 @@ There is no export step.
 
 [Example note](docs/examples/2026-09-09%2010-00-00%20call.md)
 
+## No feature bloat
+
+Simstim stays focused on recording calls, transcribing them and keeping
+usable files. Being able to build a feature with AI is not a reason to
+add it. New features should make that core workflow better.
+
+For PDFs, presentations and follow-up emails, give the Markdown to your
+usual assistant. It already has tools for that. Simstim does not need to
+rebuild them inside a call recorder.
+
 ## Optional AI
 
 Connect **Claude or ChatGPT** to get summaries and ask questions about your
 calls. Simstim sets up the official Claude Code or Codex helper and opens
 its browser sign-in. Setup does not require a terminal.
-
-For PDFs, presentations and follow-up emails, give the Markdown to your
-usual assistant. Those tasks use its existing tools and integrations.
-They do not need separate features in the recorder.
 
 AI requests send text to your provider, never audio. Your provider's plan
 limits and billing settings apply; Simstim adds no fee.

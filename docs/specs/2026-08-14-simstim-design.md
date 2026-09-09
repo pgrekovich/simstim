@@ -8,7 +8,8 @@
 ## Current beta direction (2026-09-09)
 
 Status: stage 4.4 implemented; all four gates and local app/DMG checks passed
-on 2026-09-09. Owner e2e and public release pending. See `docs/plans/2026-09-09-stage-4.4-beta-readiness.md`
+on 2026-09-09. The owner approved merge and push; public release is explicitly
+deferred. See `docs/plans/2026-09-09-stage-4.4-beta-readiness.md`
 and `docs/beta-release.md`.
 
 The owner's clarified product promise is **Your calls. Your files. Your AI.**

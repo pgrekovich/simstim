@@ -6,6 +6,10 @@ Stage 4.4 prepares the project for its first public beta. The intended first
 beta tag is `v0.11.0-beta.1`; the repository remains private until the owner
 chooses to publish it. This checklist is release work, not onboarding UI.
 
+On 2026-09-09 the owner approved merge and push, with an explicit instruction
+not to release yet. Individual manual checks below are not independently
+recorded; keep them for the eventual public-release run.
+
 ## Automated gates
 
 Verified locally on 2026-09-09:
@@ -57,7 +61,7 @@ test audio and an isolated output folder. No real conversation is needed.
 - [ ] Enable GitHub private vulnerability reporting when making the repo public.
 - [ ] Set a concise description and topics: macos, transcription, meeting-notes,
   local-first, markdown, whisper, parakeet, tauri, rust.
-- [ ] Owner approves the candidate; merge only after that test.
+- [x] Owner approves merging the candidate (2026-09-09).
 - [ ] Push the beta tag; the workflow must mark it as a prerelease.
 - [ ] Verify signed/notarized DMG download and installation on a second Mac.
 - [ ] Replace the README preparation status with the public beta link.

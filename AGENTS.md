@@ -157,5 +157,6 @@ Known issues in the spec for exactly where things stand and what is
 deliberately unfixed.
 
 Stage 4.4 is implemented on `codex/stage-4.4-beta-readiness`; all four gates
-and local bundle checks passed. Owner e2e and public release are pending.
+and local bundle checks passed. The owner approved merge and push on
+2026-09-09; public release is explicitly deferred.
 See `docs/beta-release.md` for the automated gates and owner acceptance steps.

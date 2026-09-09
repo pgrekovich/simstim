@@ -37,8 +37,15 @@ Local artifacts:
 
 This candidate is ad-hoc signed and has not been notarized. The public
 Developer ID signature and notarization are produced and checked by the
-release workflow after the owner approves the candidate. The workflow itself
-has not been run for this unpublished beta tag.
+release workflow after the owner approves the candidate. The workflow completed successfully for `v0.11.0-beta.1` on 2026-09-09.
+The published DMG was downloaded and independently checked: SHA-256 matched,
+disk-image integrity passed, the app signature and stapled ticket validated,
+and Gatekeeper reported `Notarized Developer ID`.
+
+Release: https://github.com/pgrekovich/simstim/releases/tag/v0.11.0-beta.1
+
+Published SHA-256:
+`581050c1a4868ceb32451ca9bc94e314b2f2aae98dc4c8dca806e28e8cb0fb3a`
 
 ## Owner test on the candidate
 
@@ -63,9 +70,9 @@ test audio and an isolated output folder. No real conversation is needed.
 - [ ] Set a concise description and topics: macos, transcription, meeting-notes,
   local-first, markdown, whisper, parakeet, tauri, rust.
 - [x] Owner approves merging the candidate (2026-09-09).
-- [ ] Push the beta tag; the workflow must mark it as a prerelease.
+- [x] Push the beta tag; the workflow marked it as a prerelease.
 - [ ] Verify signed/notarized DMG download and installation on a second Mac.
-- [ ] Replace the README preparation status with the public beta link.
+- [x] Replace the README preparation status with the beta link.
 - [ ] Invite a small initial group and collect feedback before a broad launch.
 
 ## Release description

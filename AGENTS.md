@@ -166,3 +166,7 @@ Stage 4.5 adds optional official helper installation and provider-owned browser
 sign-in on the existing onboarding/settings screens. No simstim account,
 OAuth client or credential handling. On 2026-09-09 the owner confirmed it works
 and approved commit, merge, push and beta release. See `docs/plans/2026-09-09-stage-4.5-ai-setup.md`.
+
+Beta `v0.11.0-beta.1` was released on 2026-09-09. The signed, notarized
+DMG passed CI and independent downloaded-artifact checks. The repository
+remains private. See `docs/beta-release.md` for release evidence.

@@ -233,23 +233,9 @@ impl WhisperEngine {
         Ok(remap_to_absolute(split, timeline))
     }
 
-    /// Transcribes 16 kHz mono `f32` samples (same format the rest of the
-    /// app uses). Language is auto-detected (whisper.cpp per-language token,
-    /// not a fixed one). `on_progress` receives whisper.cpp's own progress
-    /// callback, rescaled from its native 0-100 percent to 0.0-1.0; whisper.cpp
-    /// only calls it a handful of times per run (coarse, not continuous), but
-    /// it is the finest granularity the C API exposes without switching to
-    /// per-segment/streaming decoding.
-    ///
-    /// `on_progress` must be `'static` (not just borrowed) because
-    /// whisper-rs's `set_progress_callback_safe` stores it behind a raw
-    /// pointer for the C callback with no lifetime tracking of its own; this
-    /// is a small, deliberate widening of the brief's literal
-    /// `impl FnMut(f32)` signature, the same kind of deviation Task 1 made
-    /// for `on_error`.
-    ///
-    /// Segments with only whitespace (or nothing) after trimming are
-    /// dropped; whisper.cpp occasionally emits an empty final segment.
+    /// Transcribe 16 kHz mono samples with automatic language detection. Map Whisper
+    /// progress from 0-100 to 0-1. The Send callback can be invoked from the inference
+    /// worker.
     pub fn transcribe(
         &mut self,
         samples: &[f32],
@@ -345,9 +331,8 @@ impl WhisperEngine {
                     bytes: tok.to_bytes().unwrap_or_default().to_vec(),
                 });
             }
-            // whisper.cpp reports t0/t1 in centiseconds (hundredths of a
-            // second), per the Global Constraints and whisper.cpp's own
-            // `whisper_full_get_segment_t0`/`t1` docs.
+            // whisper.cpp reports t0/t1 in centiseconds (hundredths of a second), and
+            // whisper.cpp's own `whisper_full_get_segment_t0`/`t1` docs.
             out.push(TokenizedSegment {
                 start_secs: seg.start_timestamp() as f64 / 100.0,
                 end_secs: seg.end_timestamp() as f64 / 100.0,

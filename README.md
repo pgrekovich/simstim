@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/pgrekovich/simstim/releases/tag/v0.11.0-beta.1"><strong>Download the beta</strong></a> ·
+  <a href="https://github.com/pgrekovich/simstim/releases/tag/v0.11.0"><strong>Download for macOS</strong></a> ·
   <a href="#getting-started">Get started</a> ·
   <a href="docs/privacy.md">Privacy</a> ·
   <a href="docs/development.md">Build from source</a>
@@ -78,7 +78,7 @@ on the saved files.
 
 ## Getting started
 
-1. [Download the beta](https://github.com/pgrekovich/simstim/releases/tag/v0.11.0-beta.1),
+1. [Download for macOS](https://github.com/pgrekovich/simstim/releases/tag/v0.11.0),
    open the DMG and drag Simstim into Applications. The release is signed
    and notarized by Apple.
 2. Choose your notes folder and grant microphone and system-audio access.
@@ -94,7 +94,7 @@ setup and cloud AI requests need internet access. If you choose a synced
 folder, its files will sync through that service. [Privacy details](docs/privacy.md).
 
 <details>
-<summary><strong>Beta limitations</strong></summary>
+<summary><strong>Limitations</strong></summary>
 
 - Apple Silicon Macs only, on macOS 14.2 or later.
 - **Me / Them** distinguish your microphone from system audio, not individual
@@ -117,7 +117,7 @@ configuration. [Configuration reference](docs/configuration.md).
 
 [Report a bug](CONTRIBUTING.md#reporting-a-bug) ·
 [Development guide](docs/development.md) ·
-[Contributing](CONTRIBUTING.md) · [Roadmap](docs/ROADMAP.md)
+[Contributing](CONTRIBUTING.md) · [Architecture](docs/architecture.md)
 
 ---
 

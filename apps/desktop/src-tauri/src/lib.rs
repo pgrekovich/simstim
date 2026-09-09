@@ -25,17 +25,15 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, State};
 
-/// `session-error` event payload (Global Constraints): worker-side errors
-/// (engine/VAD init, save failures) surfaced to the UI instead of only
-/// living in stderr.
+/// `session-error` event payload: worker-side errors (engine/VAD init, save failures)
+/// surfaced to the UI instead of only living in stderr.
 #[derive(Clone, Serialize)]
 struct SessionErrorPayload {
     message: String,
 }
 
-/// `transcript-interim` event payload (Global Constraints): `channel` is
-/// `"me"` or `"them"`; an empty `text` clears that channel's draft. Never
-/// written to disk, see `session.rs`'s module docs.
+/// `transcript-interim` event payload: `channel` is `"me"` or `"them"`; an empty `text`
+/// clears that channel's draft. Never written to disk, see `session.rs`'s module docs.
 #[derive(Clone, Serialize)]
 struct TranscriptInterimPayload {
     channel: &'static str,
@@ -78,23 +76,9 @@ struct Recording {
 
 pub struct AppState {
     recording: Mutex<Option<Recording>>,
-    /// The paths of sessions currently being finalized: `stop_recording` has
-    /// already removed each from `recording` (so `active_output_path` no
-    /// longer reports it) and is blocking on `session.stop()` -- the final
-    /// transcript save plus, for a call with audio, the FLAC encode, which
-    /// can take real wall-clock time for a long recording. Marked right
-    /// before that blocking call and cleared right after, on every path
-    /// including an error return (Important fix-review finding: without
-    /// this, a re-transcribe or a `read_session` audio-path resolution
-    /// started in that window could see a stale/still-being-written `.wav`
-    /// and either decode a truncated file or hand it to the player as if it
-    /// were finished).
-    ///
-    /// A collection, not a single slot: stopping no longer blocks the UI, so
-    /// a second session can be started and stopped while the first is still
-    /// encoding, and each finalization must keep its own mark until ITS
-    /// guard drops (a single `Option` slot let the second stop overwrite the
-    /// first one's mark, unguarding its half-written audio).
+    /// Sessions between Stop and completed transcript/audio finalization. Keep them
+    /// reserved after freeing the recording slot so another call can start without
+    /// allowing a second writer to these files.
     finalizing: Mutex<Vec<PathBuf>>,
 }
 
@@ -187,18 +171,8 @@ impl AppState {
     }
 }
 
-/// Why starting a recording into `path` must be rejected, if it must be:
-/// the single-writer rule gives a session file exactly one owner at a time,
-/// and there are two possible owners to collide with. `active` is the file a
-/// live worker is recording into right now. `finalizing` is the file a just-
-/// stopped session's blocking finalization (final transcript save + audio
-/// encode) is still writing -- starting a NEW session during that window is
-/// deliberately allowed (blocking every control until a long call finished
-/// encoding cost the owner the start of a real call), so this rejection is
-/// what keeps that concurrency safe for the one file that still has a
-/// writer. `path: None` (a brand-new session) never conflicts: it gets its
-/// own timestamped file. Factored out as a pure function so it's directly
-/// unit-testable without a running Tauri `State`.
+/// Reject recording into a path already recording or finalizing. Saving one session must
+/// not prevent recording into a different file.
 fn recording_start_conflict(
     path: Option<&std::path::Path>,
     active: Option<&std::path::Path>,
@@ -358,15 +332,8 @@ async fn stop_recording(app: AppHandle) -> Result<String, String> {
         ..
     } = recording;
 
-    // Important fix-review finding: `session.stop()` below blocks on the
-    // final transcript save and (for a call with audio) a FLAC encode --
-    // real wall-clock time for a long call. Once this session is removed
-    // from `recording` above, `active_output_path` no longer reports it, so
-    // without this, a re-transcribe or a `read_session` audio-path
-    // resolution started in that exact window could see a still-being-
-    // written `.wav` as if the recording were already fully saved. Mark it
-    // as finalizing here, before the blocking call, and clear it right
-    // after -- on every path, success or error, so it never gets stuck set.
+    // Reserve the saving session before blocking finalization begins. Clear the
+    // reservation on every exit so playback and processing never see half-written audio.
 
     // Capture is no longer active from this point onward, even if flushing
     // or encoding the session fails. Clear detector lifecycle state on every
@@ -411,54 +378,10 @@ fn get_config() -> Config {
     Config::load()
 }
 
-/// Grants the asset protocol's live scope read access to `dir` (and every
-/// file/subdirectory under it, recursively) so `convertFileSrc` can serve
-/// session audio from it without a restart.
-///
-/// `tauri.conf.json`'s static `assetProtocol.scope` is deliberately empty
-/// (see `run()`'s `.setup()` call and `set_output_dir` below, its only two
-/// callers): the output dir is user-configurable to anywhere on disk, so a
-/// static scope broad enough to cover any possible choice would have to be
-/// something like `$HOME/**` -- readable by the webview well beyond the one
-/// folder it actually needs (ssh keys, browser profiles, everything else
-/// under the home directory). `Manager::asset_protocol_scope()` (gated
-/// behind the `protocol-asset` Cargo feature, already enabled) instead
-/// returns a live, `Arc`-shared handle to the exact same `scope::fs::Scope`
-/// the `asset://` request handler reads on every request -- confirmed by
-/// reading the vendored tauri 2.11.5 source (`src/app.rs`'s `Scopes`
-/// construction, `src/manager/webview.rs`'s protocol registration, and
-/// `src/protocol/asset.rs`'s per-request `scope.is_allowed` check) rather
-/// than assumed from the crate's public docs alone. So calling
-/// `allow_directory` on it here takes effect immediately, in the already-
-/// running app, no restart needed.
-///
-/// Canonicalizes `dir` first: `Scope::is_allowed`'s query-side check
-/// (`try_resolve_symlink_and_canonicalize`, per that same source read) only
-/// canonicalizes an *existing* path, resolving every symlinked path
-/// component (e.g. macOS's `/var` -> `/private/var`) along the way, while
-/// `allow_directory` stores whatever it's given verbatim with no
-/// resolution at all. A `dir` that traverses a symlink (a real
-/// possibility -- some setups mount the home directory, or a user-picked
-/// folder, through one) would otherwise register a pattern that silently
-/// never matches the canonical form real requests get checked against.
-/// Falls back to the raw path if canonicalization fails (most likely: the
-/// directory doesn't exist yet) rather than erroring the whole call --
-/// `is_allowed` would just as reliably fail to serve anything under a
-/// nonexistent directory either way, so nothing is lost by not erroring
-/// here.
-///
-/// Generic over `R`/`impl Manager<R>` (rather than the concrete
-/// `AppHandle`/`Wry` runtime) purely so this is testable against
-/// `tauri::test::mock_app()`'s `MockRuntime`, per the review's ask for a
-/// scope-allow test; production call sites always instantiate it with the
-/// real `Wry` runtime via a plain `AppHandle`/`&App` argument.
-///
-/// Note this only ever ADDS to the scope -- Tauri's `Scope` has no "reset",
-/// only `allow_*`/`forbid_*` -- so a session recorded under a previously
-/// configured output dir stays playable even after the user points the app
-/// at a different folder later (see `set_output_dir`'s doc comment for what
-/// this means for what the webview can read, in aggregate, over the app's
-/// lifetime).
+/// Grant recursive asset access to the configured folder, canonicalizing symlinks to
+/// match real requests. Fall back to the raw path if it does not exist yet. Keep
+/// previous folder grants so their audio remains playable. The static asset scope
+/// remains empty. A generic runtime supports scope tests.
 fn allow_output_dir_in_asset_scope<R: tauri::Runtime>(
     app: &impl Manager<R>,
     dir: &Path,
@@ -469,19 +392,8 @@ fn allow_output_dir_in_asset_scope<R: tauri::Runtime>(
         .map_err(|e| e.to_string())
 }
 
-/// `set_output_dir`'s actual logic, parameterized on an explicit
-/// `config_path` instead of the real, global `Config::load`/`Config::save`
-/// (which always resolve to `config::config_path()`) -- so a test can
-/// exercise "changing the output dir persists it AND grants it on the live
-/// asset scope" without touching the developer's own
-/// `~/.config/simstim/config.toml`. The command wrapper
-/// below is the only real (non-test) caller, and always passes the real
-/// `config::config_path()`.
-///
-/// Persists first, then grants the scope (matching the order the review
-/// asked for), though the two are independent enough that the order
-/// wouldn't itself change correctness: one writes TOML to disk, the other
-/// mutates an in-memory `Scope`.
+/// Persist the output folder to the supplied config file, then grant live asset access.
+/// An explicit config path supports isolated tests.
 fn set_output_dir_at<R: tauri::Runtime>(
     app: &impl Manager<R>,
     config_path: &Path,
@@ -495,15 +407,8 @@ fn set_output_dir_at<R: tauri::Runtime>(
     cfg.output_dir = PathBuf::from(path);
     std::fs::create_dir_all(&cfg.output_dir).map_err(|e| e.to_string())?;
     cfg.save_to(config_path).map_err(|e| e.to_string())?;
-    // Grants the new folder read access for playback immediately (Global
-    // Constraints, security review finding): without this, switching the
-    // output dir in Settings would leave newly recorded sessions'
-    // audio_path resolved but unplayable (asset protocol 403) until the app
-    // restarted and re-ran the `.setup()` grant for whatever the config
-    // says at that later launch. This only ever ADDS the new directory to
-    // the scope -- an older, previously configured output dir stays
-    // allowed too (see `allow_output_dir_in_asset_scope`'s docs), so a
-    // session recorded there remains playable after switching away from it.
+    // Grant playback access when the output folder changes. Existing allowed folders
+    // remain readable so earlier recordings stay playable.
     allow_output_dir_in_asset_scope(app, &cfg.output_dir)
 }
 
@@ -512,13 +417,8 @@ fn set_output_dir(path: String, app: AppHandle) -> Result<(), String> {
     set_output_dir_at(&app, &config::config_path(), path)
 }
 
-/// `Err` unless `id` names a registered model with the `Live` role. Split out
-/// from `set_active_model` so the rejection logic is testable without
-/// touching the real config file (mirrors `config::validate_theme`'s split
-/// for the same reason). Whisper (stage 0.7, generalized into `ModelRole` in
-/// stage 0.8) is registered but not `Live`: it is a re-transcribe-only
-/// engine, never the live pipeline, so this rejects it even if a UI bug ever
-/// tried to offer it.
+/// Accept only registered models with the Live role. Offline Whisper models cannot be
+/// selected for live capture.
 fn validate_active_model(id: &str) -> Result<(), String> {
     match models::find(id) {
         None => Err(format!("unknown model id: {id}")),
@@ -537,14 +437,7 @@ fn set_active_model(id: String) -> Result<(), String> {
     cfg.save().map_err(|e| e.to_string())
 }
 
-/// `Err` unless `id` names a registered model with the `Retranscribe` role
-/// that is still offered (stage 0.8.x curation: `models::validate_not_
-/// retired` rejects a retired id, e.g. one of the two whisper entries the
-/// owner curated out, even though it stays in the registry). Split out from
-/// `set_retranscribe_model` the same way `validate_active_model` is split
-/// from `set_active_model` -- symmetric validation for the other half of
-/// `ModelRole` (stage 0.8: the owner picks which whisper model re-transcribes
-/// calls).
+/// Accept only registered, non-retired models with the Retranscribe role.
 fn validate_retranscribe_model(id: &str) -> Result<(), String> {
     match models::find(id) {
         None => Err(format!("unknown model id: {id}")),
@@ -555,9 +448,8 @@ fn validate_retranscribe_model(id: &str) -> Result<(), String> {
     }
 }
 
-/// Sets and persists which registered whisper model `retranscribe_session`
-/// uses (stage 0.8 Global Constraints). Rejects an unknown id or a `Live`
-/// one (Parakeet can't be used to re-transcribe) via
+/// Sets and persists which registered whisper model `retranscribe_session` uses .
+/// Rejects an unknown id or a `Live` one (Parakeet can't be used to re-transcribe) via
 /// `validate_retranscribe_model`.
 #[tauri::command]
 fn set_retranscribe_model(id: String) -> Result<(), String> {
@@ -567,16 +459,14 @@ fn set_retranscribe_model(id: String) -> Result<(), String> {
     cfg.save().map_err(|e| e.to_string())
 }
 
-/// Tauri's declarative traffic-light inset is not reliably applied to the
-/// config-created main webview on macOS. Reapply the geometry after the
-/// window exists so the native controls share the 28 px toolbar centerline.
-///
-/// CAREFUL: this is not the only positioner. tao re-applies the config's
-/// `trafficLightPosition` on redraws with AppKit's default in-container
-/// button offset, so whatever this function sets is later replaced by that
-/// steady state. The owner-measured mapping there is `center = y - 2.2`,
-/// hence y: 30 in `tauri.conf.json` for the 28 px centerline; this function
-/// must target the same centerline or the buttons visibly jump.
+/// Tauri's declarative traffic-light inset is not reliably applied to the config-created
+/// main webview on macOS. Reapply the geometry after the window exists so the native
+/// controls share the 28 px toolbar centerline. CAREFUL: this is not the only
+/// positioner. tao re-applies the config's `trafficLightPosition` on redraws with
+/// AppKit's default in-container button offset, so whatever this function sets is later
+/// replaced by that steady state. The measured mapping there is `center = y - 2.2`,
+/// hence y: 30 in `tauri.conf.json` for the 28 px centerline; this function must target
+/// the same centerline or the buttons visibly jump.
 #[cfg(target_os = "macos")]
 #[allow(deprecated, unexpected_cfgs)]
 fn position_main_traffic_lights(window: &tauri::WebviewWindow) -> tauri::Result<()> {
@@ -655,14 +545,9 @@ pub fn run() {
         .manage(enhance::EnhanceState::default())
         .manage(chat::ChatState::default())
         .setup(|app| {
-            // Security review finding (this task): the static
-            // `assetProtocol.scope` in tauri.conf.json is empty on purpose
-            // -- grant the CURRENTLY configured output dir here instead, at
-            // startup, rather than a static scope broad enough to cover any
-            // directory the user could ever pick. See
-            // `allow_output_dir_in_asset_scope`'s docs for the full
-            // rationale and `set_output_dir` for the runtime-switch case
-            // this alone doesn't cover.
+            // Grant asset access only to the configured notes folder at startup. Folder
+            // changes add their own explicit grant; the static asset scope remains
+            // empty.
             let cfg = Config::load();
             std::fs::create_dir_all(&cfg.output_dir)?;
             allow_output_dir_in_asset_scope(app, &cfg.output_dir)?;
@@ -772,12 +657,8 @@ mod tests {
     use super::*;
     use std::path::Path;
 
-    /// Important fix-review finding (extended for overlapping saves):
-    /// `AppState::finalizing_match` must reflect exactly what
-    /// `stop_recording` set and `FinalizingGuard` cleared -- the mechanism
-    /// `check_not_active` (retranscribe.rs), `read_session_at` (sessions.rs)
-    /// and `recording_start_conflict` all key their stop-to-encode-window
-    /// rejection off of.
+    /// Finalizing guards must match the paths rejected by recording, playback and
+    /// re-transcription.
     #[test]
     fn finalizing_match_reflects_what_was_marked_and_cleared() {
         let state = AppState::default();
@@ -882,9 +763,8 @@ mod tests {
 
     #[test]
     fn validate_active_model_rejects_whisper_as_not_selectable() {
-        // Global Constraints: whisper is a re-transcribe-only engine and
-        // must never become the live pipeline, even via a direct IPC call
-        // bypassing the Settings UI's own gating.
+        // whisper is a re-transcribe-only engine and must never become the live
+        // pipeline, even via a direct IPC call bypassing the Settings UI's own gating.
         let err = validate_active_model("whisper-large-v3-turbo-q8").unwrap_err();
         assert!(err.contains("whisper-large-v3-turbo-q8"));
     }
@@ -903,20 +783,17 @@ mod tests {
 
     #[test]
     fn validate_retranscribe_model_rejects_the_live_parakeet_id() {
-        // Stage-0.8 Global Constraints: a non-live model can't be set as the
-        // live engine, and symmetrically the live model can't be set as the
-        // re-transcribe engine -- Parakeet has no offline whisper-shaped
-        // weights to run a re-transcribe pass with.
+        // a non-live model can't be set as the live engine, and symmetrically the live
+        // model can't be set as the re-transcribe engine -- Parakeet has no offline
+        // whisper-shaped weights to run a re-transcribe pass with.
         let err = validate_retranscribe_model("parakeet-tdt-0.6b-v3-int8").unwrap_err();
         assert!(err.contains("parakeet-tdt-0.6b-v3-int8"));
     }
 
     #[test]
     fn validate_retranscribe_model_rejects_a_retired_id() {
-        // Stage-0.8.x curation: the owner curated the offered lineup down to
-        // turbo + large-v3; the other two whisper entries stay registered
-        // (so an already-downloaded copy can still be deleted) but must never
-        // become selectable again.
+        // Retired models remain registered for deleting existing downloads but cannot be
+        // selected again.
         let err = validate_retranscribe_model("whisper-large-v3-turbo-q5").unwrap_err();
         assert!(err.contains("no longer offered"), "{err}");
     }
@@ -956,16 +833,7 @@ mod tests {
             );
         }
 
-        /// `set_output_dir` is the review's minimum ask ("at least:
-        /// set_output_dir calls the scope-allow path"): after it runs, the
-        /// NEW directory must be allowed on the app's live asset scope, not
-        /// just persisted to config -- otherwise switching output folders
-        /// in Settings would leave newly recorded sessions unplayable
-        /// (asset protocol 403) until the app restarted. Exercises
-        /// `set_output_dir_at` (the command's actual logic) against a
-        /// tempdir config path rather than the real `set_output_dir`
-        /// command, which would otherwise clobber the developer's own
-        /// config.toml (see `set_output_dir_at`'s doc comment).
+        /// Changing the output folder must persist it and allow playback immediately.
         #[test]
         fn set_output_dir_allows_the_new_dir_on_the_live_asset_scope() {
             let app = tauri::test::mock_app();

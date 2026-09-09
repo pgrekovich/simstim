@@ -47,11 +47,9 @@ function Row({
 }
 
 /**
- * The main pane when nothing is selected. One thing on the screen: the
- * action the app exists for (2026-09-04 ruling: the old shortcut card hid
- * Record behind a menu row). The other two actions stay as quiet rows
- * underneath, doubling as the shortcut cheat sheet; the real key handling
- * lives in App's keydown listener.
+ * Empty main pane with recording, new-note and settings actions. Keyboard
+ * shortcuts are handled in App.
+ *
  */
 export function EmptyState({
   onNewNote,

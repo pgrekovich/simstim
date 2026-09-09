@@ -12,8 +12,7 @@ const CONFIG_PREAMBLE: &str = "# Simstim configuration\n\
 /// constant; this only seeds `Config::default()`.
 pub const KNOWN_MODEL_ID: &str = "parakeet-tdt-0.6b-v3-int8";
 
-/// Default `retranscribe_model` id (stage 0.8): the whisper entry the owner
-/// already downloaded (874 MB) before model selection existed.
+/// Default accurate-pass model. Keep the ID stable so existing downloads remain usable.
 pub const DEFAULT_RETRANSCRIBE_MODEL: &str = "whisper-large-v3-turbo-q8";
 
 /// Valid `theme` values: `set_theme` rejects anything else.
@@ -27,7 +26,7 @@ fn default_show_in_dock() -> bool {
     true
 }
 
-/// Default for `keep_audio` (Global Constraints: retention defaults on).
+/// Default for `keep_audio` (retention defaults on).
 fn default_keep_audio() -> bool {
     true
 }
@@ -39,33 +38,24 @@ fn default_keep_audio() -> bool {
 /// doc comment for why that matters).
 pub const VALID_AUDIO_FORMATS: &[&str] = &["aac", "flac"];
 
-/// Default for `audio_format` (owner decision, stage-0.7 format change, after
-/// the measured codec benchmark: AAC 32 kbps forced to 16 kHz is ~17 MB/hour
-/// at 3.8% WER vs lossless, against FLAC's 137 MB/hour at 0% WER -- see
-/// `aac.rs`'s module docs for the full writeup). FLAC stays available as an
-/// explicit opt-in for users who want zero transcription-quality cost from
-/// the audio codec itself.
+/// AAC is the default compact audio format. FLAC is the lossless option. See `aac.rs`
+/// for sample-rate and alignment requirements.
 fn default_audio_format() -> String {
     "aac".to_string()
 }
 
-/// Default for `retranscribe_model` (stage 0.8): see
-/// [`DEFAULT_RETRANSCRIBE_MODEL`]'s doc comment.
+/// Default for `retranscribe_model`: see [`DEFAULT_RETRANSCRIBE_MODEL`]'s doc comment.
 fn default_retranscribe_model() -> String {
     DEFAULT_RETRANSCRIBE_MODEL.to_string()
 }
 
-/// Default for `auto_retranscribe`: ON (2026-09-04 product ruling: a call
-/// that ends must become a finished note with zero clicks). It only ever
-/// acts when the accurate model is downloaded and audio was kept; see
-/// `retranscribe::maybe_auto_retranscribe`.
+/// Run the accurate pass automatically when retained audio and the selected model are
+/// available.
 fn default_auto_retranscribe() -> bool {
     true
 }
 
-/// Default for `delete_audio_after_retranscribe` (stage 0.9 Global
-/// Constraints: off). Deleting the call's audio is destructive and
-/// irreversible, so it requires an explicit opt-in.
+/// Audio deletion is irreversible and requires explicit opt-in.
 fn default_delete_audio_after_retranscribe() -> bool {
     false
 }
@@ -73,9 +63,8 @@ fn default_delete_audio_after_retranscribe() -> bool {
 /// These are the enhance provider ids `enhance::PROVIDERS` knows how to run.
 pub const VALID_ENHANCE_PROVIDERS: &[&str] = &["claude", "codex"];
 
-/// The on-device summary model was retired (2026-09-04 product ruling: a
-/// summary that can change what was decided is worse than none). A config
-/// still naming `local` is migrated to this default by `Config::normalize`.
+/// Migrate configurations naming the retired local summary provider to the default CLI
+/// provider.
 fn default_enhance_provider() -> String {
     "claude".to_string()
 }
@@ -102,55 +91,39 @@ pub struct Config {
     pub theme: String,
     /// Whether macOS shows simstim as a regular Dock application.
     pub show_in_dock: bool,
-    /// Whether the session worker keeps a stereo audio file (WAV during
-    /// capture, FLAC after stop) next to the transcript.
+    /// Retain stereo audio beside the transcript: WAV during capture, AAC or FLAC after
+    /// encoding.
     pub keep_audio: bool,
-    /// `"aac" | "flac"` (stage-0.7 format change): which format
-    /// `AudioSink::finish` encodes the working WAV to.
+    /// `"aac" | "flac"`: which format `AudioSink::finish` encodes the working WAV to.
     pub audio_format: String,
-    /// Which registry entry `retranscribe_session` uses for its offline
-    /// re-transcribe pass (stage 0.8: the owner can pick a bigger/smaller
-    /// whisper model).
+    /// Which registry entry `retranscribe_session` uses for its offline re-transcribe
+    /// pass (the user can pick a bigger/smaller whisper model).
     pub retranscribe_model: String,
-    /// Whether `stop_recording` automatically queues a re-transcribe job for
-    /// the session that just stopped (stage 0.9). Only actually fires when
-    /// `keep_audio` is also on and the session has audio -- see
-    /// `retranscribe::maybe_auto_retranscribe`'s docs.
+    /// Whether `stop_recording` automatically queues a re-transcribe job for the session
+    /// that just stopped. Only actually fires when `keep_audio` is also on and the
+    /// session has audio -- see `retranscribe::maybe_auto_retranscribe`'s docs.
     pub auto_retranscribe: bool,
-    /// Whether a SUCCESSFUL re-transcribe -- manual or automatic, Global
-    /// Constraints: this doesn't depend on how the pass was triggered --
-    /// deletes the session's resolved audio file afterward (stage 0.9).
-    /// Irreversible by design: the owner asked for a way to reclaim the disk
-    /// space audio was using once its transcript no longer needs
-    /// re-processing.
+    /// Delete retained audio only after a successful manual or automatic accurate pass.
+    /// Disabled by default; deletion prevents another pass over that audio.
     pub delete_audio_after_retranscribe: bool,
-    /// Which local or cloud provider `enhance_session` runs. The CLI providers
-    /// use the user's own subscription with no API keys and receive text only.
+    /// Claude Code or Codex provider used for summaries and questions. The helper uses
+    /// its configured subscription or API setup and receives text only.
     pub enhance_provider: String,
-    /// Per-provider model override (stage 0.11), keyed by provider id: e.g.
-    /// `{"claude": "fable"}` runs `claude --model fable`. A missing or empty
-    /// entry means the CLI's own default -- model lineups change too often
-    /// to hardcode a list here, so this is free-form and passed through.
+    /// Per-provider model override, keyed by provider id: e.g. `{"claude": "fable"}`
+    /// runs `claude --model fable`. A missing or empty entry means the CLI's own default
+    /// -- model lineups change too often to hardcode a list here, so this is free-form
+    /// and passed through.
     pub enhance_models: std::collections::HashMap<String, String>,
-    /// Whether a finished recording auto-enhances (stage 0.11): fires once
-    /// the call stops -- after the automatic re-transcribe when that's on
-    /// too -- and after any successful re-transcribe (a rewritten
-    /// transcript makes the old summary stale). Off by default, like every
-    /// other automation here.
+    /// Automatically summarize after recording or a successful accurate pass. When both
+    /// are enabled, wait for the accurate transcript. Enabled by default and shown
+    /// explicitly in onboarding.
     pub auto_enhance: bool,
-    /// Whether an enhance may replace an AUTOMATIC title ("Untitled", or
-    /// the detected "Zoom call 14:03" shape -- see
-    /// `sessions::title_is_auto`) with one the summary model proposes. A
-    /// title the user typed themselves is never touched regardless of this
-    /// setting (rule 6: the user's words are sacred). Off by default.
+    /// Allow summaries to rename automatically generated titles. User-written titles
+    /// remain unchanged. Enabled by default.
     pub enhance_rename_title: bool,
-    /// Whether the Claude Code provider may consult the user's own
-    /// configured calendar MCP connectors to identify the meeting that
-    /// overlapped the call (see `enhance::calendar_allowed_tools`). Only
-    /// meaningful for `enhance_provider == "claude"`: the local model has
-    /// no tools, and codex's non-interactive sandbox cancels MCP tool
-    /// calls. Off by default -- turning it on widens what the cloud CLI is
-    /// permitted to do, so it must be an explicit choice.
+    /// Allow Claude Code to read supported calendar connectors for meeting context.
+    /// Enabled by default when AI is configured; the setting can disable this lookup.
+    /// Codex calendar lookup is not supported.
     pub enhance_use_calendar: bool,
     /// Whether mic activity from known calling apps may surface a recording
     /// suggestion. Detection never starts capture itself.
@@ -256,8 +229,7 @@ pub fn set_enhance_provider(provider: String) -> Result<(), String> {
     cfg.save().map_err(|e| e.to_string())
 }
 
-/// Sets and persists whether a finished recording auto-enhances (stage
-/// 0.11).
+/// Persist the automatic-summary preference.
 #[tauri::command]
 pub fn set_auto_enhance(auto_enhance: bool) -> Result<(), String> {
     let mut cfg = Config::load_for_update().map_err(|e| e.to_string())?;
@@ -283,9 +255,7 @@ pub fn set_enhance_use_calendar(enhance_use_calendar: bool) -> Result<(), String
     cfg.save().map_err(|e| e.to_string())
 }
 
-/// Sets and persists the model override for one enhance provider (stage
-/// 0.11). An empty/whitespace `model` clears the override back to the CLI's
-/// own default.
+/// Persist one provider's model override. Empty input restores the provider default.
 #[tauri::command]
 pub fn set_enhance_model(provider: String, model: String) -> Result<(), String> {
     if !VALID_ENHANCE_PROVIDERS.contains(&provider.as_str()) {
@@ -301,9 +271,7 @@ pub fn set_enhance_model(provider: String, model: String) -> Result<(), String> 
     cfg.save().map_err(|e| e.to_string())
 }
 
-/// Sets and persists whether recordings keep an audio file alongside the
-/// transcript (Global Constraints). Task 5 adds the settings toggle; this
-/// command is the wiring for it.
+/// Persist whether recordings retain audio alongside the transcript.
 #[tauri::command]
 pub fn set_keep_audio(keep_audio: bool) -> Result<(), String> {
     let mut cfg = Config::load_for_update().map_err(|e| e.to_string())?;
@@ -325,10 +293,9 @@ fn validate_audio_format(format: &str) -> Result<(), String> {
     }
 }
 
-/// Sets and persists which format new recordings are encoded to (stage-0.7
-/// format change). Only affects future encodes: an already-recorded
-/// session's audio file keeps whatever format it was written in (see
-/// `audio_sink`'s module docs on continuing a session across formats).
+/// Sets and persists which format new recordings are encoded to. Only affects future
+/// encodes: an already-recorded session's audio file keeps whatever format it was
+/// written in (see `audio_sink`'s module docs on continuing a session across formats).
 #[tauri::command]
 pub fn set_audio_format(format: String) -> Result<(), String> {
     validate_audio_format(&format)?;
@@ -337,12 +304,8 @@ pub fn set_audio_format(format: String) -> Result<(), String> {
     cfg.save().map_err(|e| e.to_string())
 }
 
-/// Sets and persists whether `stop_recording` automatically queues a
-/// re-transcribe job for the session that just stopped (stage 0.9 Global
-/// Constraints). Unconditional: no validation beyond the bool itself, same
-/// as `set_keep_audio`. Whether it actually fires on any given stop still
-/// depends on `keep_audio` and the session having audio -- see
-/// `retranscribe::maybe_auto_retranscribe`.
+/// Persist automatic re-transcription after Stop. Actual execution also requires
+/// retained audio and a ready model.
 #[tauri::command]
 pub fn set_auto_retranscribe(auto_retranscribe: bool) -> Result<(), String> {
     let mut cfg = Config::load_for_update().map_err(|e| e.to_string())?;
@@ -350,10 +313,8 @@ pub fn set_auto_retranscribe(auto_retranscribe: bool) -> Result<(), String> {
     cfg.save().map_err(|e| e.to_string())
 }
 
-/// Sets and persists whether a successful re-transcribe (manual or
-/// automatic) deletes the session's audio file afterward (stage 0.9 Global
-/// Constraints). Irreversible once it fires: the Settings UI (Task 2) is
-/// responsible for stating that consequence plainly, not this command.
+/// Persist the opt-in deletion of audio after a successful accurate pass. This operation
+/// is irreversible.
 #[tauri::command]
 pub fn set_delete_audio_after_retranscribe(
     delete_audio_after_retranscribe: bool,
@@ -559,9 +520,8 @@ mod tests {
         assert_eq!(Config::load_from(&path).enhance_provider, "claude");
     }
 
-    /// Owner ruling (stage 4.2 e2e): ONE AI choice powers both summaries
-    /// and chat -- the retired `chat_provider`/`chat_model` keys in an
-    /// older config file must be ignored, not an error.
+    /// Summaries and chat share one AI configuration. Ignore legacy separate
+    /// chat-provider keys when loading older files.
     #[test]
     fn retired_chat_keys_in_an_old_config_are_ignored() {
         let dir = tempfile::tempdir().unwrap();
@@ -618,9 +578,8 @@ mod tests {
         assert!(!Config::default().auto_stop_after_call);
     }
 
-    /// 2026-09-04 product ruling: the finished note is the default, not a
-    /// reward for finding five toggles. The onboarding screen shows the
-    /// summaries choice explicitly, so cloud text stays a visible decision.
+    /// Default processing is automatic, while onboarding exposes the optional
+    /// cloud-summary choice.
     #[test]
     fn enhance_automation_defaults_on() {
         assert!(Config::default().auto_enhance);

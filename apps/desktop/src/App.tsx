@@ -99,10 +99,9 @@ function initialSidebarCollapsed(): boolean {
 }
 
 /**
- * Resizable pane widths (stage 4.2 polish, owner request): the sidebar and
- * the Ask-this-call drawer are dragged at their shared border, persisted per
- * pane, and double-click restores the design default. Bounds keep either
- * pane from being dragged into uselessness or swallowing the note.
+ * Resizable sidebar and call drawer widths are persisted independently.
+ * Clamp both to preserve usable note space; double-click restores defaults.
+ *
  */
 export interface PaneWidthSpec {
   key: string;
@@ -123,11 +122,8 @@ const TOOLBAR_ICON_BUTTON_ACTIVE = "bg-foreground/[0.1] hover:bg-foreground/[0.1
 
 export const SIDEBAR_WIDTH: PaneWidthSpec = {
   key: "simstim.sidebar-width",
-  // 280: the owner tuned this by eye from the original 224 (2026-09-04).
-  // Titles get the extra room. The default WINDOW width (tauri.conf.json)
-  // must stay >= MAIN_PANE_MIN + this, or the mount-time reclamp squeezes
-  // the sidebar back toward its minimum and the default never actually
-  // shows.
+  // The default window must fit MAIN_PANE_MIN plus the sidebar, or mount-time clamping
+  // will override the default width.
   default: 280,
   min: 180,
   max: 400,
@@ -141,11 +137,9 @@ export const ASK_CALL_WIDTH: PaneWidthSpec = {
 };
 
 /**
- * The note pane must stay usable no matter how the side panes are dragged --
- * and "usable" is set by its TOOLBAR, not its text column: three tabs, the
- * Enhance control, Record (wider while recording), the ask and overflow
- * icons and their gaps need ~640px before anything clips (owner report: the
- * tab list was getting cut under Record with both panes open).
+ * Reserve enough width for all toolbar controls, including the wider
+ * recording button. Text-column width alone does not prevent clipping.
+ *
  */
 const MAIN_PANE_MIN = 640;
 
@@ -225,15 +219,15 @@ function App() {
   const [busy, setBusy] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
-  // Ask your notes (stage 4.2): when open, the folder-wide chat owns the
-  // main pane (the selection stays put underneath and comes back on close).
+  // Ask your notes: when open, the folder-wide chat owns the main pane (the selection
+  // stays put underneath and comes back on close).
   const [askNotesOpen, setAskNotesOpen] = useState(false);
   // The user's prompts (prompts.toml): the toolbar menu lists summary styles.
   const { prompts } = usePrompts();
   // A question handed to Ask your notes from the ⌘K palette's bottom row.
   const [askNotesRequest, setAskNotesRequest] = useState<ChatAskRequest | null>(null);
   const askNotesRequestIdRef = useRef(0);
-  // Ask this call (stage 4.2): the right-hand drawer over the open note.
+  // Ask this call: the right-hand drawer over the open note.
   const [askCallOpen, setAskCallOpen] = useState(false);
   // A question handed to the drawer from the ⌘K palette's "Ask this call" row.
   const [askCallRequest, setAskCallRequest] = useState<ChatAskRequest | null>(null);
@@ -309,75 +303,30 @@ function App() {
     null,
   );
   const enhancingPath = enhancing?.path ?? null;
-  // Paths with a MANUALLY-initiated re-transcribe currently in flight
-  // (review fix, Task 2): SessionView calls `handleManualRetranscribeStart`
-  // the instant its own click handler starts the job, before awaiting
-  // `retranscribeSession` -- see SessionView's `handleRetranscribe`. The
-  // `retranscribe-progress` listener below consults this on the terminal
-  // "error" phase to tell a manual failure (already surfaced inline by that
-  // SessionView instance's own `retranscribeError`, set from the rejected
-  // promise) apart from an AUTO-triggered job's failure, which has no other
-  // UI anywhere and must be reported through the header instead. A ref, not
-  // state: only ever read inside the listener's closure, and adding/removing
-  // a path shouldn't itself trigger a re-render.
+  // Track manually initiated jobs before awaiting IPC. Their failures have inline
+  // handling; automatic failures need the header. Clear tracking even when validation
+  // rejects before emitting progress.
   const manualRetranscribePathsRef = useRef<Set<string>>(new Set());
   function handleManualRetranscribeStart(path: string) {
     manualRetranscribePathsRef.current.add(path);
   }
-  // Final-review Important finding: an auto job's terminal "error" can land
-  // in the `retranscribe-progress` listener below while `status.kind` is
-  // STILL "recording" -- e.g. session A's auto-triggered job (queued behind
-  // another one) finally reports failure right as a brand-new recording B
-  // has started. The listener already skips clobbering "recording" with that
-  // failure (correct: don't stomp on a genuinely live recording's status),
-  // but the old code just discarded the message there, permanently -- if
-  // nothing else happened to trigger another background job's error while
-  // status was NOT "recording", the owner would simply never learn about it.
-  // Stashing it here (one slot is enough: only one background job is ever
-  // running at a time, see `retranscribe.rs`'s module docs) and surfacing it
-  // the instant `status.kind` leaves "recording" (the effect below, which
-  // already tracks that same transition) closes that window instead of just
-  // narrowing it.
+  // Preserve an automatic job error that arrives during recording. Show it once the
+  // header leaves recording state so unrelated background failures are not lost.
   const suppressedAutoErrorRef = useRef<string | null>(null);
-  // Third review round: `retranscribe_session` rejects up front, before
-  // emitting anything, on several validation paths (not-active/finalizing,
-  // missing audio, retired/missing model, already-running/already-queued --
-  // see `retranscribe.rs`'s doc comments), so the terminal-event cleanup in
-  // the listener below never runs for those. Without this, a path would stay
-  // marked "manual in flight" forever after one of those rejections,
-  // permanently suppressing the header for a LATER genuine auto-job failure
-  // on the very same session -- exactly the silence this whole fix exists to
-  // remove, just deferred. SessionView calls this from its own catch block
-  // (see `onRetranscribeEnd`'s doc comment there) whenever a manual attempt
-  // ends without ever producing a terminal event. `Set.delete` on an absent
-  // path is a no-op, so this is also safe to call for a rejection that
-  // arrives AFTER a terminal event already cleared the path.
+  // Clear manual tracking when validation rejects before emitting progress; otherwise
+  // future automatic errors on this path would be suppressed.
   function handleManualRetranscribeEnd(path: string) {
     manualRetranscribePathsRef.current.delete(path);
   }
-  // Attached to WHICHEVER SessionView is currently mounted -- active or
-  // inactive (see the JSX below, both branches carry this ref). handleStop
-  // reads this to flush any pending title/notes edit through
-  // update_active_session BEFORE calling stop_recording -- see SessionView's
-  // class doc comment for why that ordering, not the instance's own unmount
-  // cleanup, is what actually has to do this flush.
-  //
-  // handleStart reads it too (Critical fix-review finding): pressing Record
-  // on a selected, still-inactive session with an unflushed, still-debouncing
-  // edit used to lose that edit outright. The instance is inactive at that
-  // point, so its pending edit still routes through save_session -- but
-  // start_recording flips AppState's active path synchronously, so if the
-  // debounce fired even slightly late, save_session would reject it (this
-  // path just became the active recording) with nothing left to retry.
-  // Flushing here, before start_recording is ever called, closes that
-  // window entirely instead of narrowing it.
+  // Flush pending title and note edits before both Start and Stop. Changing writer
+  // ownership before the debounce completes can reject the save or lose the edit.
   const activeSessionViewRef = useRef<SessionViewHandle>(null);
 
-  // Core Audio events are independent of React renders. Keep one listener
-  // for the app lifetime and let it read the latest lifecycle state through
-  // this ref, avoiding a brief unsubscribe/resubscribe gap when recording
-  // starts or the auto-stop setting changes. Written from an effect, not
-  // during render, so only committed state ever reaches the listener.
+  // Core Audio events are independent of React renders. Keep one listener for the app
+  // lifetime and let it read the latest lifecycle state through this ref, avoiding a
+  // unsubscribe/resubscribe gap when recording starts or the auto-stop setting changes.
+  // Written from an effect, not during render, so only committed state ever reaches the
+  // listener.
   useEffect(() => {
     callLifecycleRef.current = {
       activePath,
@@ -400,11 +349,10 @@ function App() {
     setAutoStopAfterCall(config.auto_stop_after_call);
   }
 
-  // index.html already applied a pre-paint guess (system preference) before
-  // React mounted; reconcile it against the persisted config's theme choice
-  // as soon as it loads. Index.html's own inline script covers the gap
-  // before this resolves, so a brief "system" guess for a "light"/"dark"
-  // override user is the only acceptable flash (per Global Constraints).
+  // index.html already applied a pre-paint guess (system preference) before React
+  // mounted; reconcile it against the persisted config's theme choice as soon as it
+  // loads. Index.html's own inline script covers the gap before this resolves, so a
+  // "system" guess for a "light"/"dark" override user is the only acceptable flash.
   useEffect(() => {
     getConfig()
       .then((config) => {
@@ -436,14 +384,9 @@ function App() {
     }
   }, [sidebarWidth, askCallWidth]);
 
-  // The note pane's MAIN_PANE_MIN invariant must hold through window
-  // resizes, restored widths and pane toggles -- not just drags (owner
-  // request: the toolbar must never crumple, however the user resizes).
-  // The drawer, the secondary pane, gives way first; then the sidebar. At
-  // the window's own minWidth (800, tauri.conf.json) the invariant is
-  // exactly satisfiable with both panes at their minimums. The setters
-  // bail out on unchanged values, so this effect (which depends on what it
-  // sets) settles instead of looping.
+  // Reclamp after window resizing, restored widths and pane toggles. Shrink the
+  // secondary drawer first, then the sidebar, preserving MAIN_PANE_MIN. Setters skip
+  // unchanged values to avoid loops.
   const drawerVisible = askCallOpen && selectedPath !== null && !askNotesOpen;
   useEffect(() => {
     function reclamp() {
@@ -468,10 +411,9 @@ function App() {
     return () => window.removeEventListener("resize", reclamp);
   }, [sidebarCollapsed, sidebarWidth, drawerVisible, askCallWidth]);
 
-  // The floating banner window (stage 1.1) owns rendering call
-  // suggestions; its clicks forward here so recording keeps its single
-  // code path. Same latest-value-through-a-ref pattern as handleStopRef:
-  // the permanent listener must see current busy/model/recording state.
+  // The floating banner window owns rendering call suggestions; its clicks forward here
+  // so recording keeps its single code path. Same latest-value-through-a-ref pattern as
+  // handleStopRef: the permanent listener must see current busy/model/recording state.
   useEffect(() => {
     bannerStartRef.current = (payload: CallDetectedPayload) => {
       if (!appConfig?.onboarding_complete || busy || !modelReady || activePath !== null) {
@@ -592,13 +534,9 @@ function App() {
     }
   }, []);
 
-  // Refresh triggers (Global Constraints / Task 5 brief): mount, window
-  // focus, recording start/stop (handled in handleStart/handleStop below),
-  // and session-error (handled in the listener below). Window `focus` alone
-  // covers "the user alt-tabbed/switched back to the app": `focus` and
-  // `visibilitychange` both fire on that same event in a single-window
-  // desktop app, so listening to both would just double the refetch --
-  // only `focus` is wired up.
+  // Refresh sessions on mount, window focus, recording transitions and session errors.
+  // Focus already covers switching back to the app; a visibility listener would
+  // duplicate the refresh.
   useEffect(() => {
     refreshSessions();
     function handleFocus() {
@@ -624,9 +562,9 @@ function App() {
     };
   }, []);
 
-  // Live (not-yet-finalized) per-channel drafts for the session currently
-  // being recorded. An empty `text` in the payload means "clear this
-  // channel's draft" (Global Constraints): the same setter handles both.
+  // Live (not-yet-finalized) per-channel drafts for the session currently being
+  // recorded. An empty `text` in the payload means "clear this channel's draft": the
+  // same setter handles both.
   useEffect(() => {
     const unlisten = listen<TranscriptInterimPayload>("transcript-interim", (event) => {
       const { channel, text } = event.payload;
@@ -666,86 +604,32 @@ function App() {
       const { path, phase, message } = event.payload;
       if (phase === "done" || phase === "error") {
         setRetranscribingJob((prev) => (prev?.path === path ? null : prev));
-        // Review finding (stage 0.9 Task 2): this listener used to return
-        // early on "error" without ever reading `message`, so an
-        // auto-triggered job's failure (a stale-job drop on revalidation, a
-        // delete-after-retranscribe failure, a model that went missing) had
-        // no UI at all -- auto jobs are fire-and-forget (see
-        // retranscribe.rs's module docs), so `retranscribe-progress` is the
-        // only signal they ever produce. Surface it through the header's
-        // existing error status rather than a separate toast.
-        //
-        // `wasManual` tells a MANUAL click's failure apart from an
-        // AUTO-triggered one (second review round: `path !== selectedPath`
-        // was the wrong proxy for this -- right after a call stops,
-        // `selectedPath` IS that just-stopped session, which is exactly the
-        // session an auto job runs for, so that guard silenced precisely the
-        // common case this fix exists for). A manual click's own SessionView
-        // instance already shows the failure inline (its own
-        // `retranscribeError` state, set from the rejected
-        // `retranscribeSession` promise -- see SessionView's
-        // `handleRetranscribe`, which calls `onRetranscribeStart` right
-        // before that awaits), so reporting it again here too would show the
-        // same failure twice on screen; every other path (any auto job,
-        // viewed or not) has no such inline display, so it's always reported
-        // here.
+        // Surface automatic job errors in the header. Manual failures already have
+        // inline handling; track how the job started rather than comparing its path with
+        // the current selection.
         const wasManual = manualRetranscribePathsRef.current.delete(path);
-        // Also skip while the header is showing a live recording: an auto
-        // job only ever starts once ITS OWN recording has already stopped
-        // (Global Constraints), so in practice this can't race a recording
-        // of the same session -- but the header status is global, not
-        // per-session, so a background job for some OTHER session finishing
-        // while a DIFFERENT recording is genuinely in progress is at least
-        // theoretically possible, and clobbering "recording" with an
-        // unrelated background failure would be worse than staying quiet.
+        // Also skip while the header is showing a live recording: an auto job only ever
+        // starts once ITS OWN recording has already stopped, so in practice this can't
+        // race a recording of the same session -- but the header status is global, not
+        // per-session, so a background job for some OTHER session finishing while a
+        // DIFFERENT recording is genuinely in progress is at least theoretically
+        // possible, and clobbering "recording" with an unrelated background failure
+        // would be worse than staying quiet.
         if (phase === "error" && !wasManual) {
           const errorMessage = message ?? "re-transcribe failed";
           setStatus((prev) => {
             if (prev.kind === "recording") {
-              // Final-review Important finding: don't just drop this on the
-              // floor -- stash it so it still reaches the owner once the
-              // header stops showing a live recording (the effect below).
+              // Keep the error until the header can display it without replacing active
+              // recording status.
               suppressedAutoErrorRef.current = errorMessage;
               return prev;
             }
             return { kind: "error", message: errorMessage };
           });
         }
-        // Minor fix-review finding: a SessionView only re-seeds its local
-        // `transcript` state from `initialData` on mount (see its class doc
-        // comment) -- the instance that actually clicked "Re-transcribe"
-        // handles its own re-read once the command's promise resolves, but
-        // a DIFFERENT SessionView instance for the same path (the user
-        // switched away mid-job and back, which unmounts/remounts it under
-        // the same `key={path}`) seeded from a stale on-disk read taken
-        // before this job finished, and has no code path of its own that
-        // would ever refresh it. Cover that case here: on "done" for the
-        // currently selected (and not actively-recording) session, refetch
-        // and bump `reloadTick` so the SessionView key changes and it
-        // remounts with the fresh transcript. Harmless if this happens to
-        // be the initiating instance too -- it just remounts with the same
-        // data it already fetched itself.
-        //
-        // Also refetch on the "transcript updated, but the audio could not
-        // be deleted" error (minor fix-review finding, stage 0.9 final
-        // review): that specific "error" phase is the one case where the
-        // transcript on disk DID change even though the phase isn't "done" --
-        // `maybe_delete_audio`'s failure surfaces through the "error" phase
-        // (see `retranscribe.rs`), but the whisper pass itself already
-        // succeeded and wrote the new transcript before the deletion step
-        // ever ran. Without this, the on-screen transcript stays stale after
-        // that error the same way it would after a "done" with no refetch.
-        //
-        // Fix-review finding (wave 2): the fetch must resolve BEFORE
-        // `reloadTick` bumps, not just before this callback returns --
-        // `setSessionData` and `setReloadTick` used to fire in the same
-        // synchronous tick as separate promise continuations, so the remount
-        // (driven by `reloadTick`) could happen before `readSession`'s
-        // promise had actually resolved, seeding the fresh SessionView
-        // instance from whatever `sessionData` still held (possibly still
-        // the earlier, stale value) rather than the just-fetched one. Doing
-        // this as one async sequence -- await the read, THEN bump the tick
-        // -- guarantees the remount always sees the fresh data.
+        // Refresh the selected inactive note on completion, including a successful
+        // transcript followed by failed audio cleanup. The view may have remounted with
+        // stale data while the job ran.
         const shouldRefetchTranscript =
           phase === "done" || (phase === "error" && isTranscriptUpdatedButAudioDeleteFailed(message));
         if (shouldRefetchTranscript && path === selectedPath && path !== activePath) {
@@ -784,15 +668,7 @@ function App() {
     if (prevStatusKindRef.current === "loading-model" && status.kind === "recording") {
       refreshSessions();
     }
-    // Final-review Important finding: surface a re-transcribe error that
-    // landed mid-recording and got stashed instead of shown (see
-    // `suppressedAutoErrorRef`'s doc comment and the `retranscribe-progress`
-    // listener above) the instant status leaves "recording" for anything
-    // else -- this is the same transition this effect already watches for
-    // the sidebar-refresh case above, just the opposite direction. Without
-    // this, that error would otherwise never reach the owner at all unless
-    // some LATER, unrelated background job happened to fail while a
-    // recording wasn't in progress.
+    // Surface any stashed background error as soon as recording status ends.
     if (prevStatusKindRef.current === "recording" && status.kind !== "recording" && suppressedAutoErrorRef.current) {
       const message = suppressedAutoErrorRef.current;
       suppressedAutoErrorRef.current = null;
@@ -936,14 +812,13 @@ function App() {
     setBusy(true);
     setInterimMe("");
     setInterimThem("");
-    // Record into the currently selected session if there is one, else start
-    // a fresh one (Global Constraints / behavior fix: Record must continue
-    // the open note, not always create a new one). Read the existing
-    // session once, right here at start, so the live view can seed its
+    // Record into the currently selected session if there is one, else start a fresh one
+    // (/ behavior fix: Record must continue the open note, not always create a new one).
+    // Read the existing session once, right here at start, so the live view can seed its
     // transcript/title/notes from what's actually on disk instead of the
-    // "Untitled"/empty placeholder -- new lines from this recording are
-    // appended after it by the `transcript-line` listener above, never
-    // re-rendering what's already seeded.
+    // "Untitled"/empty placeholder -- new lines from this recording are appended after
+    // it by the `transcript-line` listener above, never re-rendering what's already
+    // seeded.
     const continuePath = detected || forceFresh ? null : selectedPath;
     try {
       // Flush any pending, still-debouncing title/notes edit on the
@@ -1015,16 +890,9 @@ function App() {
       setStatus({ kind: "saving" });
       void refreshSessions();
 
-      // The finalization itself (transcript flush + audio encode, real
-      // wall-clock time for a long call) stays in the background: `busy` is
-      // released in the finally below, NOT held across this await, so the
-      // user can create a new note and start recording the next call while
-      // the previous one is still saving. (Holding busy here once cost the
-      // owner the start of a real call.) The backend supports this: the
-      // recording slot frees immediately on stop, and start_recording
-      // rejects only the one file still being finalized. The epoch guards
-      // the status line: "saved" from an old stop must not repaint whatever
-      // a newer start/stop has put there since.
+      // Keep finalization in the background so another call can start. The backend
+      // reserves only the saving file. Epoch checks prevent an old save completion from
+      // overwriting newer recording status.
       const epoch = ++stopEpochRef.current;
       void stopPromise
         .then((path) => {
@@ -1072,17 +940,8 @@ function App() {
     };
   }, []);
 
-  // Creates a new, empty note the user can type into right away -- no
-  // recording involved. Deliberately leaves `activePath`/recording state
-  // untouched: this is just another (inactive) session file that happens to
-  // start selected, not a substitute for `handleStart`. Recording always
-  // creates its own file via `start_recording`, independent of this one.
-  // Active-window shortcuts (stage 0.10): ⌘N new note, ⌘⇧N start recording,
-  // ⌘, settings, ⌘K global search, ⌘F transcript find. The listener is
-  // attached exactly once; it
-  // reads the CURRENT handlers through a ref refreshed on every render, so
-  // it never closes over stale state (`busy`, `sessionActive`, ...) the way
-  // a once-captured closure would.
+  // Create a note without changing recording state. Register active-window shortcuts
+  // once and read current handlers through a ref to avoid stale closures.
   const shortcutsRef = useRef({
     newNote: () => {},
     startRecording: () => {},
@@ -1193,12 +1052,8 @@ function App() {
     }
   }
 
-  // The overflow menu's Enhance / Re-enhance (owner request: while testing
-  // summary models the re-run must be one obvious click away, not a quiet
-  // provenance-line link). Same recipe as SessionView's handleEnhance:
-  // flush pending edits FIRST so the model reads what's on screen, then let
-  // the enhance-progress event stream drive every visible consequence (the
-  // chip, the sidebar spinner, the toast on failure, the refetch on done).
+  // Flush pending edits before generating a summary. Enhance-progress events drive
+  // status, errors and the final refetch.
   async function handleEnhanceSelected(style?: string) {
     if (selectedPath === null || selectedPath === activePath || enhancingPath !== null) return;
     try {
@@ -1211,12 +1066,11 @@ function App() {
     }
   }
 
-  // Chat citation navigation (stage 4.2): opens the cited note and centers
-  // its transcript on the cited second. `contextPath` is the note a bare
-  // `↩ hh:mm:ss` chip refers to (the drawer's own note); the folder-wide
-  // surface never produces one. A cited file that isn't a known session
-  // (the folder can be an Obsidian vault with other Markdown) opens in the
-  // system editor instead.
+  // Chat citation navigation: opens the cited note and centers its transcript on the
+  // cited second. `contextPath` is the note a bare `↩ hh:mm:ss` chip refers to (the
+  // drawer's own note); the folder-wide surface never produces one. A cited file that
+  // isn't a known session (the folder can be an Obsidian vault with other Markdown)
+  // opens in the system editor instead.
   function handleOpenCitation(source: ChatSource, contextPath: string | null) {
     if (source.file === null) {
       if (contextPath !== null && source.timestamp) {
@@ -1301,10 +1155,7 @@ function App() {
   // hides the topbar entirely. A lone Record button floating over the
   // shortcut menu reads as clutter, so its branch renders a bare drag strip.
   const showTopbar = sessionActive || selectedPath !== null || askNotesOpen;
-  // Sidebar rows with work in flight, path -> the lowercase status word
-  // shown under the title (design language: quiet mono status). One word
-  // for every stage of the pipeline: the person doesn't care whether the
-  // note is being transcribed or summarized, only that it isn't done yet.
+  // Use one processing label for sidebar rows with work in flight.
   const busyPaths: Record<string, string> = {};
   if (enhancingPath !== null) busyPaths[enhancingPath] = "finishing";
   if (retranscribingJob) busyPaths[retranscribingJob.path] = "finishing";
@@ -1349,8 +1200,8 @@ function App() {
       {!sidebarCollapsed && <Sidebar
         width={sidebarWidth}
         sessions={sessions}
-        // One selection at a time: while the conversation owns the pane,
-        // no note row may look chosen (owner screenshot 2026-09-07).
+        // One selection at a time: while the conversation owns the pane, no note row may
+        // look chosen.
         selectedPath={askNotesOpen ? null : selectedPath}
         activePath={activePath}
         busyPaths={busyPaths}
@@ -1466,8 +1317,8 @@ function App() {
             disabled={busy || (!sessionActive && !modelReady)}
             startedAt={recordingStartedAt}
             onClick={sessionActive ? handleStop : () => void handleStart()}
-            // Record continues the OPEN note (Global Constraints); nothing
-            // on the button itself says so, so the tooltip does.
+            // Record continues the OPEN note; nothing on the button itself says so, so
+            // the tooltip does.
             title={
               sessionActive
                 ? "Stop recording"
@@ -1477,12 +1328,11 @@ function App() {
             }
           />}
 
-          {/* Ask this call (stage 4.2, design 8c): the drawer's visible
-              entry point, right of Record like the mockup; ⌘J is the
-              shortcut, not the only way in. Same 28px height as Record and
-              the rest of the bar; "open" is the segmented control's ink
-              tint, not a filled block (owner 2026-09-07: the black square
-              looked bigger than everything else in the bar). */}
+          {/*
+ * Visible entry point for Ask this call; its active state matches the
+ * toolbar controls.
+ *
+ */}
           {showTopbar && selectedPath !== null && !askNotesOpen && (
             <Button
               variant="ghost"
@@ -1730,9 +1580,11 @@ function App() {
         )}
       </div>
 
-      {/* Ask this call (stage 4.2): the drawer converses with the OPEN note,
-          recording or not; chat is CLI-only, so a mid-call ask never touches
-          the live pipeline. Hidden while Ask your notes owns the main pane. */}
+      {/*
+ * The drawer uses the open note, including live transcript snapshots. Hide
+ * it while the folder-wide chat occupies the main pane.
+ *
+ */}
       {drawerVisible && selectedPath !== null && (
         <>
           <ResizeHandle

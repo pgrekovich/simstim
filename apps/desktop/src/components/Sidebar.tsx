@@ -30,17 +30,15 @@ interface SidebarProps {
   /** Hides the note list while preserving the selected note and recording. */
   onCollapse?: () => void;
   /**
-   * Opens the global search palette: the one field that searches, asks the
-   * open call and asks every note (2026-09-04 ruling).
-   */
+ * Open the shared search-and-ask palette.
+ *
+ */
   onOpenSearch?: () => void;
   /**
-   * Opens the Ask your notes conversation. The pinned row above the list
-   * came back on 2026-09-07: the palette starts a conversation well, but
-   * once the user opened a note there was no visible way back to it
-   * (owner: "I asked, went somewhere, wanted to return: how?"). The
-   * conversation is a place, so it has a row, like a note.
-   */
+ * Open the folder-wide conversation, including returning to it after viewing
+ * a note.
+ *
+ */
   onOpenAsk?: () => void;
   /** Whether that conversation currently owns the main pane (the row is selected). */
   askActive?: boolean;
@@ -160,9 +158,11 @@ export function Sidebar({
         </Button>
       </div>
 
-      {/* Pinned above the list, never scrolling away with a long history
-          (owner ruling 2026-09-04). A row in the Notes idiom: the same
-          selection tint as a note when the conversation is open. */}
+      {/*
+ * Keep the conversation entry above the scrolling list and show its
+ * selection state.
+ *
+ */}
       {onOpenAsk && (
         <div className="shrink-0 px-3 pt-1">
           <button
@@ -203,10 +203,8 @@ export function Sidebar({
                 const busyWord = recording ? undefined : busyPaths?.[session.path];
                 const duration = formatDuration(session.duration_secs);
                 return (
-                  // The row answers a right click (macOS reflex) with the
-                  // same actions the toolbar overflow menu offers for the
-                  // OPEN note; there is no hover trash icon (owner ruling
-                  // 2026-09-07: the menu is enough, and Notes has none).
+                  // Offer the note actions in a context menu as well as the open-note
+                  // toolbar.
                   <ContextMenu key={session.path}>
                     <ContextMenuTrigger asChild>
                   <div

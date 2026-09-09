@@ -1,7 +1,7 @@
 /**
  * People on a call, as the note's `people:` frontmatter carries them: the
  * calendar connector often hands back e-mail addresses rather than names.
- * `formatPerson` turns "m.suwald@demoboost.com" into "M. Suwald" and
+ * `formatPerson` turns "m.rivera@example.com" into "M. Rivera" and
  * "anna.berg@x.io" into "Anna Berg"; a real name passes through untouched.
  */
 export function formatPerson(raw: string): string {

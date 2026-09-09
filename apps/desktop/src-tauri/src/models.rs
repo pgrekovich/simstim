@@ -31,12 +31,7 @@ pub enum ModelLayout {
     },
 }
 
-/// What work a model is installed for. Stage 0.8 generalized stage
-/// 0.7's `selectable: bool` (`true` meant `Live`, `false` meant
-/// `Retranscribe`) now that there's more than one non-live entry -- the
-/// Settings UI groups models by this field rather than testing a bare bool,
-/// and the underlying data has exactly one source of truth instead of a
-/// second parallel flag that could drift out of sync with it.
+/// The work a model supports. Settings groups models by this role.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModelRole {
     /// Can become `Config::active_model` and drive live recording. Parakeet
@@ -72,12 +67,7 @@ pub struct ModelSpec {
     /// metadata so most people can ignore implementation details without
     /// hiding them from people who care.
     pub technical_name: Option<&'static str>,
-    /// Short descriptive subtitle shown under `name` in the Settings model
-    /// manager (stage 0.8.x curation), `None` when there's nothing worth
-    /// saying beyond the name itself. Retired rows don't render a tagline at
-    /// all, see `SettingsDialog`.
-    /// Deliberately plain, no quantization jargon: written for Pavel, not for
-    /// someone comparing GGUF variants.
+    /// Optional user-facing model subtitle. Retired entries do not display a tagline.
     pub tagline: Option<&'static str>,
     pub size_mb: u64,
     pub layout: ModelLayout,
@@ -86,14 +76,8 @@ pub struct ModelSpec {
     /// ASR backends. Independent of `layout`; either variant can have extras.
     pub extra_files: &'static [(&'static str, &'static str)],
     pub role: ModelRole,
-    /// Whether this entry is still offered for download/selection (stage
-    /// 0.8.x curation, owner's ruling: "для лайва parakeet оставляем, а для
-    /// транскрипта turbo + large v3 fp16 - и хватит"). A `true` entry stays
-    /// in the registry rather than being deleted outright -- `is_downloaded`/
-    /// `delete_model` still need to resolve it so an already-downloaded file
-    /// can be found and removed -- but `validate_not_retired` blocks it from
-    /// ever being downloaded or selected again, and `list_models` only
-    /// surfaces it while its files are actually still on disk.
+    /// Retired entries cannot be selected or downloaded. Keep their metadata so existing
+    /// files can be listed and deleted.
     pub retired: bool,
 }
 
@@ -103,10 +87,7 @@ pub struct ModelSpec {
 pub static REGISTRY: &[ModelSpec] = &[
     ModelSpec {
         id: "parakeet-tdt-0.6b-v3-int8",
-        // "Live transcription", not "Transcription model" (stage 4.1
-        // polish): the name reads correctly everywhere it appears -- the
-        // onboarding download step, the Transcription page, Storage --
-        // without repeating the page's own heading.
+        // Use a role-based label wherever the live model appears.
         name: "Live transcription",
         technical_name: Some("Parakeet TDT 0.6B v3 (int8)"),
         tagline: Some("required for recording"),
@@ -144,13 +125,8 @@ pub static REGISTRY: &[ModelSpec] = &[
         retired: false,
     },
     ModelSpec {
-        // RETIRED (stage 0.8.x curation, owner's ruling): quantization
-        // differences within the turbo family are noise, and the owner
-        // already has the q8 file below on disk, so this smaller/faster q5
-        // variant isn't worth offering alongside it. Kept in the registry
-        // (not deleted) purely so a copy already on disk stays visible in
-        // `list_models` for deletion -- `validate_not_retired` blocks it from
-        // ever being downloaded or selected again.
+        // Retained only to locate and delete existing downloads. Not offered for new
+        // downloads or selection.
         id: "whisper-large-v3-turbo-q5",
         name: "Whisper turbo (older version)",
         technical_name: None,
@@ -165,13 +141,10 @@ pub static REGISTRY: &[ModelSpec] = &[
         retired: true,
     },
     ModelSpec {
-        // THE curated turbo entry (owner's ruling, stage 0.8.x): kept as the
-        // id/url/file_name the owner already has 874 MB downloaded under
-        // (stage-0.8 Global Constraints) -- must not change, or the owner
-        // would be asked to re-download it.
+        // Keep this model ID and filename stable so existing downloads are reused.
         id: "whisper-large-v3-turbo-q8",
-        // Meta-name first (stage 4.1): the row leads with what the choice
-        // means to the user; the engine name renders small below it.
+        // Meta-name first: the row leads with what the choice means to the user; the
+        // engine name renders small below it.
         name: "Balanced",
         technical_name: Some("Whisper large-v3-turbo (q8)"),
         tagline: Some("about 12x realtime, slightly weaker on non-English"),
@@ -181,17 +154,13 @@ pub static REGISTRY: &[ModelSpec] = &[
             file_name: "ggml-large-v3-turbo-q8_0.bin",
         },
         extra_files: &[],
-        // Re-transcribe-only (Global Constraints): never the live pipeline.
+        // Re-transcribe-only: never the live pipeline.
         role: ModelRole::Retranscribe,
         retired: false,
     },
     ModelSpec {
-        // RETIRED (stage 0.8.x curation, owner's ruling): superseded by the
-        // full-precision large-v3 entry below, which the owner kept instead
-        // as the one non-turbo option. Kept in the registry (not deleted)
-        // purely so a copy already on disk stays visible in `list_models` for
-        // deletion -- `validate_not_retired` blocks it from ever being
-        // downloaded or selected again.
+        // Retained only to locate and delete existing downloads. Not offered for new
+        // downloads or selection.
         id: "whisper-large-v3-q5",
         name: "Whisper large-v3 (older version)",
         technical_name: None,
@@ -206,11 +175,9 @@ pub static REGISTRY: &[ModelSpec] = &[
         retired: true,
     },
     ModelSpec {
-        // THE curated large-v3 entry (owner's ruling, stage 0.8.x): the one
-        // non-turbo option kept -- best quality, slower, usually the
-        // strongest of the two on non-English audio.
+        // Full-precision large-v3 is the slower accurate-pass option.
         id: "whisper-large-v3",
-        // Meta-name first (stage 4.1), same split as the row above.
+        // Meta-name first, same split as the row above.
         name: "Best quality",
         technical_name: Some("Whisper large-v3"),
         tagline: Some("strongest on non-English speech, slower"),
@@ -224,10 +191,8 @@ pub static REGISTRY: &[ModelSpec] = &[
         retired: false,
     },
     ModelSpec {
-        // RETIRED (2026-09-04 product ruling): the on-device summarizer was
-        // measurably weaker than the cloud CLIs and could change what a call
-        // decided. Kept in the registry only so an already-downloaded copy
-        // stays visible in Storage for deletion; never offered again.
+        // Retired summary model: retain metadata only so existing downloads can be
+        // deleted.
         id: "qwen3.5-4b-q4-k-m",
         name: "Local summary model",
         technical_name: Some("Qwen3.5 4B (Q4_K_M)"),
@@ -313,12 +278,11 @@ fn dir_size(dir: &Path) -> u64 {
         .sum()
 }
 
-/// Real on-disk size of `spec`'s files under `models_dir`, in bytes, or
-/// `None` if it isn't fully downloaded (stage 0.8: `list_models`'
-/// `size_on_disk_bytes`, so the UI can show actual usage rather than the
-/// advertised `size_mb`). For `Directory` layouts this sums every file in the
-/// model directory recursively, plus any `extra_files`; for `File` layouts,
-/// just the one file's size plus `extra_files`.
+/// Real on-disk size of `spec`'s files under `models_dir`, in bytes, or `None` if it
+/// isn't fully downloaded (`list_models`' `size_on_disk_bytes`, so the UI can show
+/// actual usage rather than the advertised `size_mb`). For `Directory` layouts this sums
+/// every file in the model directory recursively, plus any `extra_files`; for `File`
+/// layouts, just the one file's size plus `extra_files`.
 pub fn size_on_disk(spec: &ModelSpec, models_dir: &Path) -> Option<u64> {
     if !is_downloaded(spec, models_dir) {
         return None;
@@ -354,20 +318,15 @@ pub struct ModelInfo {
     pub size_mb: u64,
     pub downloaded: bool,
     pub active: bool,
-    /// `"live" | "retranscribe" | "summary"`: the Settings UI's model
-    /// manager groups rows by this field (Recording vs Re-transcribe)
-    /// instead of testing a bare bool. Replaces the stage-0.7 `selectable`
-    /// field outright now that the stage-0.8 model manager UI (this field's
-    /// only remaining consumer) reads `role` directly.
+    /// Model role used to group settings rows: live, retranscribe or legacy summary.
     pub role: String,
-    /// Real bytes on disk for this model's downloaded files (`None`/`null`
-    /// when not downloaded), stage 0.8: lets the UI show actual disk usage
-    /// rather than the advertised `size_mb`, which can differ from what the
-    /// real downloaded files occupy.
+    /// Real bytes on disk for this model's downloaded files (`None`/`null` when not
+    /// downloaded), lets the UI show actual disk usage rather than the advertised
+    /// `size_mb`, which can differ from what the real downloaded files occupy.
     pub size_on_disk_bytes: Option<u64>,
-    /// Mirrors `ModelSpec::retired` (stage 0.8.x curation): the Settings UI
-    /// renders a retired row as size + delete only, no radio/Download, since
-    /// it can never be downloaded or selected again.
+    /// Mirrors `ModelSpec::retired` : the Settings UI renders a retired row as size +
+    /// delete only, no radio/Download, since it can never be downloaded or selected
+    /// again.
     pub retired: bool,
 }
 
@@ -410,13 +369,11 @@ fn emit_progress(
     );
 }
 
-/// `Err` with a user-facing message unless `spec` is still offered
-/// (`retired == false`). Stage-0.8.x curation: shared by `download_model`
-/// below, `set_retranscribe_model` (lib.rs), and `retranscribe_session`
-/// (retranscribe.rs) so a retired model can never be downloaded or selected
-/// again, even though it stays in the registry -- and stays visible via
-/// `list_models` while its files are still on disk -- purely so it can still
-/// be deleted.
+/// `Err` with a user-facing message unless `spec` is still offered (`retired == false`).
+/// shared by `download_model` below, `set_retranscribe_model` (lib.rs), and
+/// `retranscribe_session` (retranscribe.rs) so a retired model can never be downloaded
+/// or selected again, even though it stays in the registry -- and stays visible via
+/// `list_models` while its files are still on disk -- purely so it can still be deleted.
 pub fn validate_not_retired(spec: &ModelSpec) -> Result<(), String> {
     if spec.retired {
         Err(format!("{} is no longer offered; pick a model in Settings", spec.name))
@@ -425,14 +382,8 @@ pub fn validate_not_retired(spec: &ModelSpec) -> Result<(), String> {
     }
 }
 
-/// `list_models`'s actual logic, parameterized over `models_dir` and `cfg`
-/// instead of reading the real global state directly, so it's testable
-/// against tempdir fixtures (mirrors `delete_model_at`'s / `set_output_dir_
-/// at`'s own splits for the same reason). Stage 0.8.x curation: a `retired`
-/// entry is included only when its files are actually on disk -- the owner
-/// needs to still see (and delete) an already-downloaded retired model to
-/// reclaim the space, but a never-downloaded retired entry must not
-/// resurface as if it were still offered.
+/// List model metadata against the supplied directory and configuration. Include retired
+/// entries only while their downloaded files remain on disk, for cleanup.
 fn list_models_at(models_dir: &Path, cfg: &Config) -> Vec<ModelInfo> {
     REGISTRY
         .iter()
@@ -493,14 +444,13 @@ pub async fn download_model(
     result
 }
 
-/// Removes `spec`'s downloaded files from `models_dir` (stage 0.8, for
-/// reclaiming disk): the one file for a `File` layout, or the model directory
-/// for a `Directory` layout. A no-op (not an error) if the files
-/// are already gone, so a stale UI row or a double-click can't turn into a
-/// spurious failure. Split from `validate_delete`'s rejection checks so the
-/// filesystem removal itself is testable against tempdir fixtures directly
-/// (`test_spec`/`test_file_spec` below), independent of which real registry
-/// id/role it's reached through.
+/// Removes `spec`'s downloaded files from `models_dir` (for reclaiming disk): the one
+/// file for a `File` layout, or the model directory for a `Directory` layout. A no-op
+/// (not an error) if the files are already gone, so a stale UI row or a double-click
+/// can't turn into a spurious failure. Split from `validate_delete`'s rejection checks
+/// so the filesystem removal itself is testable against tempdir fixtures directly
+/// (`test_spec`/`test_file_spec` below), independent of which real registry id/role it's
+/// reached through.
 fn remove_model_files(spec: &ModelSpec, models_dir: &Path) -> Result<(), String> {
     match &spec.layout {
         ModelLayout::File { file_name, .. } => {
@@ -519,19 +469,9 @@ fn remove_model_files(spec: &ModelSpec, models_dir: &Path) -> Result<(), String>
     Ok(())
 }
 
-/// `Err` with a user-facing message (no internal ids/command names, per the
-/// Global Constraints) unless `id` is deletable right now: it must be a
-/// registered `Retranscribe`-role model (`Live` models -- Parakeet -- are
-/// needed to record and can never be deleted), with no download of it in
-/// flight and no re-transcribe job currently running OR QUEUED (stage 0.9
-/// Important fix-review finding: a job merely waiting its turn counts too,
-/// not just one actively running -- global, not per-id, see
-/// `RetranscribeState`'s docs). Returns the resolved spec on success so
-/// `delete_model_at` doesn't have to look it up twice. Parameterized over
-/// `downloading`/`retranscribing` instead of reading real `State` guards
-/// directly, so it's testable without a live Tauri app -- mirrors `lib.rs`'s
-/// `validate_active_model`/`validate_retranscribe_model` splits for the same
-/// reason.
+/// Reject model deletion during downloads or running/queued transcription. The live
+/// model cannot be deleted because recording requires it. Retired downloads remain
+/// removable.
 fn validate_delete(
     id: &str,
     downloading: bool,
@@ -568,27 +508,23 @@ fn remove_tmp_download_file(id: &str, models_dir: &Path) -> Result<(), String> {
     remove_tmp_download_path(&tmp_path)
 }
 
-/// `delete_model`'s actual logic (stage 0.8, for reclaiming disk):
-/// `validate_delete`'s three rejections, then `remove_model_files`, then
-/// `remove_tmp_download_file` for this id's own stale tmp file (left behind
-/// by a download interrupted before this delete, and otherwise invisible
-/// and unreclaimable since it's excluded from `size_on_disk`/`list_models`
-/// entirely). Deleting the currently *selected* re-transcribe model is
-/// deliberately allowed -- `retranscribe_session`'s existing "not
-/// downloaded" rejection already covers the consequence, and the UI is
-/// expected to show that row as not-downloaded afterwards.
-///
-/// Parameterized over `models_dir` and the two "is something happening"
-/// booleans instead of reading real `State` guards directly, so it's
-/// directly unit-testable with tempdir fixtures -- mirrors `lib.rs`'s
-/// `set_output_dir_at` and `retranscribe::RetranscribeQueue`'s own splits
-/// for the same reason. `downloading` mirrors `DownloadState`'s in-flight
-/// check for this specific id; `retranscribing` mirrors `RetranscribeState::
-/// is_running() || RetranscribeState::has_queued_jobs()` (still global, not
-/// per-id: ANY job, running or merely queued, blocks every delete -- stage
-/// 0.9 Important fix-review finding, see `has_queued_jobs`'s own doc
-/// comment for why a queued job needs the same guard a running one already
-/// had). The command wrapper below is the only real (non-test) caller.
+/// `delete_model`'s actual logic (for reclaiming disk): `validate_delete`'s three
+/// rejections, then `remove_model_files`, then `remove_tmp_download_file` for this id's
+/// own stale tmp file (left behind by a download interrupted before this delete, and
+/// otherwise invisible and unreclaimable since it's excluded from
+/// `size_on_disk`/`list_models` entirely). Deleting the currently *selected*
+/// re-transcribe model is deliberately allowed -- `retranscribe_session`'s existing "not
+/// downloaded" rejection already covers the consequence, and the UI is expected to show
+/// that row as not-downloaded afterwards. Parameterized over `models_dir` and the two
+/// "is something happening" booleans instead of reading real `State` guards directly, so
+/// it's directly unit-testable with tempdir fixtures -- mirrors `lib.rs`'s
+/// `set_output_dir_at` and `retranscribe::RetranscribeQueue`'s own splits for the same
+/// reason. `downloading` mirrors `DownloadState`'s in-flight check for this specific id;
+/// `retranscribing` mirrors `RetranscribeState:: is_running ||
+/// RetranscribeState::has_queued_jobs` (still global, not per-id: ANY job, running or
+/// merely queued, blocks every delete -- see `has_queued_jobs`'s own doc comment for why
+/// a queued job needs the same guard a running one already had). The command wrapper
+/// below is the only real (non-test) caller.
 fn delete_model_at(
     id: &str,
     models_dir: &Path,
@@ -607,9 +543,7 @@ pub fn delete_model(
     jobs: State<'_, RetranscribeState>,
 ) -> Result<(), String> {
     let downloading = downloads.0.lock().unwrap().contains(&id);
-    // Important fix-review finding, stage 0.9: a job merely QUEUED (not yet
-    // running) blocks a delete too, the same as one actively running --
-    // see `RetranscribeState::has_queued_jobs`'s doc comment.
+    // Queued jobs also need their model files; block deletion before they start.
     let retranscribing = jobs.is_running() || jobs.has_queued_jobs();
     delete_model_at(
         &id,
@@ -830,22 +764,14 @@ mod tests {
 
     #[test]
     fn registry_has_exactly_six_entries() {
-        // Stage 0.5 shipped Parakeet alone; stage 0.7 added one whisper
-        // re-transcribe model; stage 0.8 added three more whisper entries
-        // (four total). Stage 0.8.x curation retires two of those four
-        // rather than deleting them outright (an already-downloaded retired
-        // model must stay resolvable so it can be found and deleted), so the
-        // Stage 3.1 adds one local summary model, making six total. See
-        // `registry_has_exactly_four_non_retired_entries` for the curated,
-        // user-facing count.
+        // Keep retired entries resolvable so existing downloads can be removed.
         assert_eq!(REGISTRY.len(), 6);
     }
 
     #[test]
     fn registry_has_exactly_three_non_retired_entries() {
-        // Parakeet (live) plus exactly two whisper options (turbo, large-v3).
-        // The on-device summary model joined the retired set on 2026-09-04;
-        // retired entries remain resolvable for deletion.
+        // Offer Parakeet and two Whisper options. Retired entries are available only for
+        // storage cleanup.
         let non_retired = REGISTRY.iter().filter(|spec| !spec.retired).count();
         assert_eq!(non_retired, 3);
     }
@@ -1010,9 +936,7 @@ mod tests {
 
     #[test]
     fn whisper_turbo_q8_keeps_its_stage_0_7_id_and_file_name() {
-        // Load-bearing (Global Constraints): the owner already downloaded
-        // this 874 MB file under this exact id/file_name; changing either
-        // would ask them to re-download it.
+        // Preserve the download ID and filename to reuse existing model files.
         let spec = find("whisper-large-v3-turbo-q8").unwrap();
         assert_eq!(spec.size_mb, 874);
         match &spec.layout {
@@ -1075,8 +999,8 @@ mod tests {
 
     #[test]
     fn whisper_registry_entry_has_the_retranscribe_role() {
-        // Global Constraints: whisper is a re-transcribe-only engine, never
-        // offered as the live ASR pipeline.
+        // whisper is a re-transcribe-only engine, never offered as the live ASR
+        // pipeline.
         let whisper = find("whisper-large-v3-turbo-q8").unwrap();
         assert_eq!(whisper.role, ModelRole::Retranscribe);
     }
@@ -1270,7 +1194,7 @@ mod tests {
 
         #[test]
         fn validate_delete_refuses_the_live_model() {
-            // Global Constraints: deleting Parakeet would break recording.
+            // deleting Parakeet would break recording.
             let err =
                 validate_delete("parakeet-tdt-0.6b-v3-int8", false, false).unwrap_err();
             assert!(err.contains("can't be deleted"), "{err}");

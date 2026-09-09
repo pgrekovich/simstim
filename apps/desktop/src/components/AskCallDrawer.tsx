@@ -33,10 +33,9 @@ export function recordingClock(startedAt: number, now = Date.now()): string {
 }
 
 /**
- * Ask this call (stage 4.2, design 8c): the 300px right drawer conversing
- * with the open note -- past calls and the one being recorded right now
- * alike (the backend snapshots the note's on-disk transcript per ask; chat
- * is CLI-only, so a mid-call ask never touches the live pipeline).
+ * Chat drawer for the open note. The backend snapshots its transcript per
+ * request, independently of live transcription.
+ *
  */
 export function AskCallDrawer({
   width = 300,

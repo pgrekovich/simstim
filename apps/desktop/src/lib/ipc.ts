@@ -1,10 +1,7 @@
 /**
- * Single source of truth for the Tauri IPC surface: TS types mirroring the
- * Rust shapes exactly (see docs/plans/2026-08-14-stage-0.5.md "Global
- * Constraints") plus typed invoke wrappers. Both the main screen (Task 4)
- * and the settings dialog (Task 5) import from here instead of calling
- * `invoke` directly, so the contract only needs to be kept in sync in one
- * place.
+ * Typed Tauri IPC wrappers. Keep TypeScript types aligned with Rust
+ * responses and route UI calls through this module.
+ *
  */
 import { invoke } from "@tauri-apps/api/core";
 
@@ -19,42 +16,37 @@ export interface AppConfig {
   /** Whether simstim appears in the macOS Dock. Defaults to `true`. */
   show_in_dock: boolean;
   /**
-   * Whether recordings keep a stereo audio file (wav during capture,
-   * encoded to `audio_format` after stop) next to the transcript. Defaults
-   * to `true`. Toggled from the Settings dialog's "Keep call audio"
-   * checkbox (Task 5).
-   */
+ * Retain stereo audio next to the note: WAV during capture, then the
+ * configured format. Enabled by default.
+ *
+ */
   keep_audio: boolean;
   /**
-   * `"aac" | "flac"` (stage-0.7 format change): which format new recordings
-   * are encoded to. Defaults to `"aac"` (owner decision after a measured
-   * codec benchmark: ~17 MB/hour at 3.8% WER vs lossless, against FLAC's
-   * ~137 MB/hour at 0% added WER in the measured corpus). File-only setting.
-   */
+ * Audio encoding format: aac by default, or lossless flac. Advanced
+ * file-only setting.
+ *
+ */
   audio_format: string;
   /**
-   * Registry id (stage 0.8) of whichever whisper model
-   * `retranscribe_session` uses for its offline re-transcribe pass. Defaults
-   * to `"whisper-large-v3-turbo-q8"` (the model the owner already
-   * downloaded before model selection existed). Set from the Settings
-   * dialog's model manager via `setRetranscribeModel`.
-   */
+ * Registry ID of the selected offline Whisper model. Defaults to
+ * whisper-large-v3-turbo-q8.
+ *
+ */
   retranscribe_model: string;
   /**
-   * Whether `stop_recording` automatically queues a re-transcribe job for
-   * the session that just stopped (stage 0.9). Only actually fires when
-   * `keep_audio` is also on and the session has audio. Defaults to `true`.
-   * Advanced override in config.toml.
-   */
+ * Whether `stop_recording` automatically queues a re-transcribe job for the
+ * session that just stopped. Only actually fires when `keep_audio` is also
+ * on and the session has audio. Defaults to `true`. Advanced override in
+ * config.toml.
+ *
+ */
   auto_retranscribe: boolean;
   /**
-   * Whether a SUCCESSFUL re-transcribe -- manual or automatic, this doesn't
-   * depend on how it was triggered -- deletes the session's audio file
-   * afterward (stage 0.9). Irreversible: once the audio is gone, the call
-   * can never be re-transcribed again. Defaults to `false`. Toggled from
-   * the Settings dialog's Models section (Re-transcribe group) via
-   * `setDeleteAudioAfterRetranscribe`.
-   */
+ * Opt-in audio deletion after successful transcription. Disabled by default
+ * and configured in config.toml. Without the audio, another pass is
+ * impossible.
+ *
+ */
   delete_audio_after_retranscribe: boolean;
   /**
    * Which AI CLI `enhance_session` runs: `"claude" | "codex"` (the user's
@@ -67,11 +59,12 @@ export interface AppConfig {
    */
   enhance_models: Record<string, string>;
   /**
-   * Whether a finished recording auto-enhances (stage 0.11): fires after
-   * the call stops (after the auto re-transcribe when that's on) and after
-   * any successful re-transcribe. Defaults to `true`; the onboarding screen
-   * shows it as one visible switch.
-   */
+ * Whether a finished recording auto-enhances: fires after the call stops
+ * (after the auto re-transcribe when that's on) and after any successful
+ * re-transcribe. Defaults to `true`; the onboarding screen shows it as one
+ * visible switch.
+ *
+ */
   auto_enhance: boolean;
   /**
    * Whether an enhance may replace an AUTOMATIC title ("Untitled", or the
@@ -177,15 +170,15 @@ export interface SessionData {
   /** Raw `## Transcript` section text: one `[hh:mm:ss] Who: text` line per entry. */
   transcript: string;
   /**
-   * The session's audio file (its `.flac`, or a `.wav` fallback if the
-   * flac-encode step failed), resolved by the same helper the re-transcribe
-   * command uses (`retranscribe::resolve_audio_path`). `null` when no audio
-   * was saved for this session (audio retention was off, or the session
-   * predates stage-0.7). Fed to `convertFileSrc` for the `<audio>` player
-   * (Task 4).
-   */
+ * AAC, FLAC or recoverable WAV path resolved by the backend, or null when
+ * audio is absent. Passed through convertFileSrc for playback.
+ *
+ */
   audio_path: string | null;
-  /** The `## Summary` section body (stage 0.11 enhance), `""` without one. */
+  /**
+ * The `## Summary` section body, `""` without one.
+ *
+ */
   summary: string;
   /** What generated `summary` ("claude" / "codex"), `null` without one. */
   summary_model: string | null;
@@ -218,36 +211,31 @@ export interface ModelInfo {
   /** Exact upstream name, rendered as quiet expert-facing metadata. */
   technical_name: string | null;
   /**
-   * Short descriptive subtitle shown under `name` (stage 0.8.x curation),
-   * `null` when there's nothing worth saying beyond the name itself.
-   * Mirrors `ModelSpec::tagline`.
-   */
+ * Short descriptive subtitle shown under `name` , `null` when there's
+ * nothing worth saying beyond the name itself. Mirrors `ModelSpec::tagline`.
+ *
+ */
   tagline: string | null;
   size_mb: number;
   downloaded: boolean;
   active: boolean;
   /**
-   * `"live" | "retranscribe" | "summary"`: the Settings dialog's model
-   * manager groups rows by this field (Recording vs Re-transcribe) rather
-   * than testing a bare bool. Replaces the stage-0.7 `selectable` field
-   * outright now that the model manager UI (this field's only remaining
-   * consumer) reads `role` directly.
-   */
+ * Model role used to group settings rows: live, retranscribe or legacy
+ * summary.
+ *
+ */
   role: string;
   /**
-   * Real bytes on disk for this model's downloaded files, `null` when not
-   * downloaded (stage 0.8): actual usage rather than the advertised
-   * `size_mb`, which can differ from what the real downloaded files occupy.
-   */
+ * Real bytes on disk for this model's downloaded files, `null` when not
+ * downloaded: actual usage rather than the advertised `size_mb`, which can
+ * differ from what the real downloaded files occupy.
+ *
+ */
   size_on_disk_bytes: number | null;
   /**
-   * Whether this model has been curated out of the offered lineup (stage
-   * 0.8.x): still visible and deletable if it's on disk, but never
-   * downloadable or selectable again. Mirrors `ModelSpec::retired`. A
-   * retired model only ever appears in `list_models`'s result while it's
-   * downloaded (see `models::list_models_at`'s docs), so the Settings
-   * dialog's retired row always renders size + delete only.
-   */
+ * Retired model entries remain visible only to remove downloaded files. They
+ * cannot be selected or downloaded again.
+ */
   retired: boolean;
 }
 
@@ -331,9 +319,10 @@ export function setActiveModel(id: string): Promise<void> {
 
 /**
  * Sets and persists which registered whisper model `retranscribe_session`
- * uses (stage 0.8). Mirrors `set_retranscribe_model`
+ * uses. Mirrors `set_retranscribe_model`
  * (apps/desktop/src-tauri/src/lib.rs). Rejects an unknown id or one that
  * isn't a re-transcribe-role model (e.g. the live Parakeet id).
+ *
  */
 export function setRetranscribeModel(id: string): Promise<void> {
   return invoke("set_retranscribe_model", { id });
@@ -348,12 +337,9 @@ export function downloadModel(id: string): Promise<void> {
 }
 
 /**
- * Deletes a downloaded model's files to reclaim disk (stage 0.8). Mirrors
- * `models::delete_model` (apps/desktop/src-tauri/src/models.rs). Rejects
- * (with a plain, user-facing message) if a download of `id` is in flight, a
- * re-transcribe job is currently running, or `id` is the live model
- * (deleting it would break recording). Deleting the currently selected
- * re-transcribe model is allowed.
+ * Delete downloaded model files. Reject deletion of the live model or files
+ * needed by a running download or queued/running transcription job.
+ *
  */
 export function deleteModel(id: string): Promise<void> {
   return invoke("delete_model", { id });
@@ -392,41 +378,37 @@ export function setShowInDock(showInDock: boolean): Promise<void> {
  * Sets and persists whether recordings keep an audio file alongside the
  * transcript. Mirrors `config::set_keep_audio`
  * (apps/desktop/src-tauri/src/config.rs). Called from the Settings dialog's
- * "Keep call audio" checkbox (Task 5).
+ * "Keep call audio" checkbox.
+ *
  */
 export function setKeepAudio(keepAudio: boolean): Promise<void> {
   return invoke("set_keep_audio", { keepAudio });
 }
 
 /**
- * Sets and persists which format new recordings are encoded to (stage-0.7
- * format change). Mirrors `config::set_audio_format`
- * (apps/desktop/src-tauri/src/config.rs). Only affects future encodes: an
- * already-recorded session's audio file keeps whatever format it was
- * written in.
+ * Sets and persists which format new recordings are encoded to. Mirrors
+ * `config::set_audio_format` (apps/desktop/src-tauri/src/config.rs). Only
+ * affects future encodes: an already-recorded session's audio file keeps
+ * whatever format it was written in.
+ *
  */
 export function setAudioFormat(format: string): Promise<void> {
   return invoke("set_audio_format", { format });
 }
 
 /**
- * Sets and persists whether `stop_recording` automatically queues a
- * re-transcribe job for the session that just stopped (stage 0.9). Mirrors
- * `config::set_auto_retranscribe` (apps/desktop/src-tauri/src/config.rs).
- * Only takes effect when `keep_audio` is also on -- the Settings dialog
- * (Task 2) disables this toggle when it's off.
+ * Persist automatic re-transcription. It requires retained audio and a
+ * downloaded model; advanced override in config.toml.
+ *
  */
 export function setAutoRetranscribe(autoRetranscribe: boolean): Promise<void> {
   return invoke("set_auto_retranscribe", { autoRetranscribe });
 }
 
 /**
- * Sets and persists whether a successful re-transcribe (manual or
- * automatic) deletes the session's audio file afterward (stage 0.9). Mirrors
- * `config::set_delete_audio_after_retranscribe`
- * (apps/desktop/src-tauri/src/config.rs). Irreversible: once the audio is
- * gone, the call can never be re-transcribed again -- the Settings dialog
- * (Task 2) states this plainly in the toggle's helper text.
+ * Persist opt-in deletion of audio after successful re-transcription. This
+ * is irreversible; advanced setting in config.toml.
+ *
  */
 export function setDeleteAudioAfterRetranscribe(deleteAudioAfterRetranscribe: boolean): Promise<void> {
   return invoke("set_delete_audio_after_retranscribe", { deleteAudioAfterRetranscribe });
@@ -446,8 +428,9 @@ export function listSessions(): Promise<SessionMeta[]> {
 
 /**
  * Mirrors `sessions::StorageStats`: what the notes folder weighs, split into
- * notes vs audio, for the Settings Storage page (stage 4.1). `audio_secs`
- * sums only sessions that actually have an audio file.
+ * notes vs audio, for the Settings Storage page. `audio_secs` sums only
+ * sessions that actually have an audio file.
+ *
  */
 export interface StorageStats {
   note_count: number;
@@ -461,12 +444,13 @@ export function storageStats(): Promise<StorageStats> {
 }
 
 /**
- * Enhances a note with the configured AI CLI (stage 0.11): the user's rough
- * notes lead, the transcript backs them, and the result replaces the note's
- * `## Summary` section (never the notes). Mirrors `enhance::enhance_session`.
- * Rejects the recording/finalizing session, an empty transcript, a missing
- * provider CLI, and a second enhance while one is running. Resolves with the
- * generated summary text once it's on disk.
+ * Enhances a note with the configured AI CLI: the user's rough notes lead,
+ * the transcript backs them, and the result replaces the note's `## Summary`
+ * section (never the notes). Mirrors `enhance::enhance_session`. Rejects the
+ * recording/finalizing session, an empty transcript, a missing provider CLI,
+ * and a second enhance while one is running. Resolves with the generated
+ * summary text once it's on disk.
+ *
  */
 /**
  * `style` is a `SummaryStyle.id`, `"standard"` for the built-in prompt, or
@@ -529,8 +513,9 @@ export function setEnhanceUseCalendar(enhanceUseCalendar: boolean): Promise<void
 
 
 /**
- * Sets one provider's model override (stage 0.11); an empty string clears
- * it back to the CLI's default. Mirrors `config::set_enhance_model`.
+ * Sets one provider's model override; an empty string clears it back to the
+ * CLI's default. Mirrors `config::set_enhance_model`.
+ *
  */
 export function setEnhanceModel(provider: string, model: string): Promise<void> {
   return invoke("set_enhance_model", { provider, model });
@@ -593,13 +578,14 @@ export interface ChatProgress {
 }
 
 /**
- * Asks one question in a conversation (stage 4.2). `path: null` asks the
- * whole notes folder; `path: <a session's path>` asks that note, including
- * the one being recorded right now (the backend snapshots its on-disk
- * transcript per ask). Mirrors `chat::chat_ask`. The promise resolves once
- * the answer is stored (or rejects with the failure); progress and the
- * terminal phase also arrive as `chat-progress` events, and the updated
- * conversation is fetched back with `chatHistory`.
+ * Asks one question in a conversation. `path: null` asks the whole notes
+ * folder; `path: <a session's path>` asks that note, including the one being
+ * recorded right now (the backend snapshots its on-disk transcript per ask).
+ * Mirrors `chat::chat_ask`. The promise resolves once the answer is stored
+ * (or rejects with the failure); progress and the terminal phase also arrive
+ * as `chat-progress` events, and the updated conversation is fetched back
+ * with `chatHistory`.
+ *
  */
 export function chatAsk(
   path: string | null,
@@ -699,10 +685,11 @@ export interface SearchHit extends SessionMeta {
 }
 
 /**
- * Full-text search over the output folder (stage 0.10): case-insensitive
- * substring match against each session's title, notes and transcript.
- * Mirrors `sessions::search_sessions` (apps/desktop/src-tauri/src/sessions.rs).
- * A blank query returns the same list as `listSessions`, with empty snippets.
+ * Full-text search over the output folder: case-insensitive substring match
+ * against each session's title, notes and transcript. Mirrors
+ * `sessions::search_sessions` (apps/desktop/src-tauri/src/sessions.rs). A
+ * blank query returns the same list as `listSessions`, with empty snippets.
+ *
  */
 export function searchSessions(query: string): Promise<SearchHit[]> {
   return invoke("search_sessions", { query });
@@ -723,12 +710,8 @@ export function createSession(): Promise<string> {
 }
 
 /**
- * Moves a session's `.md` and its audio file(s) to the macOS Trash (stage
- * 0.10) -- recoverable from the Finder, not a hard delete. Mirrors
- * `sessions::delete_session` (apps/desktop/src-tauri/src/sessions.rs).
- * Rejects (with a plain, user-facing message) the currently-recording
- * session, one still being finalized, and one with an in-flight or queued
- * re-transcribe job.
+ * Move the note and its audio to macOS Trash. Reject deletion while this
+ * session is recording, finalizing or being processed.
  */
 export function deleteSession(path: string): Promise<void> {
   return invoke("delete_session", { path });
@@ -749,21 +732,11 @@ export function updateActiveSession(title?: string, notes?: string): Promise<voi
 }
 
 /**
- * Starts an offline re-transcription of `path` using whichever whisper
- * model `AppConfig.retranscribe_model` currently names (stage 0.8: picked
- * from the Settings dialog's model manager), replacing its `## Transcript`
- * section outright once done (title/notes/date/duration preserved, `asr:`
- * updated); if `AppConfig.delete_audio_after_retranscribe` is on, a
- * SUCCESSFUL pass also deletes the session's audio file afterward (stage
- * 0.9). Mirrors `retranscribe::retranscribe_session`
- * (apps/desktop/src-tauri/src/retranscribe.rs). Rejects immediately if the
- * session is recording, currently being finalized, its audio is missing, or
- * the selected model isn't downloaded. A re-transcribe already running for
- * a DIFFERENT session no longer causes a rejection (stage 0.9): this one
- * queues behind it (FIFO) and the returned promise still resolves once THIS
- * session's own job finishes, not before; progress in between (for
- * whichever session is actually running right now) arrives via
- * `retranscribe-progress` events.
+ * Queue an offline pass with the configured Whisper model. Preserve metadata
+ * and notes, retain transcript text outside partial audio coverage, and
+ * optionally delete audio only after success. Resolve when this job
+ * finishes; progress events report intermediate state.
+ *
  */
 export function retranscribeSession(path: string): Promise<void> {
   return invoke("retranscribe_session", { path });

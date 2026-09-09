@@ -1,141 +1,24 @@
-//! Stereo audio sink for a recording session: writes the two 16 kHz mono
-//! channels as one stereo WAV file while recording (left = mic/Me, right =
-//! system/Them, 16-bit, Global Constraints), then on [`AudioSink::finish`]
-//! encodes that WAV to the configured [`AudioFormat`] (AAC `.m4a` by
-//! default, FLAC `.flac` as an opt-in -- stage-0.7 format change, see
-//! `aac.rs`'s module docs for the benchmark behind the default) and deletes
-//! the WAV.
+//! Stereo audio storage: left is microphone/Me, right is system/Them. Capture writes
+//! 16-bit, 16 kHz WAV incrementally. Finalization encodes to AAC or FLAC through a
+//! temporary target and atomic rename. An encoding failure retains recoverable WAV audio
+//! and reports the error.
 //!
-//! ## Multi-format continuation (stage-0.7 format change)
+//! The channel queues interleave matching sample pairs and pad excessive channel lag
+//! with silence. Periodic flushes limit audio lost in a crash.
 //!
-//! A session's audio format is decided per-recording, from whatever
-//! `config::Config::audio_format` is set to at that moment -- not baked into
-//! the session file. Continuing a session (see "continuing a session's
-//! audio" below) whose EXISTING audio is one format while the CURRENT
-//! setting is the other must still produce exactly one canonical audio file
-//! afterward, in the CURRENT format: decode the old file (whichever format
-//! it's in), prefill it same as ever, and encode the combined result fresh.
-//! [`AudioSink`]'s `prior_audio_path` field is what makes this safe: it
-//! remembers which file (if any, and at what path) this recording continued
-//! FROM, so [`AudioSink::finish`] can tell whether that file is the SAME
-//! path it just wrote (ordinary same-format continuation, already
-//! overwritten via `encode_flac`/`encode_aac`'s own temp-then-rename) or a
-//! DIFFERENT path (a format switch, or a continuation from the retained
-//! `.wav` fallback) that is now stale and must be removed once the new,
-//! consolidated file is safely in place -- generalizing the same
-//! stale-cleanup reasoning the pre-existing "remove the now-stale
-//! pre-continuation flac" fix already established, just no longer assuming
-//! the old and new formats are always identical.
+//! Continuation streams old audio into a separate working WAV, then pads to the greater
+//! of the decoded audio length and the previous transcript timestamp. The transcript
+//! must use that same reconciled base offset. AAC prefill decodes through a temporary
+//! WAV; long recordings must not be held entirely in memory.
 //!
-//! ## Sync rule
+//! The working path must never alias the audio being read. If a crashed continuation
+//! already occupies that path, move it to a recovery path before creating the new WAV. A
+//! failed prefill leaves old audio intact.
 //!
-//! The two channels arrive as independent chunks (see `session.rs`'s worker
-//! loop) that are not guaranteed to interleave in lockstep -- one side may
-//! simply have more to say at any moment than the other. [`drain_sync_frames`]
-//! is the pure decision function (Global Constraints): it writes a stereo
-//! frame for every sample pair while BOTH channels have pending samples, and
-//! once one channel leads the other by more than [`MAX_LEAD_SAMPLES`] (1
-//! second), it starts draining that channel's excess against silence on the
-//! other side rather than waiting indefinitely for a channel that may not
-//! produce anything for a while (e.g. one side of the call going quiet).
-//! This is a deliberate, documented drift limitation: sustained one-sided
-//! speech reads with up to ~1s less cross-channel precision in exchange for
-//! output never stalling. [`flush_remaining`] is the same idea with no more
-//! "wait and see" left: once recording stops, whichever channel is shorter
-//! is padded with silence instead of dropping the longer channel's tail.
-//!
-//! ## Errors
-//!
-//! Every method that can fail takes an `on_error` callback (mirroring
-//! `session.rs`'s `report_error` convention) rather than propagating a hard
-//! error out of the worker loop: per the Global Constraints, a problem
-//! inside the sink must not kill the recording. The one documented exception
-//! to "keep going" is the FLAC encode step in [`AudioSink::finish`]: if it
-//! fails, the WAV is kept instead of deleted (losing the call's audio
-//! entirely is worse than leaving a bigger file on disk) and the WAV's own
-//! path is returned in place of the FLAC's, alongside the reported error.
-//!
-//! ## Crash safety of the in-progress WAV
-//!
-//! `hound::WavWriter` leaves the RIFF/data-chunk length fields at 0 until
-//! [`hound::WavWriter::finalize`] runs (the clean-stop path in
-//! [`AudioSink::finish`]) or its `Drop` impl does a best-effort finalize --
-//! which does not run on a SIGKILL, a panic that unwinds past it, or a power
-//! loss. Verified empirically against hound 3.5.1: a writer abandoned
-//! without ever calling `flush()`/`finalize()` reads back as 0 samples, no
-//! matter how much was actually written -- a crash mid-call would lose the
-//! ENTIRE session's audio, not just the tail since the last write. `push`
-//! therefore calls [`hound::WavWriter::flush`] (which patches the header's
-//! length fields and flushes the underlying `BufWriter` -- otherwise the
-//! default 8KB buffer would also hold back the most recent audio past
-//! whatever the OS already has) every [`FLUSH_INTERVAL_FRAMES`] frames (2
-//! seconds of audio). That interval is the resulting data-loss window: a
-//! crash can only ever lose up to the last 2 seconds pushed, not the whole
-//! file -- PROVIDED the in-progress file is still discoverable afterward,
-//! which is `retranscribe::resolve_audio_path`'s job, not this module's: it
-//! falls back to [`recording_wav_path_for`] as a last resort specifically so
-//! a crashed CONTINUED recording's in-progress audio (which never lives at
-//! `wav_path_for`, see "continuing a session's audio" below) isn't orphaned.
-//! Without that fallback, this guarantee only actually held for a fresh
-//! (non-continuing) recording's crash, whose in-progress file already sits
-//! at the canonical `.wav` sibling. (This flushes to the OS, not an
-//! `fsync`; the same durability level `simstim_transcript::Transcript::save`'s
-//! write-then-rename already relies on elsewhere in this codebase.)
-//!
-//! ## Continuing a session's audio
-//!
-//! `start_recording(Some(path))` continues an existing session (see
-//! `session.rs`'s "continuing a session" docs): the transcript's new lines
-//! are offset by the file's previous content, and the audio must stay in
-//! sync with that same offset rather than restarting from silence.
-//! [`AudioSink::new_continuing`] handles this: before any live capture is
-//! pushed, it prefills a fresh WAV with the session's existing audio
-//! (streamed frame-by-frame from its `.flac`/`.wav` sibling via
-//! [`stream_prefill_audio`] -- never buffered whole into memory, a 1h call
-//! would be ~460MB as decoded samples), then pads with silence up to
-//! [`target_base_frames`]'s reconciled offset -- see that function's docs for
-//! why the prefill length and the transcript's continuation offset must be
-//! computed by the SAME mechanism, not two that can silently disagree.
-//!
-//! **Distinct working file** (Important fix-review finding, wave 2): the
-//! in-progress WAV for a continued recording is NOT `wav_path_for`, the
-//! canonical `.wav` sibling -- it's [`recording_wav_path_for`], a name that
-//! can never alias either canonical sibling. This matters because
-//! `existing_audio_path` (what gets prefilled FROM) can itself BE the
-//! canonical `.wav` (the retained fallback from a previous failed flac
-//! encode, see `AudioSink::finish`'s docs): opening that same path with
-//! `WavWriter::create` -- which truncates on open -- before reading it would
-//! silently destroy it, emptying the very file the prefill is about to copy
-//! from. Using a distinct working path removes the possibility entirely
-//! instead of depending on operation ordering.
-//!
-//! That same class of self-collision resurfaces one level up, though (wave
-//! 4): `retranscribe::resolve_audio_path`'s last-resort fallback (wave 3,
-//! see the crash-safety section above) can hand back
-//! [`recording_wav_path_for`] ITSELF as `existing_audio_path`, when a
-//! PREVIOUS continuation of this same session crashed before reaching a
-//! clean stop. `AudioSink::new_continuing` handles that specific case by
-//! moving the crashed file aside to a distinct recovery path before ever
-//! creating the new working file at that same name -- see its own doc
-//! comment for the full mechanics.
-//!
-//! The existing audio file is never touched by any of this except by
-//! [`AudioSink::finish`]'s own controlled rename/removal once the new
-//! recording is fully written: prefilling only reads it, writing into the
-//! distinct working path, and [`encode_flac`]'s own write-to-temp-then-rename
-//! means the old `.flac` isn't replaced until the new encode has fully
-//! succeeded (on success, any stale retained `.wav` is also cleaned up; on a
-//! failed encode, the working file is moved into the canonical `.wav` slot
-//! instead so it stays discoverable, and any now-stale pre-continuation
-//! `.flac` is removed too -- otherwise it would keep shadowing that wav
-//! forever, since `resolve_audio_path` always prefers `.flac`, permanently
-//! reading old, incomplete audio instead of the just-consolidated old+new
-//! wav). If the prefill itself fails (the old file is corrupt or
-//! unreadable), `new_continuing` returns `Err` and removes the just-created
-//! (partial) working file; the caller (`session.rs`) reports this through
-//! the usual `on_error` path and disables audio for that recording entirely,
-//! exactly like any other `AudioSink::new` failure -- the old file is left
-//! completely alone since nothing ever wrote to it.
+//! Replace the canonical audio only after successful finalization. Remove stale audio
+//! from an earlier format only after the new file is safe, or it may shadow the new
+//! recording during path resolution. On encoding failure, preserve the consolidated WAV
+//! and remove obsolete encoded audio only after that WAV is discoverable.
 
 use std::collections::VecDeque;
 use std::fs::File;
@@ -147,12 +30,12 @@ use flacenc::component::BitRepr;
 use flacenc::error::Verify;
 use simstim_capture::Channel;
 
-/// Sample rate every channel arrives at (Global Constraints): 16 kHz.
+/// Sample rate every channel arrives at: 16 kHz.
 const SAMPLE_RATE: u32 = 16_000;
 
-/// Sync rule threshold (Global Constraints): once a channel leads the other
-/// by more than this many samples (1 second at 16 kHz), its excess is
-/// written against silence instead of waiting for the lagging channel.
+/// Sync rule threshold: once a channel leads the other by more than this many samples (1
+/// second at 16 kHz), its excess is written against silence instead of waiting for the
+/// lagging channel.
 const MAX_LEAD_SAMPLES: usize = SAMPLE_RATE as usize;
 
 /// Crash-safety flush cadence (see the module docs): [`AudioSink::push`]
@@ -179,43 +62,24 @@ pub(crate) fn wav_path_for(md_path: &Path) -> PathBuf {
     md_path.with_extension("wav")
 }
 
-/// The dedicated working file for a CONTINUED recording's in-progress audio
-/// (see the module docs' "continuing a session's audio" section) -- distinct
-/// from both [`wav_path_for`] and [`audio_path_for`] so it can never alias
-/// the existing audio a continuation prefills FROM, which may itself be the
-/// canonical `.wav` (a retained fallback from a previous failed flac
-/// encode). [`AudioSink::finish`] moves this into the canonical `.wav` slot
-/// if its own flac encode fails, so the file stays discoverable under the
-/// name `resolve_audio_path` actually looks for.
-///
-/// `pub(crate)` (Important fix-review finding, wave 3) so
-/// `retranscribe::resolve_audio_path` can fall back to it as a last resort:
-/// without that, a crash mid-continuation (which only ever writes here,
-/// never to `wav_path_for`) would leave the captured audio completely
-/// invisible -- undiscoverable for playback/re-transcribe, and a later
-/// continuation would prefill from the STALE pre-crash audio instead,
-/// losing whatever the crashed attempt captured.
+/// Working WAV for a continued recording, separate from the canonical audio being
+/// prefilled. On encoding failure, preserve it at a path the shared audio resolver can
+/// discover.
 pub(crate) fn recording_wav_path_for(md_path: &Path) -> PathBuf {
     md_path.with_extension("recording.wav")
 }
 
-/// The `.m4a` sibling (stage-0.7 format change): the AAC encode target,
-/// alongside [`audio_path_for`]'s `.flac`. `pub(crate)` for the same reason
-/// as [`recording_wav_path_for`]: `retranscribe::resolve_audio_path` needs
-/// it to resolve a session's audio regardless of which format it was
-/// recorded in.
+/// The `.m4a` sibling: the AAC encode target, alongside [`audio_path_for`]'s `.flac`.
+/// `pub(crate)` for the same reason as [`recording_wav_path_for`]:
+/// `retranscribe::resolve_audio_path` needs it to resolve a session's audio regardless
+/// of which format it was recorded in.
 pub(crate) fn m4a_path_for(md_path: &Path) -> PathBuf {
     md_path.with_extension("m4a")
 }
 
-/// The two supported encode targets for a session's audio (stage-0.7 format
-/// change, owner decision after a measured codec benchmark comparing FLAC
-/// against AAC at several bitrates -- see `aac.rs`'s module docs for the
-/// full numbers and the encoder pitfall it guards against). Mirrors
-/// `config::VALID_AUDIO_FORMATS`'s two string values one for one; kept as a
-/// real enum here (rather than threading the raw config string through)
-/// so [`AudioSink::finish`]'s encode dispatch is exhaustively checked by the
-/// compiler.
+/// Supported encoding targets. Keep this enum aligned with
+/// `config::VALID_AUDIO_FORMATS`; exhaustive dispatch prevents silently choosing the
+/// wrong encoder.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AudioFormat {
     Aac,
@@ -267,14 +131,11 @@ fn f32_to_i16(sample: f32) -> i16 {
     (sample.clamp(-1.0, 1.0) * i16::MAX as f32).round() as i16
 }
 
-/// Pure sync decision (see the module docs' sync rule): drains as many
-/// `(me, them)` stereo sample pairs as are ready to write from the two
-/// pending queues, leaving whatever isn't ready yet (a channel with no
-/// samples, and not enough lead on the other side to force it) queued for
-/// the next call.
-///
-/// Extracted standalone -- no I/O, no `AudioSink` -- so the interleave/pad
-/// decision is unit-testable without files, per the brief's TDD note.
+/// Pure sync decision (see the module docs' sync rule): drains as many `(me, them)`
+/// stereo sample pairs as are ready to write from the two pending queues, leaving
+/// whatever isn't ready yet (a channel with no samples, and not enough lead on the other
+/// side to force it) queued for the next call. Extracted standalone -- no I/O, no
+/// `AudioSink` -- so the interleave/pad decision is unit-testable without files,.
 fn drain_sync_frames(me: &mut VecDeque<f32>, them: &mut VecDeque<f32>) -> Vec<(f32, f32)> {
     let mut frames = Vec::new();
     loop {
@@ -313,8 +174,8 @@ fn flush_remaining(me: &mut VecDeque<f32>, them: &mut VecDeque<f32>) -> Vec<(f32
     frames
 }
 
-/// Writes a batch of stereo `(me, them)` f32 frame pairs to `writer` as
-/// interleaved 16-bit PCM (left = Me, right = Them, Global Constraints).
+/// Writes a batch of stereo `(me, them)` f32 frame pairs to `writer` as interleaved
+/// 16-bit PCM (left = Me, right = Them, ).
 fn write_frames(
     writer: &mut hound::WavWriter<BufWriter<File>>,
     frames: &[(f32, f32)],
@@ -344,67 +205,10 @@ fn encode_flac(wav_path: &Path, flac_path: &Path) -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("invalid flac encoder config: {e:?}"))?;
     let block_size = config.block_size;
 
-    // `encode_with_fixed_block_size` derives STREAMINFO's min_block_size
-    // from whatever the last, possibly-partial block actually turns out to
-    // be (`Stream::add_frame` takes the min over every frame's real size).
-    // Any recording whose total sample count isn't an exact multiple of
-    // `block_size` -- i.e. essentially every real recording, since call
-    // lengths never land on a 4096-sample boundary -- leaves that last
-    // block shorter than `block_size`, so STREAMINFO ends up with
-    // min_block_size < max_block_size.
-    //
-    // Bug found via direct diagnosis (2026-08-16 FLAC-playback report): every
-    // frame `encode_fixed_size_frame` writes (flacenc 0.5.1's `coding.rs`) is
-    // header-coded as `FrameOffset::Frame` -- fixed-blocksize/frame-number
-    // style (FLAC's `blocking_strategy` bit = 0) -- regardless of whether the
-    // block sizes actually differ. A STREAMINFO with min != max block size is
-    // exactly the FLAC-spec signal for a *variable*-blocksize stream, whose
-    // frames are supposed to carry a sample-number header instead
-    // (`blocking_strategy` = 1). So whenever the last block is short,
-    // flacenc emits a file whose STREAMINFO and frame headers disagree about
-    // which encoding scheme is in use. libFLAC and ffmpeg tolerate the
-    // mismatch (libFLAC only warns: "sample or frame number does not
-    // increase correctly"); macOS's own Core Audio FLAC decoder does not --
-    // confirmed directly with `afconvert` against a minimal repro pair built
-    // with the same flacenc version: a stream padded to an exact block-size
-    // multiple (min == max) decodes fine (exit 0), while one left with a
-    // shorter final block (min != max, same as this function used to
-    // produce) fails with `ExtAudioFileSetProperty ('cfmt') failed`. WKWebView
-    // (what `<audio>` runs on in this Tauri app) uses that same decoder, and
-    // fails identically (`MEDIA_ERR_DECODE`) regardless of the asset
-    // protocol's announced Content-Type -- confirmed with a real WKWebView
-    // probe, ruling out a MIME-type cause. See the FLAC-playback report for
-    // the full evidence trail.
-    //
-    // The fix: always right-pad the trailing partial block up to a FULL
-    // `block_size`, not just up to flacenc's own encoder minimum -- so every
-    // frame this function ever writes is exactly `block_size` samples and
-    // STREAMINFO's min_block_size == max_block_size unconditionally,
-    // sidestepping the inconsistent encoding entirely rather than special-
-    // casing which decoders tolerate it. At most `block_size - 1` samples
-    // (4095 at 16 kHz, roughly 256ms) of inaudible digital silence, distinct
-    // from the sync rule's own silence padding above (a FLAC container/decoder
-    // compatibility concern, not a channel-sync one).
-    //
-    // ACCUMULATION WHEN CONTINUING: Each call to `finish()` pads one trailing
-    // block. In a session that is continued N times, the final file contains
-    // the audio from all N segments plus N-1 padding seams (one after each of
-    // the first N-1 segments, N-1 * up-to-256ms of silence). The sync offset
-    // is still exact (derived from the actual, finally decoded sample count,
-    // not an estimate), so this is a pure size/fidelity cost, not a timing
-    // bug. It is accepted rather than stripped because reliably detecting and
-    // removing the padding would require heuristics (reverse-engineering
-    // flacenc's block boundaries from decoded silence), risking data loss if
-    // real audio happens to be near-silent at the boundary.
-    //
-    // ALTERNATIVE NOT TAKEN: instead of padding, we could patch the STREAMINFO
-    // min/max block-size fields after encoding to declare a fixed block size
-    // (what libFLAC does for fixed-blocksize streams, where a short final frame
-    // is normal). The trade-off was simplicity and robustness: padding needs no
-    // bit-level file surgery and is verified end-to-end against the real macOS
-    // decoder. If the accumulated silence ever matters in practice, the patch
-    // approach is the escape hatch -- it requires only the STREAMINFO edits, no
-    // decoder changes.
+    // flacenc writes fixed-blocksize frame headers. STREAMINFO must therefore have equal
+    // minimum and maximum block sizes. Pad the trailing block to the configured block
+    // size; otherwise some decoders reject the internally inconsistent file. Account for
+    // padding when computing continuation offsets.
     let total_frames = samples.len() / channels;
     if total_frames > 0 {
         let remainder = total_frames % block_size;
@@ -443,18 +247,17 @@ fn encode_flac(wav_path: &Path, flac_path: &Path) -> anyhow::Result<()> {
     result.map_err(anyhow::Error::from)
 }
 
-/// Encodes `wav_path` (must already be a finalized, readable WAV file) to
-/// `m4a_path` as AAC (stage-0.7 format change): the encode itself, INCLUDING
-/// the forced-sample-rate verification, is `aac::encode_wav_to_m4a`'s job
-/// (see that module's docs for the measured 12kHz pitfall it guards
-/// against); this function only adds the same temp-then-rename discipline
-/// [`encode_flac`] already uses, for the same reason -- `afconvert` writes
-/// straight to `<base>.m4a.tmp` first, and only once that file has been
-/// verified as real, correctly-rated AAC is it renamed onto `m4a_path`. A
-/// mid-encode crash, a wrong-bitrate/wrong-rate result, or any other
-/// `afconvert` failure never touches `m4a_path` itself -- when continuing a
-/// session, that path may already hold the previous recording's audio (see
-/// the module docs), and this must never leave it half-overwritten.
+/// Encodes `wav_path` (must already be a finalized, readable WAV file) to `m4a_path` as
+/// AAC: the encode itself, INCLUDING the forced-sample-rate verification, is
+/// `aac::encode_wav_to_m4a`'s job (see that module's docs for the measured 12kHz pitfall
+/// it guards against); this function only adds the same temp-then-rename discipline
+/// [`encode_flac`] already uses, for the same reason -- `afconvert` writes straight to
+/// `<base>.m4a.tmp` first, and only once that file has been verified as real,
+/// correctly-rated AAC is it renamed onto `m4a_path`. A mid-encode crash, a
+/// wrong-bitrate/wrong-rate result, or any other `afconvert` failure never touches
+/// `m4a_path` itself -- when continuing a session, that path may already hold the
+/// previous recording's audio (see the module docs), and this must never leave it
+/// half-overwritten.
 fn encode_aac(wav_path: &Path, m4a_path: &Path) -> anyhow::Result<()> {
     let tmp_path = m4a_path.with_extension("m4a.tmp");
     let result = crate::aac::encode_wav_to_m4a(wav_path, &tmp_path)
@@ -466,15 +269,14 @@ fn encode_aac(wav_path: &Path, m4a_path: &Path) -> anyhow::Result<()> {
 }
 
 /// Streams an existing session's audio (its `.flac`, or the `.wav` fallback
-/// `AudioSink::finish` keeps when the flac-encode step failed -- same
-/// dispatch as `retranscribe::decode_audio_stereo`) directly into `writer`,
-/// one interleaved stereo sample at a time, never collecting it into an
-/// in-memory buffer first (Global Constraints: a 1h call is ~460MB as
-/// decoded i32/f32 samples). Returns the number of stereo FRAMES written (not
-/// samples), which [`AudioSink::new_continuing`] needs to reconcile against
-/// the transcript's own continuation offset (see [`target_base_frames`]).
-/// Used by [`AudioSink::new_continuing`] to prefill a continued recording
-/// before any live capture is appended.
+/// `AudioSink::finish` keeps when the flac-encode step failed -- same dispatch as
+/// `retranscribe::decode_audio_stereo`) directly into `writer`, one interleaved stereo
+/// sample at a time, never collecting it into an in-memory buffer first (a 1h call is
+/// ~460MB as decoded i32/f32 samples). Returns the number of stereo FRAMES written (not
+/// samples), which [`AudioSink::new_continuing`] needs to reconcile against the
+/// transcript's own continuation offset (see [`target_base_frames`]). Used by
+/// [`AudioSink::new_continuing`] to prefill a continued recording before any live
+/// capture is appended.
 fn stream_prefill_audio(
     writer: &mut hound::WavWriter<BufWriter<File>>,
     existing_path: &Path,
@@ -486,16 +288,14 @@ fn stream_prefill_audio(
     }
 }
 
-/// [`stream_prefill_audio`]'s `.m4a` case (stage-0.7 format change): unlike
-/// claxon's/hound's own lazy per-sample iterators the flac/wav cases stream
-/// through directly, this codebase has no in-process AAC decoder (see
-/// `aac.rs`'s module docs for why decode -- like encode -- shells out to
-/// `afconvert`), so this decodes the WHOLE file to a scratch WAV first via
-/// [`crate::aac::decode_m4a_to_wav`], then streams THAT through
-/// [`stream_prefill_wav`] exactly like any other wav fallback. The scratch
-/// file is a `tempfile::NamedTempFile`: its `Drop` removes it once this
-/// function returns, success or error, rather than leaving a stray temp file
-/// behind on an early return.
+/// [`stream_prefill_audio`]'s `.m4a` case: unlike claxon's/hound's own lazy per-sample
+/// iterators the flac/wav cases stream through directly, this codebase has no in-process
+/// AAC decoder (see `aac.rs`'s module docs for why decode -- like encode -- shells out
+/// to `afconvert`), so this decodes the WHOLE file to a scratch WAV first via
+/// [`crate::aac::decode_m4a_to_wav`], then streams THAT through [`stream_prefill_wav`]
+/// exactly like any other wav fallback. The scratch file is a `tempfile::NamedTempFile`:
+/// its `Drop` removes it once this function returns, success or error, rather than
+/// leaving a stray temp file behind on an early return.
 fn stream_prefill_m4a(
     writer: &mut hound::WavWriter<BufWriter<File>>,
     path: &Path,
@@ -600,25 +400,9 @@ fn write_silence_frames(
     Ok(())
 }
 
-/// The shared base offset, in frames, that both a continued recording's
-/// prefilled audio and its transcript's new lines must agree on: whichever
-/// is longer, the audio actually prefilled or the previous transcript's own
-/// last line offset. Extracted standalone -- no `Vad`, `Engine`, or file I/O
-/// -- for exact, deterministic unit testing (Important fix-review finding,
-/// wave 2).
-///
-/// Before this, the audio prefill length and the transcript's continuation
-/// offset were computed by two unrelated mechanisms: audio used
-/// `previous_duration_secs` (the file's wall-clock `duration:` frontmatter,
-/// which includes any trailing silence after the last spoken line and before
-/// the previous Stop), while the transcript used `last_offset_secs` (the last
-/// transcript LINE's own timestamp). Those two routinely differ -- any gap
-/// between the last utterance and Stop -- so the audio and the transcript's
-/// new-line offsets silently disagreed by exactly that gap: the audio would
-/// be too short (or too long) for where the transcript claimed new lines
-/// resume, corrupting every seek offset from that point on. Computing both
-/// from this single function closes that gap by construction rather than by
-/// coincidence.
+/// Shared continuation base in frames: the greater of decoded audio length and the last
+/// transcript offset. Both audio prefill and new transcript lines must use this value to
+/// prevent seek drift or overlapping old audio.
 fn target_base_frames(prefilled_frames: usize, last_offset_secs: f64) -> usize {
     let last_offset_frames = (last_offset_secs * SAMPLE_RATE as f64).round() as usize;
     prefilled_frames.max(last_offset_frames)
@@ -630,20 +414,13 @@ fn target_base_frames(prefilled_frames: usize, last_offset_secs: f64) -> usize {
 /// FLAC, and deletes the WAV.
 pub struct AudioSink {
     wav_path: PathBuf,
-    /// The canonical encode target [`AudioSink::finish`] writes to --
-    /// `.flac` or `.m4a` depending on `format` (stage-0.7 format change; was
-    /// unconditionally `.flac` before).
+    /// The canonical encode target [`AudioSink::finish`] writes to -- `.flac` or `.m4a`
+    /// depending on `format` (was unconditionally `.flac` before).
     audio_path: PathBuf,
     format: AudioFormat,
-    /// The audio file this recording continued FROM, if any (`None` for a
-    /// fresh, non-continuing recording, and also `None` in the
-    /// working-path-self-collision recovery case -- see
-    /// [`AudioSink::new_continuing`], that file is already fully consumed
-    /// and cleaned up before this field would ever matter). Stage-0.7
-    /// format-change addition: `finish()` needs this to know whether a
-    /// continuation crossed formats (so `prior_audio_path != audio_path`)
-    /// and must clean up the now-stale old file once the new one is safely
-    /// in place -- see the module docs' "multi-format continuation" section.
+    /// Audio source used to prefill this continuation. After the new recording is safely
+    /// saved, remove an obsolete source in another format so it cannot shadow the
+    /// consolidated audio.
     prior_audio_path: Option<PathBuf>,
     writer: hound::WavWriter<BufWriter<File>>,
     queue_me: VecDeque<f32>,
@@ -687,8 +464,8 @@ impl AudioSink {
     }
 
     /// `base_path` is the session's `.md` path; the WAV sibling and the
-    /// `format`-dependent encode target (`.flac` or `.m4a`) are derived from
-    /// it (Global Constraints: same basename).
+    /// `format`-dependent encode target (`.flac` or `.m4a`) are derived from it (same
+    /// basename).
     pub fn new(base_path: &Path, format: AudioFormat) -> anyhow::Result<AudioSink> {
         Self::create_at(
             wav_path_for(base_path),
@@ -698,62 +475,11 @@ impl AudioSink {
         )
     }
 
-    /// Like [`AudioSink::new`], but for continuing an existing session (see
-    /// the module docs' "continuing a session's audio" section): prefills a
-    /// dedicated working WAV ([`recording_wav_path_for`], never the canonical
-    /// `.wav` sibling -- see that function's docs for why) before any live
-    /// capture is appended, streaming in `existing_audio_path`'s audio if
-    /// there is any, then padding with silence up to whichever is longer:
-    /// the audio actually prefilled, or `last_offset_secs` (the previous
-    /// transcript's own last line timestamp -- see [`target_base_frames`]).
-    ///
-    /// Returns the sink AND the reconciled base offset in seconds
-    /// (frame-exact: it's derived from the padded audio's own final frame
-    /// count, not an independent computation that could drift from what was
-    /// actually written). The caller (`session.rs`) must use this exact
-    /// value as the new transcript lines' continuation offset too, so audio
-    /// position and transcript timestamps stay on the same clock.
-    ///
-    /// Returns `Err` (without ever destroying whatever `existing_audio_path`
-    /// pointed at -- only reads from it, or in the crashed-continuation case
-    /// below, moves it somewhere still recoverable) if the prefill itself
-    /// fails, e.g. a corrupt or unreadable old audio file; the
-    /// partially-written working file is removed before returning so it
-    /// doesn't linger as a stray temp file. Callers must treat this the same
-    /// as an `AudioSink::new` failure: report it and disable audio for the
-    /// recording entirely, per the Global Constraints (a sink problem must
-    /// not kill the recording, and per this task, must not silently
-    /// continue with misaligned audio either).
-    ///
-    /// **The working-path self-collision case** (Important fix-review
-    /// finding, wave 4): `existing_audio_path` can legitimately BE
-    /// [`recording_wav_path_for`] itself -- `retranscribe::resolve_audio_path`
-    /// falls back to it as a last resort (wave 3) when a PREVIOUS
-    /// continuation of this same session crashed before ever reaching a
-    /// clean `Stop`, and `session.rs` (the only production call site) passes
-    /// whatever that resolves to straight through. Below, `create_at`
-    /// truncates `recording_wav_path_for(base_path)` the instant it opens
-    /// it for THIS new recording -- reading `existing_audio_path` afterward
-    /// would silently prefill 0 frames from an already-emptied file,
-    /// discarding exactly the crashed audio this fallback exists to
-    /// recover (the wave-2 collision, reincarnated at this one specific
-    /// source). So before `create_at` ever runs, this case is detected and
-    /// the crashed file is renamed aside to a distinct recovery path
-    /// (`<base>.recovering.wav`) first; the prefill reads from THAT copy
-    /// instead. The recovery copy is deleted only once the prefill (and
-    /// silence pad, and flush) fully succeeds; if any of those fail, it's
-    /// left in place on disk, and the returned error names it explicitly so
-    /// nothing is silently lost even on a double failure (a crashed
-    /// recording whose own captured audio also turns out to be corrupt).
-    ///
-    /// `format` (stage-0.7 format change) is the CURRENT configured format,
-    /// which need not match whatever format `existing_audio_path` is
-    /// already in -- decoding an old file in one format and re-encoding the
-    /// combined (prefilled + new) result in a DIFFERENT one is exactly what
-    /// continuing across a format switch means. See the module docs'
-    /// "multi-format continuation" section for how `finish()` uses
-    /// `prior_audio_path` (recorded here) to clean up the old file once the
-    /// new one is safely in place.
+    /// Prefill a separate working WAV with existing audio, then pad to the shared
+    /// audio/transcript base offset. Return that offset to the session worker. If the
+    /// source is the crashed working WAV itself, move it aside before creating the new
+    /// file. Failed prefill must preserve the source and remove only the incomplete new
+    /// working file.
     pub fn new_continuing(
         base_path: &Path,
         existing_audio_path: Option<&Path>,
@@ -841,13 +567,12 @@ impl AudioSink {
         Ok(target_frames)
     }
 
-    /// Queues `samples` for `channel`, immediately writes whatever the sync
-    /// rule ([`drain_sync_frames`]) allows, and flushes the WAV writer every
-    /// [`FLUSH_INTERVAL_FRAMES`] frames so a crash never loses more than
-    /// that cadence's worth of audio (see the module docs' crash-safety
-    /// section). `on_error` receives a message if the underlying WAV write
-    /// or flush fails; the sink otherwise carries on (Global Constraints: a
-    /// sink problem must not kill the recording).
+    /// Queues `samples` for `channel`, immediately writes whatever the sync rule
+    /// ([`drain_sync_frames`]) allows, and flushes the WAV writer every
+    /// [`FLUSH_INTERVAL_FRAMES`] frames so a crash never loses more than that cadence's
+    /// worth of audio (see the module docs' crash-safety section). `on_error` receives a
+    /// message if the underlying WAV write or flush fails; the sink otherwise carries on
+    /// (a sink problem must not kill the recording).
     pub fn push(&mut self, channel: Channel, samples: &[f32], on_error: &impl Fn(String)) {
         match channel {
             Channel::Me => self.queue_me.extend(samples.iter().copied()),
@@ -870,39 +595,11 @@ impl AudioSink {
         }
     }
 
-    /// Flushes remaining queued samples (padded with silence), closes the
-    /// WAV, encodes it to the configured [`AudioFormat`], and removes the
-    /// WAV, returning the encoded file's path. If the encode fails, the WAV
-    /// is kept instead of deleted and its path is returned instead
-    /// (`on_error` reports why): losing the recorded audio is worse than
-    /// leaving the bigger file around. `Err` is reserved for a failure
-    /// finishing the WAV itself (flush/finalize), which leaves nothing
-    /// usable to fall back to.
-    ///
-    /// For a continued recording (see [`AudioSink::new_continuing`]), the
-    /// in-progress file lives at a working path distinct from the canonical
-    /// `.wav` sibling: on a successful encode, any stale retained `.wav`
-    /// that got prefilled from is cleaned up (it's now fully absorbed into
-    /// the fresh encode); on a failed encode, the working file is moved into
-    /// the canonical `.wav` slot instead of just being left under its
-    /// working name, so it stays discoverable by `resolve_audio_path` the
-    /// same way a fresh recording's kept wav already is -- old+new
-    /// consolidated, since the old content was already read into it by the
-    /// prefill step.
-    ///
-    /// Stage-0.7 format change: `prior_audio_path` (see that field's docs)
-    /// generalizes what used to be flac-specific cleanup here. On a
-    /// SUCCESSFUL encode, if this recording continued from an existing file
-    /// at a DIFFERENT path than the one just written (a format switch --
-    /// e.g. continuing a `.flac` session while the current setting is AAC),
-    /// that now-stale old file is removed once the new one is safely in
-    /// place. On a FAILED encode, both the (never-actually-written-this-time)
-    /// intended encode target and any different-path `prior_audio_path` are
-    /// removed once the consolidated wav is safely renamed into place --
-    /// otherwise either one could permanently shadow that wav, since
-    /// `resolve_audio_path` prefers a real `.flac`/`.m4a` over the wav
-    /// fallback (Important fix-review finding, wave 3, generalized here from
-    /// flac-only to any format).
+    /// Flush and finalize the working WAV, encode to the configured format and return
+    /// the retained path. Failed encoding keeps WAV audio and reports the error. Failed
+    /// WAV finalization returns an error. For continuation, activate the consolidated
+    /// audio before removing old-format files; otherwise playback may resolve stale
+    /// audio or recovery data may be lost.
     pub fn finish(mut self, on_error: &impl Fn(String)) -> anyhow::Result<PathBuf> {
         let frames = flush_remaining(&mut self.queue_me, &mut self.queue_them);
         write_frames(&mut self.writer, &frames)?;
@@ -930,17 +627,9 @@ impl AudioSink {
                     // silently ignored.
                     let _ = std::fs::remove_file(&canonical_wav_path);
                 }
-                // Stage-0.7 format change: a cross-format continuation's old
-                // file (e.g. the pre-continuation `.flac` when this
-                // recording just wrote `.m4a`) is now fully absorbed into
-                // `self.audio_path` and must be removed, the same way the
-                // pre-existing (flac-only) failed-encode cleanup below
-                // already did for the single-format case. Reported via
-                // `on_error`, not silently ignored, since leaving it behind
-                // is a discoverability problem: a stale richer-looking file
-                // could confuse a human browsing the output folder, even
-                // though `resolve_audio_path`'s own preference order (see
-                // that function's docs) still resolves to the correct one.
+                // Remove obsolete cross-format audio only after the consolidated
+                // recording is safe. Report cleanup failures because stale files can
+                // confuse audio discovery.
                 if let Some(prior) = &self.prior_audio_path {
                     if prior != &self.audio_path && prior.exists() {
                         if let Err(e) = std::fs::remove_file(prior) {
@@ -1225,22 +914,9 @@ mod tests {
         assert!(decoded_them[expected_them.len()..].iter().all(|&s| s == 0));
     }
 
-    /// Regression test for the 2026-08-16 FLAC-playback bug (see the
-    /// FLAC-playback report in `.superpowers/sdd/`): `encode_flac` used to
-    /// only pad the trailing block up to flacenc's own encoder minimum (32
-    /// samples), so any recording whose total sample count left a bigger
-    /// remainder against `block_size` (4096) -- i.e. essentially every real
-    /// recording -- produced a FLAC whose STREAMINFO reported
-    /// min_block_size < max_block_size. Diagnosis found that flacenc 0.5.1
-    /// always header-codes frames as fixed-blocksize/frame-number
-    /// (`FrameOffset::Frame`) regardless of that STREAMINFO signal, an
-    /// internal inconsistency libFLAC/ffmpeg tolerate but macOS's own Core
-    /// Audio FLAC decoder (what WKWebView's `<audio>` element uses) rejects
-    /// outright. The fix always pads the trailing block up to a FULL
-    /// `block_size`, so min_block_size == max_block_size unconditionally.
-    /// Exercises several sample counts that used to land on both sides of
-    /// the old, narrower threshold, plus an exact multiple (remainder == 0,
-    /// which was never broken) as a control.
+    /// A partial trailing FLAC block must still produce consistent fixed-blocksize
+    /// STREAMINFO and frame headers. Validate with an independent decoder as well as
+    /// sample-content checks.
     #[test]
     fn encoded_flac_has_a_uniform_block_size_regardless_of_recording_length() {
         let dir = tempfile::tempdir().unwrap();
@@ -1272,14 +948,8 @@ mod tests {
         }
     }
 
-    /// Same regression as above, verified against the actual decoder in
-    /// question instead of just STREAMINFO's fields: shells out to
-    /// `/usr/bin/afconvert` (macOS's own Core Audio-based conversion tool --
-    /// the same decode stack WKWebView's `<audio>` element uses, and already
-    /// this codebase's convention for AAC in `aac.rs`) to decode the
-    /// produced FLAC. Before the fix, this failed with `ExtAudioFileSetProperty
-    /// ('cfmt') failed` for exactly the sample counts exercised here (see the
-    /// FLAC-playback report for the full repro).
+    /// Verify that the macOS decoder accepts the produced FLAC, including recordings
+    /// whose final block requires padding.
     #[test]
     fn encoded_flac_is_actually_decodable_by_macos_core_audio() {
         let dir = tempfile::tempdir().unwrap();
@@ -1357,11 +1027,8 @@ mod tests {
         );
     }
 
-    // `target_base_frames`: the pure reconciliation between the audio
-    // actually prefilled and the transcript's own last-line offset
-    // (Important fix-review finding, wave 2). Exact, zero-tolerance
-    // assertions here since this is exactly the computation that used to be
-    // done by two unrelated, silently-disagreeing mechanisms.
+    // Audio prefill and new transcript timestamps must use the same reconciled base
+    // offset.
     mod target_base {
         use super::*;
 
@@ -1396,11 +1063,7 @@ mod tests {
         }
     }
 
-    // `AudioSink::new_continuing`: prefilling a continued session's audio
-    // before live capture starts (see the module docs' "continuing a
-    // session's audio" section, and the Critical fix-review finding this
-    // whole feature exists for -- continuing a recording used to silently
-    // truncate/overwrite the existing audio).
+    // Continuation must append to retained audio without truncating the source.
     mod continuing {
         use super::*;
 
@@ -1519,17 +1182,8 @@ mod tests {
             assert_eq!(decoded[1], f32_to_i16(0.25) as i32);
         }
 
-        /// Important fix-review finding, wave 4, the core regression guard:
-        /// `resolve_audio_path`'s last resort (wave 3) can hand back
-        /// `recording_wav_path_for` ITSELF as `existing_audio_path` -- the
-        /// "a previous continuation of this session crashed" scenario. Since
-        /// that's the exact path `create_at` is about to truncate for THIS
-        /// new recording, naively prefilling from it (as wave 3 left it)
-        /// would silently copy 0 frames from an already-emptied file,
-        /// discarding exactly the crashed audio the fallback exists to
-        /// save. Proves the fix recovers it: the resulting audio decodes to
-        /// the crashed (old) content followed by this recording's new
-        /// content, not just the new content alone.
+        /// Recover a crashed working WAV before opening a new file at the same path. The
+        /// result must contain the crashed audio followed by the new recording.
         #[test]
         fn continuing_when_the_existing_source_is_the_working_path_itself_recovers_it() {
             let dir = tempfile::tempdir().unwrap();
@@ -1650,10 +1304,10 @@ mod tests {
             );
         }
 
-        /// Critical fix-review finding, the core regression guard: a corrupt
-        /// (unreadable) existing audio file must make `new_continuing` fail
-        /// loudly rather than silently starting fresh -- and must leave that
-        /// file completely untouched, since prefilling only ever reads it.
+        /// the core regression guard: a corrupt (unreadable) existing audio file must
+        /// make `new_continuing` fail loudly rather than silently starting fresh -- and
+        /// must leave that file completely untouched, since prefilling only ever reads
+        /// it.
         #[test]
         fn corrupt_existing_audio_fails_and_leaves_the_original_untouched() {
             let dir = tempfile::tempdir().unwrap();
@@ -1717,16 +1371,8 @@ mod tests {
             assert!(result.is_err(), "a mono existing audio file must be rejected");
         }
 
-        /// Important fix-review finding, wave 2, the core regression guard
-        /// for 1a: when the ONLY existing audio is the retained `.wav`
-        /// fallback (a previous flac encode failed and `AudioSink::finish`
-        /// kept the wav under its canonical name), `new_continuing` must not
-        /// alias its own write target with that exact file -- opening it
-        /// with `WavWriter::create` (which truncates) before reading it
-        /// would silently empty it, losing the old audio while reporting
-        /// success. Proves the fix by continuing from a `.wav`-only session
-        /// and checking the final audio contains the old samples followed
-        /// by the new ones, i.e. the retained wav was read, not destroyed.
+        /// Continuing from a retained WAV must not open that same path for writing
+        /// before its old samples are copied.
         #[test]
         fn continuing_from_a_retained_wav_fallback_does_not_destroy_it() {
             let dir = tempfile::tempdir().unwrap();
@@ -1812,16 +1458,8 @@ mod tests {
             );
         }
 
-        /// Important fix-review finding, wave 3, the core regression guard:
-        /// when a CONTINUED recording's own flac encode fails, `finish` moves
-        /// the working wav into the canonical `.wav` slot -- but the
-        /// pre-continuation `.flac` (the one this session prefilled FROM)
-        /// would otherwise still be sitting there, and `resolve_audio_path`
-        /// always prefers `.flac`, so the app would permanently read that
-        /// OLD, incomplete audio while the correct, consolidated old+new
-        /// file sits unreachable in the `.wav`. Proves the fix removes the
-        /// stale flac (only after the wav is safely in place) and that
-        /// `resolve_audio_path` then correctly surfaces the wav.
+        /// After failed continuation encoding, the consolidated WAV must remain
+        /// discoverable and obsolete encoded audio must not shadow it.
         #[test]
         fn encode_failure_on_a_continued_recording_removes_the_stale_pre_continuation_flac() {
             let dir = tempfile::tempdir().unwrap();
@@ -1898,11 +1536,10 @@ mod tests {
         }
     }
 
-    // Stage-0.7 format change: AAC as its own encode target, and continuing
-    // a session across a format switch in either direction. The exhaustive
-    // priming/sample-rate proofs live in `aac.rs`'s own tests; these are
-    // about `AudioSink`'s own dispatch and file-management, not the codec
-    // itself.
+    // AAC as its own encode target, and continuing a session across a format switch in
+    // either direction. The exhaustive priming/sample-rate proofs live in `aac.rs`'s own
+    // tests; these are about `AudioSink`'s own dispatch and file-management, not the
+    // codec itself.
     mod aac_format {
         use super::*;
 

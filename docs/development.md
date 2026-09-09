@@ -54,10 +54,10 @@ identical in the UI, so verify a recorded call per channel
 
 ## Releases
 
-See [the beta checklist](beta-release.md). Tagging builds and publishes a
-release, so use a beta tag only after the owner has tested the candidate.
+See [release instructions](releases.md). Tagging builds and publishes a
+release, so push a tag only after the maintainer has tested the candidate.
 The release workflow signs, notarizes, staples and verifies the bundle.
-There is no in-app updater in this beta; install a newer DMG over the old app.
+There is no in-app updater currently; install a newer DMG over the old app.
 
 ## Architecture
 
@@ -67,7 +67,7 @@ There is no in-app updater in this beta; install a newer DMG over the old app.
 - `apps/desktop/src-tauri`: session ownership, processing, AI CLI bridge and IPC.
 - `apps/desktop/src`: React interface.
 
-See [AGENTS.md](../AGENTS.md) and the [design specification](specs/2026-08-14-simstim-design.md).
+See [AGENTS.md](../AGENTS.md) and the [architecture](architecture.md).
 
 ## Optional connector permission check
 
@@ -89,21 +89,3 @@ From `apps/desktop`, run `pnpm exec vite --config vite.demo.config.ts` and open
 fixtures. It cannot record, run AI, access notes, or change native settings.
 Use it for screenshots and visual review, not as a native end-to-end test.
 The production config never imports its mock bridge.
-
-## Build a beta candidate
-
-From the repository root:
-
-```sh
-python3 scripts/release-config.py v0.11.0-beta.1 /tmp/simstim-beta.json
-cd apps/desktop
-pnpm tauri build --bundles app,dmg --config /tmp/simstim-beta.json
-```
-
-The helper preserves the permission descriptions and keeps Apple's bundle
-version fields numeric, while the Tauri version and artifact names retain
-`-beta.1`. See [Apple's version field](https://developer.apple.com/documentation/bundleresources/information-property-list/cfbundleshortversionstring)
-and [Tauri's bundle configuration](https://v2.tauri.app/distribute/macos-application-bundle/).
-Local candidates use an ad-hoc signature. Public builds use the release
-workflow's Developer ID signing and notarization; do not distribute a local
-candidate as the notarized public download.

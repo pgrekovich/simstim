@@ -1,95 +1,21 @@
-//! On-demand higher-quality re-transcription of a session's saved audio,
-//! using an offline whisper pass (`simstim_engine::WhisperEngine`, a sibling
-//! to the live Parakeet pipeline, see that module's docs) with whichever
-//! registered whisper model `Config::retranscribe_model` currently names
-//! (stage 0.8: the owner can pick a bigger/smaller model from Settings; see
-//! `models::REGISTRY`'s four whisper entries).
+//! Offline re-transcription of retained audio using the configured Whisper model.
 //!
-//! ## What a re-transcribe does
+//! Decode each channel, extract speech regions, transcribe, map timestamps to the
+//! original timeline and merge the results. Replace the transcript atomically while
+//! preserving notes and metadata. An empty result is an error and must not erase the
+//! original text. For partial audio, preserve text before the audio_from boundary.
 //!
-//! Per the stage-0.7 Global Constraints: decode the session's audio (the
-//! `.flac` sibling normally, falling back to a `.wav` sibling if the flac
-//! encode step failed and `AudioSink::finish` kept the wav instead -- see
-//! `resolve_audio_path`), left channel = Me, right channel = Them,
-//! transcribe each channel with whisper, merge the two channels' segments
-//! into one list sorted by start time, format them exactly like the live
-//! pipeline's own `[hh:mm:ss] Who: text` lines, and REWRITE the
-//! `## Transcript` section with that text -- replacing it outright, never
-//! merging with what was there before (the owner's ruling: the app never
-//! edits transcripts, so a re-transcribe is a wholesale replacement or
-//! nothing). Title, notes, date and duration are preserved exactly
-//! (`sessions::rewrite_transcript_at`), and `asr:` is updated to the whisper
-//! model's id.
+//! A FIFO queue runs one job at a time. Store the enqueue decision and job payload under
+//! the same lock. Each manual caller awaits its own job; automatic requests report
+//! through progress events without blocking recording finalization.
 //!
-//! An empty result (whisper found no speech on either channel -- a quiet
-//! recording, a bad split, a decode glitch) is treated as a failure, not a
-//! successful "replace with nothing": see `finalize_transcript`'s guard.
-//! Given the section above (no previous text kept once a new pass runs),
-//! writing an empty transcript would otherwise silently destroy the user's
-//! only copy of it.
+//! Revalidate session state, audio, model and transcript-split boundaries when a queued
+//! job starts. Hold file reservations through processing, final writes and optional
+//! audio deletion. Recording and finalizing sessions cannot be processed concurrently.
 //!
-//! ## Rejections
-//!
-//! Four cases refuse to start, each with a message meant to be read directly
-//! by the user (no internal command/IPC names leaking through, per the
-//! brief): the session is the one currently recording (single-writer rule);
-//! the session is currently finalizing (the stop-to-encode window -- see
-//! `AppState`'s `finalizing` field doc comment); no audio was saved for it
-//! (missing file, or `keep_audio` was off when it was recorded); the whisper
-//! model isn't downloaded yet. Each check is its own small, pure function
-//! (`check_not_active` covers both the recording and finalizing cases, plus
-//! `check_audio_present`, `check_model_ready`) so they're unit-testable
-//! without a live Tauri app, mirroring `lib.rs`'s own
-//! `rejects_recording_into_active_path` and `config.rs`'s `validate_theme`.
-//!
-//! ## Queue, not rejection (stage 0.9)
-//!
-//! A FIFTH case used to refuse to start too: another re-transcribe job
-//! already running. Whisper's Metal/GPU context is a real resource two
-//! concurrent runs would contend over, so only one job ever actually RUNS at
-//! once -- that part is unchanged. What changed (Global Constraints, stage
-//! 0.9): a second request no longer gets rejected with "try again once it
-//! finishes". Instead [`RetranscribeQueue`] (behind [`RetranscribeState`])
-//! queues it, FIFO, and starts it automatically once every job ahead of it
-//! finishes (success or failure). This is what makes `auto_retranscribe`
-//! safe to combine with a manual click, or with two calls stopping in quick
-//! succession: neither production trigger has to reason about whether
-//! something else happens to be running right now.
-//!
-//! [`RetranscribeQueue`] itself is a plain data structure (no `Mutex`, no
-//! Tauri types, no channels) so the queueing/dedup/draining logic is
-//! unit-testable with plain path strings. The actual async machinery that
-//! makes a queued `retranscribe_session` call await its OWN job's result
-//! once its turn comes (rather than resolving the instant it's accepted)
-//! lives in [`RetranscribeState`] and `run_job`/`advance_queue`: a queued
-//! call registers a `tokio::sync::oneshot` receiver and awaits it; whichever
-//! job eventually dequeues and runs that path sends its result through.
-//! `maybe_auto_retranscribe`'s own enqueue never registers a waiter --
-//! stop_recording's auto trigger is fire-and-forget by design (Global
-//! Constraints: stop must not become slower or blocking), so nothing is
-//! listening for that result besides the usual `retranscribe-progress`
-//! events.
-//!
-//! ## Off the main thread, with progress events
-//!
-//! The whole pipeline (model load, both channels' transcription, and the
-//! final write) runs inside `tauri::async_runtime::spawn_blocking`, the same
-//! pattern `models::run_download`'s archive-extract step already uses for
-//! blocking work inside an async command. `retranscribe-progress` events
-//! (`{ path, phase, channel, message }`) fire throughout, ending in `"done"`
-//! on success or `"error"` (emitted by the command wrapper, not the pipeline
-//! itself) on failure.
-//!
-//! ## Single-writer discipline
-//!
-//! The active-recording check above guards the common case, but a job can
-//! run for tens of seconds (model load + two full-channel transcriptions):
-//! nothing stops a NEW recording starting into this same path in the
-//! meantime (continuing an existing session is a supported, ordinary
-//! action, see `session.rs`'s "continuing a session" docs). `before_write`
-//! (built from a fresh `AppState` lookup) re-checks immediately before the
-//! final write and aborts rather than clobbering whatever the recording
-//! worker has since written.
+//! All blocking work runs off the main thread. Success emits done; failures emit error.
+//! Delete-after-success failures must be reported separately from transcription failure
+//! because the new transcript is already saved. Every outcome must drain the queue.
 
 use anyhow::{anyhow, Context, Result};
 use serde::Serialize;
@@ -108,11 +34,10 @@ use crate::models::{self, ModelLayout};
 use crate::sessions;
 use crate::AppState;
 
-/// `retranscribe-progress` event payload (Global Constraints). `channel` and
-/// `message` serialize as explicit JSON `null` when absent (not omitted, per
-/// the IPC contract), unlike `models::ProgressPayload`'s `message` which
-/// skips instead -- this event's TS side declares both as `| null`, not
-/// optional.
+/// `retranscribe-progress` event payload. `channel` and `message` serialize as explicit
+/// JSON `null` when absent (not omitted, per the IPC contract), unlike
+/// `models::ProgressPayload`'s `message` which skips instead -- this event's TS side
+/// declares both as `| null`, not optional.
 #[derive(Clone, Serialize)]
 struct RetranscribeProgressPayload {
     path: String,
@@ -121,14 +46,8 @@ struct RetranscribeProgressPayload {
     message: Option<String>,
 }
 
-/// Generic over `R: tauri::Runtime` (rather than the concrete `AppHandle`,
-/// which defaults to `Wry`) so this -- and everything downstream of it
-/// (`try_enqueue`, `store_pending_job`, `advance_queue`, `run_job`) -- is
-/// callable against `tauri::test::mock_app()`'s `MockRuntime` for the
-/// Important/Critical fix-review tests below, mirroring `lib.rs`'s own
-/// `allow_output_dir_in_asset_scope` split for the same reason. Every real
-/// (non-test) call site still passes a concrete `AppHandle` (`= AppHandle<Wry>`);
-/// `R` is inferred from that, never spelled out.
+/// Emit job progress. The generic runtime allows queue and worker tests to use a mock
+/// Tauri app.
 fn emit_progress<R: tauri::Runtime>(
     app: &AppHandle<R>,
     path: &str,
@@ -147,8 +66,8 @@ fn emit_progress<R: tauri::Runtime>(
     );
 }
 
-/// Outcome of asking [`RetranscribeQueue::enqueue`] to admit a path (stage
-/// 0.9 Global Constraints: the old single-job rejection becomes a queue).
+/// Outcome of asking [`RetranscribeQueue::enqueue`] to admit a path (the old single-job
+/// rejection becomes a queue).
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum EnqueueOutcome {
     /// Nothing was running: `path` is now the queue's `running` slot, and
@@ -157,14 +76,12 @@ enum EnqueueOutcome {
     /// A job is already running: `path` was appended to `pending` (FIFO) and
     /// will start automatically once every job ahead of it finishes.
     Queued,
-    /// `path` is already the one `running` right now. Split out from
-    /// `AlreadyQueued` (Important fix-review finding) so the two rejection
-    /// messages can say something different -- "already running" vs.
+    /// `path` is already the one `running` right now. Split out from `AlreadyQueued` so
+    /// the two rejection messages can say something different -- "already running" vs.
     /// "already queued" -- rather than one generic phrase covering both.
     AlreadyRunning,
-    /// `path` is already somewhere in `pending` -- Global Constraints: "no
-    /// duplicate paths in the queue". The caller must not admit a second
-    /// copy.
+    /// `path` is already somewhere in `pending` -- "no duplicate paths in the queue".
+    /// The caller must not admit a second copy.
     AlreadyQueued,
 }
 
@@ -200,11 +117,10 @@ impl RetranscribeQueue {
         }
     }
 
-    /// Called once whichever job was `running` finishes, success OR failure
-    /// (Global Constraints: "a job finishing... drains the next one" --
-    /// this function doesn't even take the result, since draining doesn't
-    /// depend on it): clears `running`, then promotes the next queued path
-    /// (FIFO) into it if there is one, returning that path so the caller
+    /// Called once whichever job was `running` finishes, success OR failure ("a job
+    /// finishing... drains the next one" -- this function doesn't even take the result,
+    /// since draining doesn't depend on it): clears `running`, then promotes the next
+    /// queued path (FIFO) into it if there is one, returning that path so the caller
     /// knows to actually start its pipeline.
     fn finish_and_advance(&mut self) -> Option<String> {
         self.running = None;
@@ -216,12 +132,8 @@ impl RetranscribeQueue {
     }
 }
 
-/// Everything a queued (not yet running) job needs to actually run once its
-/// turn comes. Deliberately does NOT store `audio_path`/`model_path`
-/// (Critical fix-review finding, stage 0.9 -- see `revalidate_before_run`'s
-/// doc comment): those are re-resolved FRESH by `run_job` immediately before
-/// it does any decode/transcribe work, precisely because a snapshot taken
-/// at accept time can go stale while this job sits waiting its turn.
+/// Queued job inputs. Resolve audio and model paths again when execution starts; an
+/// enqueue-time snapshot can become stale.
 struct QueuedJob {
     md_path: PathBuf,
     asr_id: String,
@@ -256,34 +168,20 @@ impl Default for RetranscribeState {
 }
 
 impl RetranscribeState {
-    /// Whether a re-transcribe job is currently running (stage 0.8:
-    /// `models::delete_model`'s rejection -- deleting a model's file out
-    /// from under an in-flight job could corrupt or crash it). Deliberately
-    /// does NOT count queued-but-not-yet-running jobs -- see
-    /// [`RetranscribeState::has_queued_jobs`] for that.
+    /// Whether a transcription job is running. Model deletion must also check
+    /// has_queued_jobs.
     pub fn is_running(&self) -> bool {
         self.0.lock().unwrap().queue.running.is_some()
     }
 
-    /// Whether any job is currently sitting in the FIFO queue, waiting its
-    /// turn (Important fix-review finding, stage 0.9). `models::delete_model`
-    /// must refuse a delete not only while a job is actively RUNNING but
-    /// also while one is merely QUEUED: `run_job`'s own re-validation at
-    /// dequeue time (`revalidate_before_run`) already turns a model deleted
-    /// out from under a queued job into a clean, reported failure rather
-    /// than a crash, but refusing the delete up front is simply a better
-    /// experience -- no failed job to explain after the fact.
+    /// Whether jobs are waiting. Block model deletion for queued jobs as well as the
+    /// running job.
     pub fn has_queued_jobs(&self) -> bool {
         !self.0.lock().unwrap().queue.pending.is_empty()
     }
 
-    /// Whether `path` specifically is the currently RUNNING job or sitting
-    /// anywhere in the FIFO queue (stage 0.10: `sessions::delete_session`'s
-    /// rejection -- trashing a session's files out from under its own
-    /// in-flight or queued re-transcribe would at best fail the job late and
-    /// at worst race its final write). Unlike [`RetranscribeState::is_running`]
-    /// this is per-path: a job busy with a DIFFERENT session doesn't block
-    /// deleting this one.
+    /// Whether this path is running or queued. Prevent deletion of its files without
+    /// blocking unrelated notes.
     pub fn involves(&self, path: &str) -> bool {
         let inner = self.0.lock().unwrap();
         inner.queue.running.as_deref() == Some(path)
@@ -291,20 +189,9 @@ impl RetranscribeState {
     }
 }
 
-/// Claims or queues `path` on `app`'s [`RetranscribeState`], storing `job`'s
-/// data atomically with the enqueue decision, under ONE lock acquisition
-/// (Important fix-review finding, stage 0.9). The previous version was two
-/// SEPARATE lock acquisitions -- `try_enqueue` decided `Queued`, then a
-/// second call, `store_pending_job`, stored the data -- leaving a gap in
-/// between where the currently-running job could finish: `advance_queue`
-/// would promote this path out of `pending` and into `running`, find no
-/// entry in `jobs` yet (since `store_pending_job` hadn't run), and simply
-/// return -- wedging the queue with `running` permanently claimed by a path
-/// nothing would ever actually start, and every later job queueing behind
-/// it forever. `job` is only actually stored when the outcome is `Queued`;
-/// for every other outcome (`StartNow`, `AlreadyRunning`, `AlreadyQueued`)
-/// it's simply dropped -- the caller already has everything it needs for
-/// those cases from its own locals (see the two call sites below).
+/// Store the enqueue decision and job payload under one lock. Otherwise the current job
+/// can finish between them and promote a path whose payload is not yet available,
+/// leaving the queue stuck.
 fn try_enqueue<R: tauri::Runtime>(app: &AppHandle<R>, path: &str, job: QueuedJob) -> EnqueueOutcome {
     let jobs_state = app.state::<RetranscribeState>();
     let mut inner = jobs_state.0.lock().unwrap();
@@ -315,25 +202,8 @@ fn try_enqueue<R: tauri::Runtime>(app: &AppHandle<R>, path: &str, job: QueuedJob
     outcome
 }
 
-/// Promotes the next runnable path off the FIFO queue, if any, skipping
-/// (and immediately re-advancing past) any promoted path with no stored
-/// `QueuedJob` data -- belt-and-suspenders for the Important fix-review
-/// finding, stage 0.9: this should never happen now that `try_enqueue`
-/// stores a job atomically with the enqueue decision, but a promoted path
-/// with nothing to run it with must be treated as already finished and
-/// skipped, rather than left wedged in `running` forever with nothing ever
-/// draining the rest of the queue behind it.
-///
-/// The whole skip-loop runs under ONE lock acquisition (a single `inner`
-/// guard, not re-locked per iteration) so a path can never be promoted,
-/// found missing, and looked up again inconsistently. Deliberately free of
-/// any spawning or awaiting -- `advance_queue` (the only real caller) is
-/// what turns this into a detached continuation; kept as its own function so
-/// the promote-and-skip decision is unit-testable synchronously, without a
-/// spawned task racing the test's own assertions (fix-review finding: the
-/// original test here span its OWN `run_job` for a garbage-fixture path,
-/// whose fast-failing continuation raced this function's second call against
-/// the test's synchronous check of `queue.running`).
+/// Promote the next runnable job under one lock. Skip entries without payloads and
+/// continue draining rather than leaving an unstartable path in the running slot.
 fn dequeue_next_runnable<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<(String, QueuedJob)> {
     let jobs_state = app.state::<RetranscribeState>();
     let mut inner = jobs_state.0.lock().unwrap();
@@ -373,41 +243,9 @@ fn advance_queue<R: tauri::Runtime>(app: AppHandle<R>) {
     });
 }
 
-/// Re-validates a job immediately before it actually starts running --
-/// whether it started right away or spent time sitting in the queue
-/// (Critical fix-review finding, stage 0.9): a job's target session isn't
-/// frozen while it waits its turn. Concretely, the corruption this closes
-/// off: session A stops with `auto_retranscribe` and
-/// `delete_audio_after_retranscribe` both on; its job queues behind another
-/// one already running. While it waits, the owner presses Record on A again
-/// -- continuing a session is a normal, supported action that never
-/// consults `RetranscribeState` at all (see `session.rs`'s "continuing a
-/// session" docs) -- which re-targets the very audio sibling this queued
-/// job still holds a snapshot of, resolved a minute ago. Without this
-/// re-check, the stale job would go on to overwrite the freshly continued
-/// transcript with old content and delete the just-recorded audio --
-/// exactly the corruption `check_not_active`'s pre-queue rejection used to
-/// prevent outright, and the queue is what makes newly reachable (before
-/// it existed, the second request was simply refused).
-///
-/// Re-derives `audio_path`/`model_path` FRESH via [`resolve_audio_path`]/
-/// [`whisper_model_path`] rather than trusting anything resolved at accept
-/// time (this is why [`QueuedJob`] doesn't store them at all -- there is no
-/// snapshot left to accidentally reuse). Re-runs the same not-active/
-/// finalizing check `retranscribe_session` does up front
-/// (`check_not_active`), plus the same audio-present/model-ready chain
-/// (`check_audio_present`, `check_model_not_retired`, `check_model_ready`).
-///
-/// Pure (no `AppHandle`/`State`): `active`/`finalizing` are passed in
-/// exactly like `check_not_active`'s own parameters, so this is directly
-/// unit-testable with tempdir fixtures and plain `Option<&Path>` values, no
-/// live Tauri app needed. `run_job` is the only real (non-test) caller,
-/// supplying those two from a fresh `AppState` lookup.
-///
-/// `before_write` (module docs) remains the LAST line of defence for the
-/// much narrower race that's still possible after this point -- a
-/// recording starting in the handful of milliseconds between this check
-/// passing and the final write.
+/// Revalidate immediately before execution. Queued inputs can become stale through
+/// external changes; reject missing audio, invalid models, busy sessions and unsafe
+/// transcript boundaries before any write or deletion.
 fn revalidate_before_run(
     md_path: &Path,
     active: Option<&Path>,
@@ -420,15 +258,13 @@ fn revalidate_before_run(
     check_audio_present(audio_path.as_deref())?;
     let audio_path = audio_path.expect("checked present by check_audio_present");
 
-    // Critical fix-review finding, stage 0.9: re-check the transcript is
-    // still splittable, freshly, immediately before this job runs -- same
-    // reasoning as every other check in this function (a job can sit queued
-    // for a while; a snapshot from accept time can go stale). The
-    // AUTHORITATIVE check (and the one that actually combines kept + new
-    // text) is `sessions::rewrite_transcript_at`'s own, re-read again right
-    // before the final write; this is the same early-exit courtesy the other
-    // checks here already give (don't run the whole whisper pass only to
-    // refuse at the very end).
+    // re-check the transcript is still splittable, freshly, immediately before this job
+    // runs -- same reasoning as every other check in this function (a job can sit queued
+    // for a while; a snapshot from accept time can go stale). The AUTHORITATIVE check
+    // (and the one that actually combines kept + new text) is
+    // `sessions::rewrite_transcript_at`'s own, re-read again right before the final
+    // write; this is the same early-exit courtesy the other checks here already give
+    // (don't run the whole whisper pass only to refuse at the very end).
     let existing = simstim_transcript::parse_session(md_path).map_err(|e| e.to_string())?;
     let meta = simstim_transcript::parse_meta(md_path).map_err(|e| e.to_string())?;
     check_transcript_splittable(&existing.transcript, meta.audio_from_secs)?;
@@ -443,19 +279,9 @@ fn revalidate_before_run(
     Ok((audio_path, model_path))
 }
 
-/// Deletes the resolved audio file after a re-transcribe -- but only when
-/// `delete_audio_after` is on AND the pass actually `succeeded` (Global
-/// Constraints, stage 0.9: every failure path, including the empty-whisper-
-/// result abort in `finalize_transcript` -- which surfaces here as
-/// `succeeded: false`, the same as any other failure -- must leave the
-/// audio untouched). Returns `Some` with a user-facing message if the
-/// deletion ITSELF then fails (Global Constraints: reported, not swallowed);
-/// `None` on every other outcome (deletion disabled, the pass didn't
-/// succeed, or the file was removed cleanly).
-///
-/// A plain function over an explicit `succeeded` bool -- not `run_job`'s own
-/// `Result<(), anyhow::Error>` -- so this is unit-testable with tempfile
-/// fixtures alone, no async runtime or whisper model involved.
+/// Delete audio only after successful transcription and explicit opt-in. Every failure
+/// preserves audio. Return a user-facing error if deletion itself fails, making clear
+/// the transcript was saved.
 fn maybe_delete_audio(audio_path: &Path, delete_audio_after: bool, succeeded: bool) -> Option<String> {
     if !delete_audio_after || !succeeded {
         return None;
@@ -465,37 +291,30 @@ fn maybe_delete_audio(audio_path: &Path, delete_audio_after: bool, succeeded: bo
     })
 }
 
-/// What `maybe_auto_retranscribe` should do for a session that just finished
-/// recording (Global Constraints, stage 0.9). Pure and fully testable
-/// without a live `AppHandle` or a real model file on disk: `model_path` is
-/// whatever `whisper_model_path` resolved (`None` if the registry entry is
-/// missing), passed in rather than looked up here, and readiness is just
-/// `Path::is_file()` on it via the existing `check_model_ready`.
+/// What `maybe_auto_retranscribe` should do for a session that just finished recording .
+/// Pure and fully testable without a live `AppHandle` or a real model file on disk:
+/// `model_path` is whatever `whisper_model_path` resolved (`None` if the registry entry
+/// is missing), passed in rather than looked up here, and readiness is just
+/// `Path::is_file` on it via the existing `check_model_ready`.
 #[derive(Debug, PartialEq, Eq)]
 enum AutoTriggerDecision {
     /// `auto_retranscribe` or `keep_audio` was off, or this session has no
     /// audio -- nothing to do, and nothing to report either (this is the
     /// ordinary, expected case on most stops).
     Skip,
-    /// The selected model is retired (a misconfiguration): report `.0` once
-    /// through the usual `retranscribe-progress` error phase and drop the
-    /// job outright -- what must NOT happen is queueing a job that's doomed
-    /// to fail the exact same way. A model that simply isn't downloaded yet
-    /// is `Skip`, not this: automation is on by default since 2026-09-04,
-    /// so "still downloading" is the ordinary state of a fresh install, not
-    /// an error to toast after every call.
+    /// Reject a retired model once. A model still downloading is an ordinary
+    /// fresh-install state and should be skipped without an error after every call.
     ReportAndDrop(String),
     /// Everything checks out: go ahead and enqueue/run.
     Enqueue,
 }
 
-/// The auto-trigger's own pre-check chain, as one pure decision (Global
-/// Constraints, stage 0.9): auto never fires without `keep_audio` and actual
-/// audio, and a missing/retired model reports once and drops rather than
-/// queueing something that can only fail. Mirrors `retranscribe_session`'s
-/// own validation chain (`check_model_not_retired`, `check_model_ready`),
-/// reused here rather than duplicated, so both paths reject a bad model
-/// selection with the exact same message.
+/// The auto-trigger's own pre-check chain, as one pure decision : auto never fires
+/// without `keep_audio` and actual audio, and a missing/retired model reports once and
+/// drops rather than queueing something that can only fail. Mirrors
+/// `retranscribe_session`'s own validation chain (`check_model_not_retired`,
+/// `check_model_ready`), reused here rather than duplicated, so both paths reject a bad
+/// model selection with the exact same message.
 fn decide_auto_trigger(
     auto_retranscribe: bool,
     keep_audio: bool,
@@ -516,15 +335,8 @@ fn decide_auto_trigger(
     AutoTriggerDecision::Enqueue
 }
 
-/// Called once by `stop_recording` right after a recording finishes (Global
-/// Constraints, stage 0.9): fires an auto re-transcribe for `path` if
-/// `cfg.auto_retranscribe` and `cfg.keep_audio` are both on and the session
-/// actually has audio, queueing (or starting) it exactly the same way a
-/// manual `retranscribe_session` call would -- see `decide_auto_trigger` for
-/// the full decision. Fire-and-forget: never awaited by `stop_recording`
-/// (Global Constraints: stop must not become slower or blocking), so the
-/// only way to observe this job's progress or outcome is the usual
-/// `retranscribe-progress` events.
+/// After Stop, queue an accurate pass when enabled and retained audio is available.
+/// Fire-and-forget: progress events report the outcome without blocking finalization.
 pub(crate) fn maybe_auto_retranscribe<R: tauri::Runtime>(app: AppHandle<R>, path: String, cfg: &Config) {
     let md_path = PathBuf::from(&path);
     let audio_path = resolve_audio_path(&md_path);
@@ -549,22 +361,16 @@ pub(crate) fn maybe_auto_retranscribe<R: tauri::Runtime>(app: AppHandle<R>, path
             emit_progress(&app, &path, "error", None, Some(message));
         }
         AutoTriggerDecision::Enqueue => {
-            // Note: `audio_path`/`model_path` above were only needed to
-            // reach this decision -- they're deliberately NOT threaded any
-            // further. `run_job` re-resolves both itself, fresh, right
-            // before it does any work (`revalidate_before_run`); carrying
-            // these accept-time snapshots forward would just be an unused
-            // (and, per the Critical fix-review finding, dangerous if ever
-            // accidentally relied upon) stale copy.
+            // Do not carry resolved paths into the queue. Execution resolves and
+            // validates them again.
             let asr_id = cfg.retranscribe_model.clone();
             let delete_audio_after = cfg.delete_audio_after_retranscribe;
 
-            // Important fix-review finding, stage 0.9: `job` is built BEFORE
-            // calling `try_enqueue` so enqueue+store happen atomically, under
-            // one lock (see `try_enqueue`'s own doc comment) -- `md_path`/
-            // `asr_id` are cloned here so the originals remain available for
-            // the `StartNow` branch below, which needs them regardless of
-            // whether `job` (moved into `try_enqueue`) actually got stored.
+            // `job` is built BEFORE calling `try_enqueue` so enqueue+store happen
+            // atomically, under one lock (see `try_enqueue`'s own doc comment) --
+            // `md_path`/ `asr_id` are cloned here so the originals remain available for
+            // the `StartNow` branch below, which needs them regardless of whether `job`
+            // (moved into `try_enqueue`) actually got stored.
             let job = QueuedJob {
                 md_path: md_path.clone(),
                 asr_id: asr_id.clone(),
@@ -573,10 +379,9 @@ pub(crate) fn maybe_auto_retranscribe<R: tauri::Runtime>(app: AppHandle<R>, path
             };
             match try_enqueue(&app, &path, job) {
                 EnqueueOutcome::AlreadyRunning | EnqueueOutcome::AlreadyQueued => {
-                    // Already running or queued -- e.g. the owner manually
-                    // clicked re-transcribe on this exact session right as
-                    // it stopped. The existing job/queue entry already
-                    // covers it; nothing more to do.
+                    // Already running or queued -- e.g. the user manually clicked
+                    // re-transcribe on this exact session right as it stopped. The
+                    // existing job/queue entry already covers it; nothing more to do.
                 }
                 EnqueueOutcome::StartNow => {
                     tauri::async_runtime::spawn(run_job(app, path, md_path, asr_id, delete_audio_after));
@@ -601,14 +406,12 @@ struct TaggedSegment {
     text: String,
 }
 
-/// Merges `me`'s and `them`'s already-transcribed segments into one list
-/// sorted by `start_secs` ascending (Global Constraints: absolute offsets
-/// from the start of the file, merged across channels by timestamp). Ties
-/// (equal `start_secs`) are broken by `me` first -- arbitrary, but
-/// deterministic via `sort_by`'s stability plus `me`'s segments being
-/// chained ahead of `them`'s -- since real whisper timestamps essentially
-/// never collide exactly, this only matters for the synthetic tie test
-/// below.
+/// Merges `me`'s and `them`'s already-transcribed segments into one list sorted by
+/// `start_secs` ascending (absolute offsets from the start of the file, merged across
+/// channels by timestamp). Ties (equal `start_secs`) are broken by `me` first --
+/// arbitrary, but deterministic via `sort_by`'s stability plus `me`'s segments being
+/// chained ahead of `them`'s -- since real whisper timestamps essentially never collide
+/// exactly, this only matters for the synthetic tie test below.
 fn merge_segments(me: Vec<WhisperSegment>, them: Vec<WhisperSegment>) -> Vec<TaggedSegment> {
     let mut merged: Vec<TaggedSegment> = me
         .into_iter()
@@ -659,12 +462,11 @@ fn render_transcript_body(segments: &[TaggedSegment]) -> String {
     segments.iter().map(format_line).collect::<Vec<_>>().join("\n")
 }
 
-/// The `.flac`'s two channels as independent f32 mono streams (left = Me,
-/// right = Them, Global Constraints), scaled from the encoded 16-bit PCM by
-/// 1/32768 to land back in the roughly `[-1.0, 1.0]` range the rest of the
-/// pipeline (and whisper) expects -- the inverse of `audio_sink::f32_to_i16`
-/// (which scales by `i16::MAX` = 32767 going the other way; the 32768
-/// asymmetry is standard PCM<->float convention and immaterial at 16-bit
+/// The `.flac`'s two channels as independent f32 mono streams (left = Me, right = Them,
+/// ), scaled from the encoded 16-bit PCM by 1/32768 to land back in the roughly `[-1.0,
+/// 1.0]` range the rest of the pipeline (and whisper) expects -- the inverse of
+/// `audio_sink::f32_to_i16` (which scales by `i16::MAX` = 32767 going the other way; the
+/// 32768 asymmetry is standard PCM<->float convention and immaterial at 16-bit
 /// resolution).
 fn decode_flac_stereo(path: &Path) -> Result<(Vec<f32>, Vec<f32>)> {
     let mut reader = claxon::FlacReader::open(path)
@@ -720,14 +522,13 @@ fn decode_wav_stereo(path: &Path) -> Result<(Vec<f32>, Vec<f32>)> {
     Ok((me, them))
 }
 
-/// Decodes an `.m4a` (stage-0.7 format change) into independent f32 mono
-/// streams the same way [`decode_flac_stereo`]/[`decode_wav_stereo`] do.
-/// This codebase has no in-process AAC decoder (see `aac.rs`'s module docs
-/// for why encode/decode both shell out to `afconvert`), so this decodes
-/// the whole file to a scratch WAV first via
-/// [`crate::aac::decode_m4a_to_wav`], then reuses [`decode_wav_stereo`] on
-/// that. The scratch file is a `tempfile::NamedTempFile`, cleaned up
-/// automatically once this function returns.
+/// Decodes an `.m4a` into independent f32 mono streams the same way
+/// [`decode_flac_stereo`]/[`decode_wav_stereo`] do. This codebase has no in-process AAC
+/// decoder (see `aac.rs`'s module docs for why encode/decode both shell out to
+/// `afconvert`), so this decodes the whole file to a scratch WAV first via
+/// [`crate::aac::decode_m4a_to_wav`], then reuses [`decode_wav_stereo`] on that. The
+/// scratch file is a `tempfile::NamedTempFile`, cleaned up automatically once this
+/// function returns.
 fn decode_aac_stereo(path: &Path) -> Result<(Vec<f32>, Vec<f32>)> {
     let scratch = tempfile::Builder::new()
         .suffix(".wav")
@@ -738,13 +539,12 @@ fn decode_aac_stereo(path: &Path) -> Result<(Vec<f32>, Vec<f32>)> {
     decode_wav_stereo(scratch.path())
 }
 
-/// Decodes whichever audio file `path` actually is, dispatching on its
-/// extension: `.wav` via [`decode_wav_stereo`] (this also covers
-/// `resolve_audio_path`'s `.recording.wav` last resort -- `Path::extension`
-/// only looks at the part after the LAST dot, so it reads as `"wav"` too,
-/// and it's the exact same stereo PCM format `AudioSink` always writes),
-/// `.m4a` (stage-0.7 format change) via [`decode_aac_stereo`], anything else
-/// (in practice always `.flac`) via [`decode_flac_stereo`].
+/// Decodes whichever audio file `path` actually is, dispatching on its extension: `.wav`
+/// via [`decode_wav_stereo`] (this also covers `resolve_audio_path`'s `.recording.wav`
+/// last resort -- `Path::extension` only looks at the part after the LAST dot, so it
+/// reads as `"wav"` too, and it's the exact same stereo PCM format `AudioSink` always
+/// writes), `.m4a` via [`decode_aac_stereo`], anything else (in practice always `.flac`)
+/// via [`decode_flac_stereo`].
 fn decode_audio_stereo(path: &Path) -> Result<(Vec<f32>, Vec<f32>)> {
     match path.extension().and_then(|e| e.to_str()) {
         Some("wav") => decode_wav_stereo(path),
@@ -753,37 +553,29 @@ fn decode_audio_stereo(path: &Path) -> Result<(Vec<f32>, Vec<f32>)> {
     }
 }
 
-/// Resolves which audio file to use for `md_path`: prefer the `.flac`
-/// sibling, then the `.m4a` sibling (stage-0.7 format change -- both are
-/// "real", fully-encoded formats; `.flac` is preferred when somehow both
-/// exist, e.g. a stale cross-format leftover that `AudioSink::finish`
-/// failed to clean up -- see that method's docs -- since it's the richer,
-/// lossless one), falling back to the `.wav` sibling if the encode step
-/// failed and `AudioSink::finish` kept the wav instead of deleting it (see
-/// that method's docs -- losing the recorded audio entirely would be worse
-/// than leaving the bigger file around, but it means a re-transcribe must
-/// still be able to find it), and as a LAST resort the dedicated
-/// `.recording.wav` working file a CONTINUED recording writes to while it's
-/// live (see `audio_sink::recording_wav_path_for`'s docs -- never the
-/// canonical `.wav` while a continuation is still in progress or
-/// mid-encode). `None` if none of the four exist, e.g. `keep_audio` was off
-/// when the session was recorded.
-///
-/// This third fallback (Important fix-review finding, wave 3) is what makes
-/// a crashed continuation's captured audio recoverable at all: without it,
-/// that file is invisible to both playback and re-transcribe, and a LATER
-/// continuation would silently prefill from the stale pre-crash audio
-/// instead (see `audio_sink`'s crash-safety docs). It's never actually
-/// reachable for a session that's currently recording or finalizing --
-/// `check_not_active` (retranscribe) and the `finalizing` gate
-/// (`sessions::read_session_at`) both reject those BEFORE this function is
-/// ever called, independent of whatever it would resolve to.
-///
-/// `pub(crate)` (Task 4, stage-0.7): `sessions::read_session_at` reuses this
-/// exact resolution to fill `SessionDataOut::audio_path` for the frontend
-/// player, so playback and re-transcribe always agree on which file (if
-/// any) counts as "this session's audio" -- one definition, not two that
-/// could drift apart.
+/// Resolves which audio file to use for `md_path`: prefer the `.flac` sibling, then the
+/// `.m4a` sibling (-- both are "real", fully-encoded formats; `.flac` is preferred when
+/// somehow both exist, e.g. a stale cross-format leftover that `AudioSink::finish`
+/// failed to clean up -- see that method's docs -- since it's the richer, lossless one),
+/// falling back to the `.wav` sibling if the encode step failed and `AudioSink::finish`
+/// kept the wav instead of deleting it (see that method's docs -- losing the recorded
+/// audio entirely would be worse than leaving the bigger file around, but it means a
+/// re-transcribe must still be able to find it), and as a LAST resort the dedicated
+/// `.recording.wav` working file a CONTINUED recording writes to while it's live (see
+/// `audio_sink::recording_wav_path_for`'s docs -- never the canonical `.wav` while a
+/// continuation is still in progress or mid-encode). `None` if none of the four exist,
+/// e.g. `keep_audio` was off when the session was recorded. This third fallback is what
+/// makes a crashed continuation's captured audio recoverable at all: without it, that
+/// file is invisible to both playback and re-transcribe, and a LATER continuation would
+/// silently prefill from the stale pre-crash audio instead (see `audio_sink`'s
+/// crash-safety docs). It's never actually reachable for a session that's currently
+/// recording or finalizing -- `check_not_active` (retranscribe) and the `finalizing`
+/// gate (`sessions::read_session_at`) both reject those BEFORE this function is ever
+/// called, independent of whatever it would resolve to. `pub(crate)`:
+/// `sessions::read_session_at` reuses this exact resolution to fill
+/// `SessionDataOut::audio_path` for the frontend player, so playback and re-transcribe
+/// always agree on which file (if any) counts as "this session's audio" -- one
+/// definition, not two that could drift apart.
 pub(crate) fn resolve_audio_path(md_path: &Path) -> Option<PathBuf> {
     let flac_path = audio_path_for(md_path);
     if flac_path.is_file() {
@@ -804,10 +596,9 @@ pub(crate) fn resolve_audio_path(md_path: &Path) -> Option<PathBuf> {
     None
 }
 
-/// `id`'s path on disk if the registry knows about it and it's a `File`
-/// layout (every whisper entry always is -- see `models::REGISTRY`).
-/// Doesn't check existence; callers pair this with `Path::is_file` (see
-/// `check_model_ready`). Stage 0.8: `id` is whichever model
+/// `id`'s path on disk if the registry knows about it and it's a `File` layout (every
+/// whisper entry always is -- see `models::REGISTRY`). Doesn't check existence; callers
+/// pair this with `Path::is_file` (see `check_model_ready`). `id` is whichever model
 /// `Config::retranscribe_model` currently names, not a fixed constant.
 fn whisper_model_path(id: &str) -> Option<PathBuf> {
     let spec = models::find(id)?;
@@ -817,15 +608,14 @@ fn whisper_model_path(id: &str) -> Option<PathBuf> {
     }
 }
 
-/// Whether re-transcribing `md_path` should be rejected because it's busy:
-/// either the session currently recording (single-writer rule), or the
-/// session currently finalizing (Important fix-review finding -- the window
-/// after `stop_recording` has removed it from `AppState`'s `recording` but
-/// before `session.stop()`'s final save + audio encode has actually
-/// returned; see `AppState`'s `finalizing` field doc comment). Each busy
-/// state gets its own user-facing message, since they call for different
-/// actions ("stop it" vs. "wait a moment"). Pure and testable without a live
-/// `AppState`, mirroring `lib.rs`'s `rejects_recording_into_active_path`.
+/// Whether re-transcribing `md_path` should be rejected because it's busy: either the
+/// session currently recording (single-writer rule), or the session currently finalizing
+/// (-- the window after `stop_recording` has removed it from `AppState`'s `recording`
+/// but before `session.stop`'s final save + audio encode has actually returned; see
+/// `AppState`'s `finalizing` field doc comment). Each busy state gets its own
+/// user-facing message, since they call for different actions ("stop it" vs. "wait a
+/// moment"). Pure and testable without a live `AppState`, mirroring `lib.rs`'s
+/// `rejects_recording_into_active_path`.
 fn check_not_active(
     md_path: &Path,
     active: Option<&Path>,
@@ -841,16 +631,15 @@ fn check_not_active(
 }
 
 /// Whether re-transcribing `md_path` (given its EXISTING transcript text and
-/// `audio_from_secs` field, both already read) can safely combine that text
-/// with whisper's fresh output rather than blowing it away (Critical
-/// fix-review finding, stage 0.9 -- see `simstim_transcript::Transcript::
-/// set_audio_from_secs`'s docs and `sessions::rewrite_transcript_at`, which
-/// does the actual combining at write time). `None`/`Some(0)` always pass --
-/// nothing to split, a full replace is exactly today's behavior. A cheap
-/// up-front peek mirroring `check_audio_present`/`check_model_ready`: the
-/// authoritative check is `rewrite_transcript_at`'s own (re-read fresh right
-/// before the write, since a whisper pass can take minutes), but rejecting
-/// here first avoids running that whole pass only to refuse at the very end.
+/// `audio_from_secs` field, both already read) can safely combine that text with
+/// whisper's fresh output rather than blowing it away (-- see
+/// `simstim_transcript::Transcript:: set_audio_from_secs`'s docs and
+/// `sessions::rewrite_transcript_at`, which does the actual combining at write time).
+/// `None`/`Some(0)` always pass -- nothing to split, a full replace is exactly today's
+/// behavior. A cheap up-front peek mirroring `check_audio_present`/`check_model_ready`:
+/// the authoritative check is `rewrite_transcript_at`'s own (re-read fresh right before
+/// the write, since a whisper pass can take minutes), but rejecting here first avoids
+/// running that whole pass only to refuse at the very end.
 fn check_transcript_splittable(existing_transcript: &str, audio_from_secs: Option<u64>) -> Result<(), String> {
     let Some(audio_from_secs) = audio_from_secs else {
         return Ok(());
@@ -887,16 +676,8 @@ fn check_audio_present(audio_path: Option<&Path>) -> Result<(), String> {
     }
 }
 
-/// Whether the selected re-transcribe model is still offered at all (stage
-/// 0.8.x curation): rejects even a config that names a retired model (e.g. a
-/// config that predates the owner curating the offered lineup down to turbo +
-/// large-v3), with the same "no longer offered" message
-/// `set_retranscribe_model` (lib.rs) gives -- reusing `models::validate_not_
-/// retired` is what makes this "the same rejection path" rather than a
-/// second, possibly-diverging one. `spec` is `None` when the config names an
-/// id the registry doesn't recognize at all (not the retired case); that's
-/// left to `check_model_ready`'s own "isn't downloaded" rejection instead of
-/// being treated as retired.
+/// Reject retired models through the same validation used by model selection. Unknown
+/// IDs are handled by the readiness check.
 fn check_model_not_retired(spec: Option<&models::ModelSpec>) -> Result<(), String> {
     match spec {
         Some(spec) => models::validate_not_retired(spec),
@@ -904,13 +685,8 @@ fn check_model_not_retired(spec: Option<&models::ModelSpec>) -> Result<(), Strin
     }
 }
 
-/// Whether the selected re-transcribe model is downloaded, given the path
-/// `whisper_model_path` resolved (`None` if the registry entry is somehow
-/// missing/misshapen). Stage 0.8: the rejection names `model_name` (the
-/// selected model's display name, not its internal id) so the message stays
-/// useful now that more than one whisper model can be selected -- per the
-/// Global Constraints, `retranscribe_session`'s missing-model message must
-/// name the selected model.
+/// Check that the selected model exists. Error messages use its display name rather than
+/// an internal ID.
 fn check_model_ready(model_path: Option<&Path>, model_name: &str) -> Result<(), String> {
     match model_path {
         Some(p) if p.is_file() => Ok(()),
@@ -950,29 +726,10 @@ fn finalize_transcript(
     sessions::rewrite_transcript_at(md_path, &body, asr_id)
 }
 
-/// The re-transcribe pipeline itself: decode `audio_path` (the session's
-/// `.flac`, or its `.wav` fallback -- see [`resolve_audio_path`]),
-/// transcribe each channel with a freshly-loaded whisper model at
-/// `model_path`, merge, and hand off to [`finalize_transcript`] for the
-/// empty-result guard and the actual write. Deliberately free of any Tauri
-/// type (`AppHandle`/`State`) so it can run against a plain fixture
-/// directly -- including the brief's manual, non-automated end-to-end
-/// check with a real model and a synthetic flac.
-///
-/// `before_write` runs immediately before the final write (single-writer
-/// discipline, see the module docs): return `Err` from it to abort without
-/// touching the file. `on_progress` receives `(phase, channel, message)`,
-/// the same fields as the `retranscribe-progress` event; it must be `Fn +
-/// Clone + Send + 'static` because `WhisperEngine::transcribe`'s own
-/// progress callback requires `'static` (see that module's docs) -- it's
-/// cloned once per channel to feed each transcription's own callback.
-///
-/// Deliberately does NOT emit the `"done"` phase itself (stage 0.9 change):
-/// `run_job`, the caller, still has the delete-after-success step to run
-/// (Global Constraints: "the audio file is deleted and the 'done' progress
-/// event still fires afterwards") once this returns `Ok`, so `"done"` is
-/// `run_job`'s responsibility, emitted once that step has also had its
-/// chance to run.
+/// Decode retained audio, extract speech and transcribe both channels, then finalize the
+/// merged text. Reject empty output. Run before_write immediately before saving to
+/// recheck file safety. Keep this pipeline independent of Tauri for direct fixture
+/// tests.
 fn run_retranscribe_pipeline(
     md_path: &Path,
     audio_path: &Path,
@@ -1023,16 +780,9 @@ fn run_retranscribe_pipeline(
     Ok(())
 }
 
-/// Actually runs one re-transcribe job (revalidation, whisper pipeline,
-/// delete-after, progress events), then unconditionally advances the FIFO
-/// queue -- shared by every path a job can start from: the command below
-/// running immediately (`EnqueueOutcome::StartNow`), the auto-trigger
-/// running immediately, and `advance_queue` starting whichever path was
-/// dequeued next. Free of any `State<'_, ...>` (only an owned `AppHandle<R>`)
-/// so it can be handed to `tauri::async_runtime::spawn` for a detached
-/// continuation job, not just awaited in place. Generic over `R:
-/// tauri::Runtime` (see `emit_progress`'s doc comment) so the Critical
-/// fix-review tests below can drive it against `mock_app()`.
+/// Run the blocking worker and advance the queue after completion. Spawn the
+/// continuation so the queue can proceed independently. A generic runtime supports
+/// mock-app tests.
 async fn run_job<R: tauri::Runtime>(
     app: AppHandle<R>,
     path: String,
@@ -1040,14 +790,13 @@ async fn run_job<R: tauri::Runtime>(
     asr_id: String,
     delete_audio_after: bool,
 ) -> Result<(), String> {
-    // Critical fix-review finding, stage 0.9: re-validate immediately
-    // before doing any decode/transcribe work -- whether this job started
-    // right away or spent time sitting in the queue -- rather than trusting
-    // whatever `retranscribe_session`/`maybe_auto_retranscribe` resolved at
-    // accept time. See `revalidate_before_run`'s doc comment for the
-    // corruption this closes off. A failure here reports through the usual
-    // "error" phase and drops the job -- the pipeline is never reached, so
-    // nothing is ever written or deleted for a job that fails this check.
+    // re-validate immediately before doing any decode/transcribe work -- whether this
+    // job started right away or spent time sitting in the queue -- rather than trusting
+    // whatever `retranscribe_session`/`maybe_auto_retranscribe` resolved at accept time.
+    // See `revalidate_before_run`'s doc comment for the corruption this closes off. A
+    // failure here reports through the usual "error" phase and drops the job -- the
+    // pipeline is never reached, so nothing is ever written or deleted for a job that
+    // fails this check.
     let file_job = crate::session_files::process(&md_path);
     let _file_job = match file_job {
         Ok(lease) => lease,
@@ -1144,16 +893,8 @@ async fn run_job<R: tauri::Runtime>(
         }
     };
 
-    // Important fix-review finding: a delete-after failure must be routed
-    // through the "error" phase (which the frontend's awaited command
-    // promise surfaces as a rejection, shown as `retranscribeError`), not
-    // attached to "done"'s `message` -- `describeRetranscribeProgress`
-    // (apps/desktop/src/lib/retranscribeStatus.ts) never renders `"done"`'s
-    // message, and `App.tsx` clears its live status text on both "done" and
-    // "error" without ever displaying either's text, so a message
-    // piggy-backed on "done" would never reach the owner. The transcript
-    // itself DID succeed here, so the message says that plainly rather than
-    // reading like the whole job failed (`maybe_delete_audio`'s wording).
+    // Report audio-deletion failures through error, not done: the UI does not render a
+    // done message. State explicitly that the transcript was saved successfully.
     let final_result: Result<(), String> = match result {
         Ok(()) => match maybe_delete_audio(&audio_path_for_delete, delete_audio_after, true) {
             Some(delete_error) => {
@@ -1174,9 +915,9 @@ async fn run_job<R: tauri::Runtime>(
 
     advance_queue(app.clone());
 
-    // A successful pass rewrote the transcript, which makes any existing
-    // summary stale: re-run the auto-enhance if the owner opted in (the
-    // queue no longer involves this path here, so it actually fires).
+    // A successful pass rewrote the transcript, which makes any existing summary stale:
+    // re-run the auto-enhance if the user opted in (the queue no longer involves this
+    // path here, so it actually fires).
     if final_result.is_ok() {
         crate::enhance::maybe_auto_enhance(app.clone(), path.clone());
     }
@@ -1201,28 +942,21 @@ pub async fn retranscribe_session(
     let audio_path = resolve_audio_path(&md_path);
     check_audio_present(audio_path.as_deref())?;
 
-    // Critical fix-review finding, stage 0.9: reject up front if this
-    // session's existing transcript can't be safely split against its
-    // `audio_from` marker (see `check_transcript_splittable`'s docs) --
-    // manual and auto behave identically here, since both eventually flow
-    // through `revalidate_before_run`'s own (authoritative) copy of this
-    // same check; this is just the same early-exit courtesy every other
-    // check here already gives.
+    // reject up front if this session's existing transcript can't be safely split
+    // against its `audio_from` marker (see `check_transcript_splittable`'s docs) --
+    // manual and auto behave identically here, since both eventually flow through
+    // `revalidate_before_run`'s own (authoritative) copy of this same check; this is
+    // just the same early-exit courtesy every other check here already gives.
     let existing = simstim_transcript::parse_session(&md_path).map_err(|e| e.to_string())?;
     let meta = simstim_transcript::parse_meta(&md_path).map_err(|e| e.to_string())?;
     check_transcript_splittable(&existing.transcript, meta.audio_from_secs)?;
 
-    // Stage 0.8: the model to use is whichever the owner has selected, not a
-    // fixed constant. Falls back to the raw id for the rejection message if
-    // the registry entry is somehow missing (mirrors `start_recording`'s own
-    // fallback for `active_model` in lib.rs).
+    // the model to use is whichever the user has selected, not a fixed constant. Falls
+    // back to the raw id for the rejection message if the registry entry is somehow
+    // missing (mirrors `start_recording`'s own fallback for `active_model` in lib.rs).
     let cfg = Config::load();
     let selected_spec = models::find(&cfg.retranscribe_model);
-    // Stage 0.8.x curation: reject before even checking download status --
-    // a retired model must never run again just because a stale config still
-    // names it (per the brief, the owner's current config already points at
-    // the still-valid `whisper-large-v3`, but this guards any config that
-    // doesn't).
+    // Reject retired model IDs even when a stale configuration still names one.
     check_model_not_retired(selected_spec)?;
     let model_name = selected_spec
         .map(|spec| spec.name)
@@ -1236,16 +970,8 @@ pub async fn retranscribe_session(
     let asr_id = cfg.retranscribe_model.clone();
     let delete_audio_after = cfg.delete_audio_after_retranscribe;
 
-    // Stage 0.9: the old single-job rejection is now a FIFO queue (module
-    // docs) -- a second call no longer bounces off "another session is
-    // already being re-transcribed"; it queues, and this call simply awaits
-    // its OWN job's result once its turn comes.
-    // Important fix-review finding, stage 0.9: `job` (with its `waiter`
-    // channel already wired up) is built BEFORE calling `try_enqueue` so
-    // enqueue+store happen atomically, under one lock -- see that function's
-    // own doc comment for the wedged-queue race this closes. `md_path`/
-    // `asr_id` are cloned so the originals stay available for the `StartNow`
-    // branch, which needs them regardless of whether `job` got stored.
+    // Create the job and waiter before enqueueing. Store both atomically; a queued
+    // manual request awaits its own result.
     let (tx, rx) = oneshot::channel();
     let job = QueuedJob {
         md_path: md_path.clone(),
@@ -1348,9 +1074,9 @@ mod tests {
             let line = format_line(&TaggedSegment {
                 speaker: Speaker::Them,
                 start_secs: 15.2,
-                text: "hello pavel".to_string(),
+                text: "hello alex".to_string(),
             });
-            assert_eq!(line, "[00:00:15] Them: hello pavel");
+            assert_eq!(line, "[00:00:15] Them: hello alex");
         }
 
         #[test]
@@ -1385,11 +1111,7 @@ mod tests {
             assert!(check_not_active(p, Some(Path::new("/tmp/other.md")), None).is_ok());
         }
 
-        /// Important fix-review finding regression test: a session in the
-        /// stop-to-encode window (`AppState.finalizing`) must also reject
-        /// re-transcribe, with a message distinct from the "currently
-        /// recording" one -- "stop it" doesn't apply since it's already
-        /// stopped, just not done saving yet.
+        /// Finalizing sessions reject re-transcription with a saving-specific message.
         #[test]
         fn check_not_active_rejects_a_finalizing_session_with_a_distinct_message() {
             let p = Path::new("/tmp/call.md");
@@ -1430,12 +1152,8 @@ mod tests {
             assert!(check_model_not_retired(None).is_ok());
         }
 
-        /// Stage-0.8.x curation: the core regression this task guards against
-        /// -- a config still pointing at one of the two curated-out whisper
-        /// entries must be rejected with a message telling the user to pick a
-        /// model in Settings, the same "no longer offered" message
-        /// `set_retranscribe_model` gives (this reuses `models::validate_
-        /// not_retired` directly, so it's provably the same rejection path).
+        /// A stale retired model selection must fail with the same error as model
+        /// selection in Settings.
         #[test]
         fn check_model_not_retired_rejects_a_retired_model_with_the_pick_in_settings_message() {
             let err = check_model_not_retired(models::find("whisper-large-v3-q5")).unwrap_err();
@@ -1455,9 +1173,7 @@ mod tests {
             assert!(err.contains("downloaded"), "{err}");
         }
 
-        /// Stage-0.8 Global Constraints: the missing-model rejection must
-        /// name the selected model, not a generic phrase, now that more than
-        /// one whisper model can be selected.
+        /// Missing-model errors identify the selected model.
         #[test]
         fn check_model_ready_names_the_selected_model_when_missing() {
             let err = check_model_ready(None, "Whisper large-v3 (full)").unwrap_err();
@@ -1474,8 +1190,7 @@ mod tests {
 
     }
 
-    /// Stage-0.9: the pure FIFO queue behind [`RetranscribeState`] -- no
-    /// Mutex, no Tauri types, no async runtime needed to exercise it.
+    /// Exercise FIFO queue behavior without a runtime or model.
     mod queue {
         use super::*;
 
@@ -1487,9 +1202,9 @@ mod tests {
             assert!(q.pending.is_empty());
         }
 
-        /// The core scenario the queue exists for (Global Constraints): a
-        /// second `stop_recording`/manual click while a job is already
-        /// running must NOT be rejected -- it queues instead.
+        /// The core scenario the queue exists for: a second `stop_recording`/manual
+        /// click while a job is already running must NOT be rejected -- it queues
+        /// instead.
         #[test]
         fn enqueue_queues_behind_an_already_running_job_instead_of_rejecting() {
             let mut q = RetranscribeQueue::default();
@@ -1507,8 +1222,7 @@ mod tests {
             assert!(q.pending.is_empty(), "must not duplicate the running path into pending");
         }
 
-        /// Global Constraints: "Guard against queueing the same path
-        /// twice."
+        /// "Guard against queueing the same path twice."
         #[test]
         fn enqueue_rejects_a_duplicate_of_an_already_pending_path() {
             let mut q = RetranscribeQueue::default();
@@ -1530,11 +1244,10 @@ mod tests {
             assert_eq!(q.running, None);
         }
 
-        /// FIFO draining across multiple pending jobs: this is the same
-        /// mechanism regardless of whether the job that just finished
-        /// succeeded or failed (`finish_and_advance` doesn't take a result
-        /// at all) -- Global Constraints: "a failed job still drains the
-        /// queue".
+        /// FIFO draining across multiple pending jobs: this is the same mechanism
+        /// regardless of whether the job that just finished succeeded or failed
+        /// (`finish_and_advance` doesn't take a result at all) -- "a failed job still
+        /// drains the queue".
         #[test]
         fn finish_and_advance_drains_pending_jobs_in_fifo_order() {
             let mut q = RetranscribeQueue::default();
@@ -1566,9 +1279,8 @@ mod tests {
         }
     }
 
-    /// Important fix-review finding: `RetranscribeState::has_queued_jobs`
-    /// must cover a merely-QUEUED job too, not just one actively running --
-    /// `models::delete_model`'s guard now ORs both together.
+    /// `RetranscribeState::has_queued_jobs` must cover a merely-QUEUED job too, not just
+    /// one actively running -- `models::delete_model`'s guard now ORs both together.
     mod state_queries {
         use super::*;
 
@@ -1611,10 +1323,7 @@ mod tests {
         }
     }
 
-    /// Critical fix-review finding, stage 0.9: `revalidate_before_run` is
-    /// pure (plain `Option<&Path>` for active/finalizing, same as
-    /// `check_not_active`), so both scenarios the finding calls out are
-    /// testable directly, with no async runtime or live `AppHandle` needed.
+    /// Exercise revalidation with plain paths, without a live app or model.
     mod revalidate {
         use super::*;
         use crate::config::DEFAULT_RETRANSCRIBE_MODEL;
@@ -1634,17 +1343,11 @@ mod tests {
             }
         }
 
-        /// A minimal, valid (no `audio_from`) session fixture: `revalidate_
-        /// before_run` now reads the file at `md_path` itself too (Critical
-        /// fix-review finding, stage 0.9: the splittable-transcript check),
-        /// so every test exercising the checks past `check_audio_present`
-        /// needs a real, parseable file there, not just an untouched path.
+        /// Revalidation reads the actual note, so fixtures must contain parseable
+        /// Markdown.
         const VALID_SESSION_FIXTURE: &str = "---\ndate: 2026-06-01T09:00:00+02:00\ntitle: Keep me\nasr: parakeet-tdt-0.6b-v3\n---\n\n## Transcript\n\n[00:00:01] Me: hi\n";
 
-        /// The Critical fix-review scenario itself: a job that was queued
-        /// (or even one about to start) must be rejected if its target
-        /// session has since become active again -- e.g. the owner
-        /// continued recording into it while this job was still waiting.
+        /// Reject a queued job if its session is recording when execution begins.
         #[test]
         fn rejects_when_the_session_has_become_the_active_recording() {
             let dir = tempfile::tempdir().unwrap();
@@ -1667,11 +1370,8 @@ mod tests {
             assert!(err.contains("still being saved"), "{err}");
         }
 
-        /// The other Critical fix-review scenario: the audio a job's
-        /// accept-time snapshot pointed at is gone by the time it's actually
-        /// about to run -- e.g. an earlier job's own delete-after cleanup
-        /// already removed it. Modeled here simply as "never existed",
-        /// which `resolve_audio_path` treats identically to "removed".
+        /// Revalidate audio before running a queued job: an earlier job may have deleted
+        /// the file after this job was accepted.
         #[test]
         fn rejects_when_the_audio_has_disappeared() {
             let dir = tempfile::tempdir().unwrap();
@@ -1709,10 +1409,9 @@ mod tests {
             assert!(model_path.ends_with("ggml-large-v3-turbo-q8_0.bin"), "{}", model_path.display());
         }
 
-        /// Critical fix-review finding, stage 0.9: a session continued after
-        /// its audio was deleted (`audio_from` set) whose existing transcript
-        /// has no parseable timestamp at all must be REJECTED here -- before
-        /// the whisper pass ever runs -- rather than only failing much later
+        /// a session continued after its audio was deleted (`audio_from` set) whose
+        /// existing transcript has no parseable timestamp at all must be REJECTED here
+        /// -- before the whisper pass ever runs -- rather than only failing much later
         /// at the final write.
         #[test]
         fn rejects_when_the_existing_transcript_cannot_be_safely_split() {
@@ -1743,18 +1442,9 @@ mod tests {
         }
     }
 
-    /// Critical fix-review finding, stage 0.9: `run_job` itself must drop a
-    /// stale job (never reaching the pipeline / never writing anything) and
-    /// still drain the queue afterwards. Exercised against
-    /// `tauri::test::mock_app()` (a real `App<MockRuntime>`, not a hand
-    /// stub) via `run_job`'s `R: tauri::Runtime` generic parameter --
-    /// mirrors `lib.rs`'s own `asset_scope` tests for the same reason.
-    /// Important fix-review finding, stage 0.9: `try_enqueue` used to be two
-    /// separate lock acquisitions (enqueue-decide, then store), leaving a
-    /// gap where the running job could finish and `advance_queue` would
-    /// promote a path with no stored data yet -- wedging the queue with
-    /// `running` claimed forever. `try_enqueue` now takes the `QueuedJob` and
-    /// stores it atomically, under the SAME lock as the enqueue decision.
+    /// A stale job must leave the file untouched and advance the queue. Enqueueing its
+    /// payload atomically prevents a promoted path from getting stuck without runnable
+    /// data.
     mod atomic_enqueue {
         use super::*;
 
@@ -1811,29 +1501,13 @@ mod tests {
         }
     }
 
-    /// Important fix-review finding, stage 0.9: belt-and-suspenders on top of
-    /// the atomic-enqueue fix above -- even if a promoted path somehow still
-    /// has no stored `QueuedJob` (should never happen now, but this is the
-    /// exact failure mode the whole fix exists to close), `advance_queue`
-    /// must treat it as already finished and advance AGAIN, rather than
-    /// returning with `running` wedged on a path nothing will ever actually
-    /// start.
+    /// Skip a promoted path with no job payload and continue draining the queue.
     mod advance_queue_missing_job {
         use super::*;
         use crate::config::DEFAULT_RETRANSCRIBE_MODEL;
 
-        /// Fix-review finding: the original version of this test drove the
-        /// production `advance_queue` (which spawns `run_job` for whatever it
-        /// promotes) against a garbage fixture path with no paired audio, so
-        /// the spawned continuation failed fast in `revalidate_before_run`
-        /// and called `advance_queue` a SECOND time on its own error path --
-        /// racing that recursive call's `queue.running = None` reset against
-        /// this test's own synchronous assertion, flaky roughly 1 in 20 runs.
-        /// Testing [`dequeue_next_runnable`] directly instead of
-        /// `advance_queue` exercises the exact same promote-and-skip decision
-        /// with zero spawning and zero async continuation to race: the
-        /// assertions below run against state this function alone already
-        /// finished mutating, synchronously, before it returns.
+        /// Test the dequeue decision directly. Spawning a failing background job here
+        /// would race its recursive queue advancement against the assertion.
         #[test]
         fn skips_a_path_with_no_job_data_and_returns_the_next_real_one() {
             let app = tauri::test::mock_app();
@@ -1920,12 +1594,8 @@ mod tests {
 
         const FIXTURE: &str = "---\ndate: 2026-06-01T09:00:00+02:00\ntitle: Keep me\nasr: parakeet-tdt-0.6b-v3\n---\n\n## Transcript\n\n[00:00:01] Me: original text\n";
 
-        /// The audio-disappeared half of the Critical fix-review finding:
-        /// simulates a job reaching the front of the queue only to find its
-        /// audio already gone (e.g. removed by an earlier job's own
-        /// delete-after cleanup). `run_job` must drop it without ever
-        /// touching the transcript, and the queue must still drain (the
-        /// `running` slot clears) rather than getting stuck.
+        /// Missing audio must leave the transcript untouched and release the running
+        /// slot.
         #[test]
         fn drops_a_job_whose_audio_has_disappeared_and_still_drains_the_queue() {
             let app = tauri::test::mock_app();
@@ -2009,29 +1679,8 @@ mod tests {
             );
         }
 
-        /// Proves the queue doesn't just clear on a dropped job -- it
-        /// actually promotes whatever was queued behind it (Global
-        /// Constraints from Task 1: "a failed job still drains the queue",
-        /// now also true for a job dropped by revalidation rather than one
-        /// that ran and failed).
-        /// Fix-review finding: this test used to assert on `queue.running`
-        /// immediately after `run_job(bad_path)` returned, expecting to see
-        /// `"/tmp/next.md"` promoted into it. But `/tmp/next.md` doesn't
-        /// exist either, so the SAME `advance_queue` mechanism promotes and
-        /// spawns a continuation for it too -- one that runs concurrently
-        /// (`tauri::async_runtime::spawn`, a real background task, not
-        /// merely a not-yet-polled future on the same thread) and, once
-        /// ITS OWN revalidation fails, resets `queue.running` back to `None`
-        /// via its own `advance_queue` call. Whether that reset had already
-        /// landed by the time this test's assertion ran was a genuine
-        /// multi-threaded race (reproduced ~1 in 20 runs), not a
-        /// single-threaded scheduling question a `--test-threads=1` rerun
-        /// would have caught. Giving `"/tmp/next.md"`'s `QueuedJob` a
-        /// `waiter` and awaiting it makes the whole cascade deterministic:
-        /// by the time this test inspects anything, next.md's own
-        /// (also-doomed) continuation has definitely already finished and
-        /// reported through the channel, so every assertion below is against
-        /// fully-settled state instead of racing a concurrent mutation.
+        /// A rejected job must promote the next queued job. Await observable completion
+        /// instead of racing a transient running-slot value.
         #[test]
         fn drains_to_the_next_queued_path_after_dropping_a_stale_one() {
             let app = tauri::test::mock_app();
@@ -2096,9 +1745,9 @@ mod tests {
         }
     }
 
-    /// Stage-0.9: delete-after-success is its own small, pure decision (see
-    /// `maybe_delete_audio`'s doc comment), unit-testable with tempfile
-    /// fixtures alone -- no async runtime or whisper model involved.
+    /// delete-after-success is its own small, pure decision (see `maybe_delete_audio`'s
+    /// doc comment), unit-testable with tempfile fixtures alone -- no async runtime or
+    /// whisper model involved.
     mod delete_after {
         use super::*;
 
@@ -2124,12 +1773,11 @@ mod tests {
             assert!(audio.exists(), "delete-after is off, the file must survive");
         }
 
-        /// Global Constraints: "Any failure path... leaves the audio
-        /// untouched." Modeled here as `succeeded: false`, exactly what
-        /// `run_job` passes for every failure of `run_retranscribe_pipeline`
-        /// -- including the empty-whisper-result abort in
-        /// `finalize_transcript`, which surfaces to `run_job` the same way
-        /// any other pipeline failure does.
+        /// "Any failure path... leaves the audio untouched." Modeled here as `succeeded:
+        /// false`, exactly what `run_job` passes for every failure of
+        /// `run_retranscribe_pipeline` -- including the empty-whisper-result abort in
+        /// `finalize_transcript`, which surfaces to `run_job` the same way any other
+        /// pipeline failure does.
         #[test]
         fn leaves_the_file_when_the_pass_did_not_succeed() {
             let dir = tempfile::tempdir().unwrap();
@@ -2141,13 +1789,8 @@ mod tests {
             assert!(audio.exists(), "a failed pass must never delete the audio");
         }
 
-        /// Global Constraints: "Failure to delete is reported, not
-        /// swallowed." Important fix-review finding: the message must say
-        /// the transcript itself DID succeed (this is routed through the
-        /// "error" phase by `run_job`, which the frontend's awaited command
-        /// promise surfaces as a rejection -- wording that just said
-        /// "re-transcribe failed" would misleadingly suggest the transcript
-        /// update was lost too).
+        /// Cleanup failure must explicitly say the transcript succeeded; only audio
+        /// deletion failed.
         #[test]
         fn reports_when_the_deletion_itself_fails() {
             let dir = tempfile::tempdir().unwrap();
@@ -2159,9 +1802,8 @@ mod tests {
         }
     }
 
-    /// Stage-0.9: the auto-trigger's own pre-check decision
-    /// (`decide_auto_trigger`), pure and fully testable without a live
-    /// `AppHandle` or a real model file on disk.
+    /// the auto-trigger's own pre-check decision (`decide_auto_trigger`), pure and fully
+    /// testable without a live `AppHandle` or a real model file on disk.
     mod auto_trigger {
         use super::*;
 
@@ -2175,24 +1817,22 @@ mod tests {
             assert_eq!(decision, AutoTriggerDecision::Skip);
         }
 
-        /// Global Constraints: turning `keep_audio` off must disable auto
-        /// re-transcribe even if `auto_retranscribe` itself stayed on.
+        /// turning `keep_audio` off must disable auto re-transcribe even if
+        /// `auto_retranscribe` itself stayed on.
         #[test]
         fn skips_when_keep_audio_is_off() {
             let decision = decide_auto_trigger(true, false, true, Some(whisper_spec()), "Whisper", None);
             assert_eq!(decision, AutoTriggerDecision::Skip);
         }
 
-        /// Global Constraints: "It never triggers for a session with no
-        /// audio."
+        /// "It never triggers for a session with no audio."
         #[test]
         fn skips_when_the_session_has_no_audio() {
             let decision = decide_auto_trigger(true, true, false, Some(whisper_spec()), "Whisper", None);
             assert_eq!(decision, AutoTriggerDecision::Skip);
         }
 
-        /// Global Constraints: "a missing/retired model reports once...
-        /// and drops the job".
+        /// "a missing/retired model reports once... and drops the job".
         #[test]
         fn reports_and_drops_when_the_selected_model_is_retired() {
             let retired = models::find("whisper-large-v3-q5").expect("registered retired entry");
@@ -2270,8 +1910,8 @@ mod tests {
             assert_eq!(resolve_audio_path(&md_path), Some(dir.path().join("call.flac")));
         }
 
-        /// Stage-0.7 format change: `.m4a` is a normal, first-class encode
-        /// target now, resolved the same way `.flac` always was.
+        /// `.m4a` is a normal, first-class encode target now, resolved the same way
+        /// `.flac` always was.
         #[test]
         fn m4a_only_resolves_to_the_m4a() {
             let dir = tempfile::tempdir().unwrap();
@@ -2311,11 +1951,8 @@ mod tests {
             assert_eq!(resolve_audio_path(&md_path), Some(dir.path().join("call.m4a")));
         }
 
-        /// Important fix-review finding, wave 3: a crashed CONTINUED
-        /// recording only ever wrote to `<base>.recording.wav` (never
-        /// `wav_path_for`, see `audio_sink::recording_wav_path_for`'s
-        /// docs) -- without this last-resort fallback, that audio would be
-        /// completely invisible to playback and re-transcribe alike.
+        /// Discover a crashed continuation's recording.wav as a last-resort audio
+        /// source.
         #[test]
         fn recording_wav_only_falls_back_to_it_as_a_last_resort() {
             let dir = tempfile::tempdir().unwrap();
@@ -2429,16 +2066,15 @@ mod tests {
         }
     }
 
-    /// Round-trips a small stereo clip through a real `AudioSink` configured
-    /// for AAC (stage-0.7 format change) and this module's
-    /// `decode_aac_stereo`, mirroring `decode_flac_stereo_round_trips_known_
-    /// samples` above. AAC-LC is lossy (unlike the flac round trip, an exact
-    /// float match isn't expected), so this asserts each channel's decoded
-    /// samples track the input's shape closely rather than bit-exactly --
-    /// the exhaustive priming/length-exactness proof lives in `aac.rs`'s own
-    /// `priming_round_trip_preserves_length_and_impulse_position` test; this
-    /// one is about `decode_audio_stereo`'s dispatch and the L/R split being
-    /// correct, not a second priming measurement.
+    /// Round-trips a small stereo clip through a real `AudioSink` configured for AAC and
+    /// this module's `decode_aac_stereo`, mirroring
+    /// `decode_flac_stereo_round_trips_known_ samples` above. AAC-LC is lossy (unlike
+    /// the flac round trip, an exact float match isn't expected), so this asserts each
+    /// channel's decoded samples track the input's shape closely rather than bit-exactly
+    /// -- the exhaustive priming/length-exactness proof lives in `aac.rs`'s own
+    /// `priming_round_trip_preserves_length_and_impulse_position` test; this one is
+    /// about `decode_audio_stereo`'s dispatch and the L/R split being correct, not a
+    /// second priming measurement.
     #[test]
     fn decode_aac_stereo_round_trips_known_samples() {
         use crate::audio_sink::AudioFormat;
@@ -2546,16 +2182,15 @@ mod tests {
 
         const FIXTURE: &str = "---\ndate: 2026-06-01T09:00:00+02:00\ntitle: Keep me\nasr: parakeet-tdt-0.6b-v3\n---\n\n## Transcript\n\n[00:00:01] Me: original text\n";
 
-        /// Pipeline-level regression test for the Critical review finding:
-        /// an all-empty whisper result (both channels silent, a bad split,
-        /// a decode glitch) must NOT be treated as "successfully replace
-        /// the transcript with nothing" -- that would silently destroy the
-        /// user's only copy of it, since a re-transcribe never keeps the
-        /// previous text. This exercises the actual write seam
-        /// (`finalize_transcript`, the same function `run_retranscribe_
-        /// pipeline` calls), not just `render_transcript_body`'s pure
-        /// string formatting, so it proves the FILE ON DISK is untouched,
-        /// not merely that the empty-input string happens to be empty.
+        /// Pipeline-level regression test for the an all-empty whisper result (both
+        /// channels silent, a bad split, a decode glitch) must NOT be treated as
+        /// "successfully replace the transcript with nothing" -- that would silently
+        /// destroy the user's only copy of it, since a re-transcribe never keeps the
+        /// previous text. This exercises the actual write seam (`finalize_transcript`,
+        /// the same function `run_retranscribe_ pipeline` calls), not just
+        /// `render_transcript_body`'s pure string formatting, so it proves the FILE ON
+        /// DISK is untouched, not merely that the empty-input string happens to be
+        /// empty.
         #[test]
         fn aborts_without_writing_when_merged_is_empty() {
             let dir = tempfile::tempdir().unwrap();
@@ -2663,17 +2298,9 @@ mod tests {
             .collect()
     }
 
-    /// Manual end-to-end check (brief's requirement): NOT run in the normal
-    /// suite (`#[ignore]`, and it needs the real ~874MB whisper model on
-    /// disk, which automated tests must not depend on). Copies a real
-    /// session `.md` from `~/Desktop` into a tempdir (proving title/notes/
-    /// date/duration survive a real rewrite), synthesizes a small stereo
-    /// FLAC next to it from Parakeet's own bundled test clips (real speech
-    /// audio, just not this session's actual call -- no real audio file
-    /// existed for any session on this machine yet when this task landed,
-    /// per the brief's fallback), and runs the actual pipeline function
-    /// against the real whisper model. Run manually with:
-    /// `cargo test -p desktop --lib -- --ignored manual_e2e_retranscribe --nocapture`
+    /// Optional real-model test using the checked-in example note and bundled speech
+    /// clips. Run manually with `cargo test -p desktop --lib manual_e2e_retranscribe --
+    /// --ignored --nocapture`. It never downloads models.
     #[test]
     #[ignore = "needs the real whisper model on disk; run manually, see doc comment"]
     fn manual_e2e_retranscribe_with_real_whisper() {
@@ -2687,9 +2314,9 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let md_path = dir.path().join("2026-08-15 18-45-16 call.md");
-        std::fs::copy(
-            "/Users/pgrekovich/Desktop/2026-08-15 18-45-16 call.md",
+        std::fs::write(
             &md_path,
+            include_str!("../../../../docs/examples/2026-09-09 10-00-00 call.md"),
         )
         .unwrap();
         let before = std::fs::read_to_string(&md_path).unwrap();
@@ -2742,17 +2369,10 @@ mod tests {
         assert!(after.contains("lkfdsj afkdlsj fsd"), "notes must be preserved");
     }
 
-    /// Stage-0.7 format change: the brief's manual end-to-end requirement,
-    /// specifically for the NEW default AAC path (the test above already
-    /// covers FLAC). Self-contained (unlike the FLAC test above, doesn't
-    /// depend on a specific real file under `~/Desktop`): produces a
-    /// recording-shaped stereo WAV via a real `AudioSink` in AAC mode,
-    /// `finish()`es it to a real `.m4a`, shells out to the real
-    /// `/usr/bin/afinfo` to independently confirm the produced file is
-    /// 16 kHz AAC (not just trusting `encode_wav_to_m4a`'s own internal
-    /// verification), decodes it back, and runs it through the real whisper
-    /// model. Run manually with:
-    /// `cargo test -p desktop --lib -- --ignored manual_e2e_aac --nocapture`
+    /// Optional AAC pipeline test with synthetic audio and an existing Whisper model.
+    /// Independently verify the encoded sample rate with afinfo, decode and transcribe
+    /// the result. Run with `cargo test -p desktop --lib manual_e2e_retranscribe_aac --
+    /// --ignored --nocapture`.
     #[test]
     #[ignore = "needs the real whisper model on disk; run manually, see doc comment"]
     fn manual_e2e_aac_encode_afinfo_verify_and_retranscribe() {
@@ -2771,7 +2391,7 @@ mod tests {
                 chrono::Local.with_ymd_and_hms(2026, 8, 16, 11, 0, 0).unwrap(),
             );
             tr.set_title("AAC manual e2e".to_string());
-            tr.set_notes("stage-0.7 aac format change manual e2e check".to_string());
+            tr.set_notes("AAC pipeline example".to_string());
             tr.save(&md_path).unwrap();
         }
         let before = std::fs::read_to_string(&md_path).unwrap();
@@ -2801,10 +2421,7 @@ mod tests {
 
         let file_size_bytes = std::fs::metadata(&m4a_path).unwrap().len();
 
-        // Independent confirmation via the real system `afinfo` binary
-        // (not `encode_wav_to_m4a`'s own internal check, which already
-        // passed or `finish` would have kept the wav instead): the brief
-        // asks for this to be confirmed explicitly, not just trusted.
+        // Verify the produced file independently with the system afinfo tool.
         let afinfo_output = std::process::Command::new("/usr/bin/afinfo")
             .arg(&m4a_path)
             .output()
@@ -2837,7 +2454,7 @@ mod tests {
         assert!(after.contains("asr: whisper-large-v3-turbo-q8"));
         assert!(after.contains("title: AAC manual e2e"), "title must be preserved");
         assert!(
-            after.contains("stage-0.7 aac format change manual e2e check"),
+            after.contains("AAC pipeline example"),
             "notes must be preserved"
         );
     }

@@ -31,8 +31,9 @@ when changing persistence, capture or IPC. Never download models in tests.
 Use synthetic data. Describe manual checks and any untested hardware paths.
 
 Use conventional commits and English code, docs and UI copy. Do not add AI
-co-author trailers or em dash characters. The maintainer tests a stage on a
-real call before merging it. There is no guaranteed response time.
+co-author trailers or em dash characters. Capture and interface changes
+need maintainer testing on a real Mac before merging. There is no guaranteed
+response time.
 
 ## Building and testing
 

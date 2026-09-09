@@ -95,12 +95,10 @@ type Block =
   | { kind: "turn"; speaker: "Me" | "Them"; items: TurnItem[] };
 
 /**
- * Groups consecutive lines from one speaker into a single visual turn
- * (owner request, 2026-09-01): the transcript shows one ME/THEM label per
- * turn instead of one per ASR chunk, with the turn's first timestamp. This
- * is display-only -- the file keeps one timestamped line per chunk, and
- * each chunk stays its own seekable fragment inside the turn. A line the
- * pattern can't parse renders as-is and breaks the grouping around it.
+ * Group consecutive chunks from one speaker for display. Keep each chunk's
+ * own timestamp and seek target; the file remains one entry per chunk.
+ * Unparseable lines remain visible.
+ *
  */
 function groupIntoBlocks(lines: string[]): Block[] {
   const blocks: Block[] = [];
@@ -133,26 +131,27 @@ interface TranscriptViewProps {
   interimMe?: string;
   interimThem?: string;
   /**
-   * Click-to-seek (Task 4, stage-0.7): called with the offset (in seconds)
-   * parsed from a finalized line's `[hh:mm:ss]` timestamp when that line is
-   * clicked or activated via keyboard. Lines only become interactive
-   * (rendered as a real `<button>`, not a plain `<p>`) when this is
-   * provided -- the caller only passes it once an `<audio>` element exists
-   * to seek (i.e. the session has an audio file). A line with no
-   * recognizable timestamp (falls through `parseLine`'s regex) and the
-   * interim/draft lines below are never seekable, regardless of this prop:
-   * there is no offset to seek to for either.
-   */
+ * Click-to-seek: called with the offset (in seconds) parsed from a finalized
+ * line's `[hh:mm:ss]` timestamp when that line is clicked or activated via
+ * keyboard. Lines only become interactive (rendered as a real `<button>`,
+ * not a plain `<p>`) when this is provided -- the caller only passes it once
+ * an `<audio>` element exists to seek (i.e. the session has an audio file).
+ * A line with no recognizable timestamp (falls through `parseLine`'s regex)
+ * and the interim/draft lines below are never seekable, regardless of this
+ * prop: there is no offset to seek to for either.
+ *
+ */
   onSeek?: (offsetSecs: number) => void;
   matches?: TranscriptMatch[];
   activeMatchIndex?: number;
   /**
-   * Scroll-to-citation (stage 4.2): centers the transcript on the line
-   * nearest `timestamp` when `id` changes (the same monotonic-id recipe as
-   * `TranscriptFindRequest`). Nearest, not exact: a chat citation's second
-   * usually names a real line, but a re-transcribe between the answer and
-   * the click can shift timestamps slightly.
-   */
+ * Scroll-to-citation: centers the transcript on the line nearest `timestamp`
+ * when `id` changes (the same monotonic-id recipe as
+ * `TranscriptFindRequest`). Nearest, not exact: a chat citation's second
+ * usually names a real line, but a re-transcribe between the answer and the
+ * click can shift timestamps slightly.
+ *
+ */
   jumpRequest?: { id: number; timestamp: string } | null;
 }
 
@@ -177,13 +176,9 @@ export function nearestLineIndex(lines: string[], timestamp: string): number {
 }
 
 /**
- * One speaker turn in the Voice Memos layout (2026-09-07 HIG pass): the
- * speaker sits in a narrow left gutter, the words flow as one paragraph to
- * the right. "Them" takes the accent color, "Me" the ink, so a glance down
- * the gutter shows who talked. No clock is printed anywhere: every chunk
- * carries its timestamp as a native tooltip (owner ruling 2026-09-07, the
- * gutter clock was "ugly" both visible and on hover), and the OS delays
- * tooltips on its own so they never flicker while reading.
+ * Render each speaker turn as a paragraph with a label in the left gutter.
+ * Individual chunks keep timestamp tooltips and seek targets.
+ *
  */
 function TurnRow({
   speaker,
@@ -195,9 +190,8 @@ function TurnRow({
   children: ReactNode;
 }) {
   return (
-    // Baseline alignment: the 11.5px label and the 15px words share a
-    // baseline, which is the only way the two type sizes read as one line
-    // (a fixed top padding drifted with the fonts; owner screenshot).
+    // Align labels and transcript text by baseline so different font sizes remain
+    // aligned.
     <div className="grid grid-cols-[44px_minmax(0,1fr)] items-baseline gap-x-3">
       <div className="text-right">
         <span

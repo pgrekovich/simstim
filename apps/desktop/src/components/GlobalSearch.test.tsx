@@ -155,7 +155,7 @@ describe("GlobalSearch", () => {
   });
 });
 
-describe("GlobalSearch: ask across all notes (stage 4.2)", () => {
+describe("GlobalSearch: ask across all notes", () => {
   it("offers the ask row only with a query, and hands the question over", async () => {
     const onAskAllNotes = vi.fn();
     const onOpenChange = vi.fn();

@@ -109,10 +109,9 @@ function totalDiskUsed(list: ModelInfo[]): number {
 }
 
 /**
- * What a downloaded model is called on Storage, in the user's words: the
- * role it plays, never the engine it runs (2026-09-04 ruling: no
- * quantization suffixes anywhere on screen). Retired rows keep their own
- * self-describing name.
+ * Display the model's role in Storage; retired entries retain their
+ * descriptive names.
+ *
  */
 function storageName(model: ModelInfo): string {
   if (model.retired) return model.name;
@@ -244,7 +243,8 @@ function ModelProgress({ progress }: { progress: DownloadProgress | undefined })
 
 /**
  * The delete / "Delete N MB?" confirm control cluster a Storage row's right
- * side carries (stage 0.8 semantics, unchanged).
+ * side carries.
+ *
  */
 function ModelActions({
   model,
@@ -295,13 +295,10 @@ function ModelActions({
 }
 
 /**
- * Settings: one scrolling page (2026-09-04 product ruling; the five-page
- * rail asked a person to navigate a compiler's options). What remains is
- * what a person actually decides: how the app looks, when it offers to
- * record, whether audio is kept, which accurate model, who writes the
- * summaries and what they may touch, and what everything weighs. The
- * pipeline's automation (the accurate pass after each call) is behavior,
- * not a setting, and no longer appears here.
+ * One settings page for appearance, recording, transcription, optional AI,
+ * prompts and storage. Advanced file-only settings are documented
+ * separately.
+ *
  */
 export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: SettingsDialogProps) {
   const [config, setConfig] = useState<AppConfig | null>(null);
@@ -341,9 +338,8 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
     const [freshConfig, freshModels] = await Promise.all([getConfig(), listModels()]);
     setConfig(freshConfig);
     setModels(freshModels);
-    // Drop any armed delete confirmation (stage 0.8 security-review fix): a
-    // background refresh must not leave a row parked one click from
-    // `deleteModel` with no fresh gate.
+    // Disarm pending delete confirmation on refresh so a changed row cannot retain stale
+    // approval.
     setDeleteConfirmId(null);
     setDeleteErrors({});
     onModelsChangedRef.current?.(freshConfig, freshModels);
@@ -434,9 +430,9 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
   }
 
   /**
-   * Picks which CLI writes summaries -- and, since the one-AI-choice ruling
-   * (stage 4.2), which one answers Ask your notes / Ask this call too.
-   */
+ * Select the CLI shared by summaries and both chat views.
+ *
+ */
   async function handleSetEnhanceProvider(provider: string) {
     const previous = config?.enhance_provider;
     if (provider === previous || previous === undefined) return;
@@ -469,9 +465,9 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
         [payload.id]: mergeDownloadProgress(prev[payload.id], payload),
       }));
       if (payload.phase === "done") {
-        // Refetch before dropping the progress entry: deleting it first
-        // would leave a gap where the row briefly renders a "Download"
-        // button for an already-finished download.
+        // Refetch before dropping the progress entry: deleting it first would leave a
+        // gap where the row ly renders a "Download" button for an already-finished
+        // download.
         refresh()
           .catch(() => {})
           .finally(() => {
@@ -1013,8 +1009,10 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
               )}
             </section>
 
-            {/* Prompts: the user's own words for the assistant (2026-09-07).
-                Lives in its own component; it edits prompts.toml whole. */}
+            {/*
+ * Prompt settings edit and save prompts.toml.
+ *
+ */}
             <PromptsSettings open={isOpen} />
 
             {/* Storage: the user's own data first (kilobytes of Markdown next

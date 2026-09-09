@@ -28,8 +28,9 @@ auto_stop_after_call = false
 ```
 
 The onboarding screen shows the automatic-summary choice before the first
-recording. No CLI means no AI operation. It follows the installed CLI if
-only one is available. The old `local` provider migrates to `claude`.
+recording. Automatic summaries require an installed, authenticated helper.
+Onboarding can install an official helper and open its browser sign-in;
+see [AI setup](your-ai.md). The old `local` provider migrates to `claude`.
 
 `enhance_rename_title` only changes machine-owned titles. A title you type
 wins. `enhance_use_calendar` enables a supported Claude Code calendar lookup

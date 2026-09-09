@@ -1,25 +1,7 @@
-//! The user's own prompts: standing instructions for every summary, summary
-//! styles, and quick questions for the chat. One TOML file the user owns,
-//! `~/.config/simstim/prompts.toml`, next to `config.toml`: editable in any
-//! editor, versionable with dotfiles, and seeded with a small set of
-//! generally useful defaults the first time it is read.
-//!
-//! Vocabulary (2026-09-07 design, owner-approved):
-//! - **Summary instructions**: free text appended to every summary prompt.
-//!   They complement the built-in prompt and can never lift its rules
-//!   (language, no invented facts, the TITLE/PEOPLE output contracts).
-//! - **Summary style**: a prompt that decides HOW the note's one
-//!   `## Summary` section is written (what to extract, what shape). Picking
-//!   a style re-summarizes; the note remembers it in `summary_style:`
-//!   frontmatter so "Again" repeats it. The built-in prompt is the reserved
-//!   style `standard`, which never appears in the file.
-//! - **Quick question**: a prompt for the chat. Its answer lives in the
-//!   conversation, never in the file. `scope` says where it is offered:
-//!   the open call, the whole notes folder, or both.
-//!
-//! The UI saves the whole document at once (`save_prompts`); the backend
-//! validates it and writes atomically. A hand-edited file that fails to
-//! parse is reported as an error, never overwritten with defaults.
+//! User-editable summary instructions, summary styles and quick questions in
+//! prompts.toml beside config.toml. Summary styles control generated note text; quick
+//! questions run chat requests. Preserve valid custom entries and report malformed
+//! configuration without overwriting it.
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};

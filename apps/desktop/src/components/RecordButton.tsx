@@ -25,11 +25,10 @@ interface RecordButtonProps {
    */
   title?: string;
   /**
-   * `"default"` is the original large centered-screen pill (Stage 0.5).
-   * `"compact"` is the small header pill used by the Stage 0.6 shell
-   * (Task 5): same green/red + pulse + elapsed logic, just sized to sit
-   * inline next to the status text and gear button.
-   */
+ * Large empty-state button or compact toolbar button, sharing recording
+ * state and elapsed-time behavior.
+ *
+ */
   size?: "default" | "compact";
 }
 

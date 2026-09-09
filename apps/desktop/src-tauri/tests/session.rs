@@ -62,13 +62,8 @@ fn test_wav_path() -> std::path::PathBuf {
     simstim_engine::models_dir().join("parakeet-tdt-0.6b-v3-int8/test_wavs/en.wav")
 }
 
-// Empirical question from the task brief: is `Segment.start_sample` absolute
-// over the Vad's whole stream, or relative to the current push() call? A
-// single `Vad` lives for the whole session (one per channel), so pushing the
-// same audio through it twice and checking whether the second pass's start
-// samples continue growing past the first pass's total tells us which one it
-// is: if it were per-call/window-relative, the second pass would restart
-// near zero instead of continuing from where the first pass left off.
+// VAD segment offsets are absolute across pushes. Repeated clips must advance rather
+// than restart timestamps.
 #[test]
 fn vad_start_sample_is_absolute_over_the_whole_stream() {
     if crate::skip_without_real_models() {
@@ -148,11 +143,10 @@ fn session_transcribes_fake_channel_stream() {
     );
 }
 
-// Global Constraints: `keep_audio: true` (the config default) means every
-// recording gets a stereo audio file next to the transcript. This wires
-// `Session::start`'s `keep_audio` flag through to a real `AudioSink` and
-// checks the end-to-end result -- the sink's own WAV/FLAC/sync-rule behavior
-// is unit-tested in `audio_sink.rs` directly.
+// `keep_audio: true` (the config default) means every recording gets a stereo audio file
+// next to the transcript. This wires `Session::start`'s `keep_audio` flag through to a
+// real `AudioSink` and checks the end-to-end result -- the sink's own WAV/FLAC/sync-rule
+// behavior is unit-tested in `audio_sink.rs` directly.
 #[test]
 fn keep_audio_true_produces_a_flac_file_next_to_the_transcript() {
     if crate::skip_without_real_models() {
@@ -194,7 +188,7 @@ fn keep_audio_true_produces_a_flac_file_next_to_the_transcript() {
     );
 }
 
-// Global Constraints: `keep_audio: false` writes no audio file at all.
+// `keep_audio: false` writes no audio file at all.
 #[test]
 fn keep_audio_false_writes_no_audio_file() {
     if crate::skip_without_real_models() {
@@ -523,13 +517,9 @@ fn continuing_a_session_with_no_prior_transcript_starts_offsets_at_zero() {
     assert!(md.contains("Them:"), "expected a transcribed line:\n{md}");
 }
 
-// Fix-review Critical finding: `previous_duration_secs` was computed but
-// never applied to the seeded `Transcript` before the worker's up-front save
-// (or any mid-recording save) -- only the final, clean-stop save ever set
-// duration_secs. So continuing a session with `duration: 5m` on disk wiped
-// that line from the very first save, and a crash (or force-quit) before a
-// clean stop lost it permanently. This asserts the fix by reading the file
-// WHILE the worker is still running, before ever calling `stop()`.
+// Continuation must retain the previous duration in every intermediate save, including
+// before the worker stops. Read the live file to verify crash recovery preserves that
+// metadata.
 #[test]
 fn continuing_a_session_does_not_wipe_its_existing_duration_before_the_final_save() {
     if crate::skip_without_real_models() {
@@ -590,14 +580,8 @@ fn continuing_a_session_does_not_wipe_its_existing_duration_before_the_final_sav
     );
 }
 
-// Critical fix-review finding: continuing a session used to silently
-// truncate/overwrite its existing audio (`AudioSink::new` always starts a
-// fresh, empty wav) while the transcript's new lines were correctly offset
-// past the old content -- desyncing every existing seek offset and, on a
-// later re-transcribe, replacing the whole transcript with one decoded from
-// only the new (truncated) audio. These three tests exercise the fix through
-// a real `Session::start` continuation, the same way the transcript-side
-// continuation tests above do.
+// Verify continuation through the real session worker: retained audio and transcript
+// offsets must both survive.
 mod continuing_audio {
     use super::*;
     use std::sync::{Arc, Mutex};
@@ -725,11 +709,8 @@ mod continuing_audio {
             "old audio must survive byte-exact at the start of the continued recording's audio"
         );
 
-        // Important fix-review finding, wave 2 (1b): the old audio (4
-        // frames) is far shorter than the previous transcript's own last
-        // line offset (1.0s = 16000 frames), so the reconciled target base
-        // must pad silence from the end of the old audio up to exactly that
-        // point -- frame-exact, not just "eventually more audio follows".
+        // When old audio is shorter than the transcript timeline, pad to the exact
+        // shared base frame.
         let target_frame = (base_offset_secs * 16_000.0).round() as usize;
         let old_frames = old_me.len();
         assert!(
@@ -763,11 +744,8 @@ mod continuing_audio {
         }
         let dir = tempfile::tempdir().unwrap();
         let out = dir.path().join("call.md");
-        // Deliberately no audio file at all -- the "keep_audio was off, now
-        // on" scenario -- with a last transcript line at 00:00:02 driving
-        // the silence-prefill length (Important fix-review finding, wave 2:
-        // this used to be driven by the unrelated `duration:` frontmatter
-        // instead, which could disagree with the transcript's own last line).
+        // Without retained audio, the last transcript timestamp determines the silence
+        // prefix.
         std::fs::write(&out, existing_md_with_last_line("duration: 1m\n", "[00:00:02] Me: hi\n"))
             .unwrap();
 
@@ -814,12 +792,8 @@ mod continuing_audio {
         );
     }
 
-    /// Important fix-review finding, wave 2 (1b), the other half of the
-    /// reconciliation: when the existing audio is LONGER than the previous
-    /// transcript's own last line offset (real trailing silence/audio after
-    /// the last spoken line, before the previous Stop), the audio's own
-    /// length must win -- new lines must land after the audio ends, never
-    /// overlapping it.
+    /// When old audio extends past the last spoken line, its full length determines the
+    /// new base offset.
     #[test]
     fn continuing_when_audio_is_longer_than_the_last_line_puts_new_lines_after_the_audio_end() {
         if crate::skip_without_real_models() {
@@ -886,12 +860,7 @@ mod continuing_audio {
         );
     }
 
-    /// Important fix-review finding, wave 2 (1a): when the ONLY existing
-    /// audio is the retained `.wav` fallback (a previous flac encode failed
-    /// and `AudioSink::finish` kept the wav under its canonical name),
-    /// continuing must not truncate that exact file while trying to prefill
-    /// from it. Exercises the bug through a real `Session::start`
-    /// continuation, not just the `AudioSink` unit test.
+    /// Continuing from a fallback WAV must not truncate it while prefilling.
     #[test]
     fn continuing_from_a_retained_wav_fallback_appends_new_audio_after_the_old() {
         if crate::skip_without_real_models() {
@@ -971,15 +940,8 @@ mod continuing_audio {
         );
     }
 
-    /// Important fix-review finding, wave 4: `resolve_audio_path`'s
-    /// last-resort fallback (wave 3) to a session's `.recording.wav` can
-    /// hand `session.rs` back the EXACT path `AudioSink::new_continuing`
-    /// is about to create (and truncate) as this new recording's own
-    /// working file -- the working-path self-collision `AudioSink` now
-    /// detects and works around by moving the crashed file aside first.
-    /// Exercises this through the real production path (`Session::start`,
-    /// which resolves the audio via `resolve_audio_path` internally), not
-    /// just the `AudioSink` unit tests that call `new_continuing` directly.
+    /// The session resolver can return a crashed recording.wav as its source. Move it
+    /// aside before creating the new working WAV, preserving its samples.
     #[test]
     fn continuing_after_a_crashed_prior_continuation_recovers_its_audio() {
         if crate::skip_without_real_models() {
@@ -1111,9 +1073,8 @@ mod continuing_audio {
             after, corrupt_bytes,
             "the original (corrupt) audio file must be left byte-exact untouched"
         );
-        // The transcript must still have recorded despite audio being
-        // disabled for this recording (Global Constraints: a sink problem
-        // must not kill the recording).
+        // The transcript must still have recorded despite audio being disabled for this
+        // recording (a sink problem must not kill the recording).
         let md = std::fs::read_to_string(&path).unwrap();
         assert!(
             md.contains("Them:"),

@@ -127,31 +127,9 @@ impl Vad {
         self.vad.detected()
     }
 
-    /// Discards the detector's in-flight (not-yet-finalized) segment state
-    /// and zeros its internal absolute-sample counter (verified empirically:
-    /// see the stage-0.6 task-3 report's MAX_SPEECH investigation).
-    ///
-    /// Used only by session.rs's max-speech forced-finalize backstop: once a
-    /// channel's own accumulated buffer has force-finalized ~10s of
-    /// continuous speech as a line, the underlying detector's notion of that
-    /// segment is redundant (and would otherwise eventually finalize the
-    /// *entire* overlong run itself, duplicating audio already emitted).
-    /// Resetting here throws that away and lets the detector start tracking
-    /// a fresh segment from this point, for the speech that (as far as the
-    /// caller can tell) is still ongoing. Callers must track their own
-    /// cumulative sample offset from here on, since any `Segment` this VAD
-    /// produces after a reset reports `start_sample` relative to zero again,
-    /// not to the stream as a whole.
-    ///
-    /// Also drops `pending`: up to one window's worth (< 512 samples) of raw
-    /// audio that arrived but hadn't yet been batched up to feed the
-    /// detector. Left alone, those samples would get fed to the *freshly
-    /// reset* detector on the next `push`, i.e. re-fed into a new segment
-    /// after already being included in whatever the caller just
-    /// force-finalized from its own buffer -- a small window of
-    /// double-transcribed audio. Dropping them instead means a sub-32ms gap
-    /// of audio is silently skipped rather than duplicated, which is the
-    /// safer failure mode of the two.
+    /// Reset both pending VAD speech and its absolute sample counter after forced
+    /// finalization. The session tracks its own base offset so later timestamps still
+    /// advance correctly.
     pub fn reset(&mut self) {
         self.vad.reset();
         self.pending.clear();

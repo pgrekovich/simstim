@@ -1,67 +1,9 @@
-//! Wires capture -> VAD -> ASR -> transcript into one recording session.
-//!
-//! A single worker thread owns the `Engine`, both per-channel `Vad`s, and the
-//! `Transcript`. It receives `Chunk`s over an mpsc channel, feeds each one
-//! into the matching channel's VAD, transcribes any finalized speech
-//! segments, and appends them to the transcript, saving to disk after every
-//! line so the file is crash-safe.
-//!
-//! Single-writer routing: while a session is active, this worker is the ONLY
-//! writer of `out_path` (see the stage-0.6 plan's single-writer rule). UI
-//! edits to the active session's title/notes never touch the file directly;
-//! they go through [`PendingEdits`], a `Mutex` shared between the
-//! `update_active_session` Tauri command and this worker. The worker applies
-//! any pending edit at the top of every loop tick (at least every 200ms,
-//! since `recv_timeout` wakes that often even with no audio), so edits ride
-//! along with the next natural per-segment save; if a tick applies an edit
-//! but no segment save happens in it, the worker does a save of its own,
-//! throttled to at most once a second (UI notes edits are already debounced
-//! 500ms, so this is a worst-case bound, not the common path).
-//!
-//! ## Interim ("draft") decoding
-//!
-//! Per channel, [`ChannelInterim`] accumulates raw samples of the current
-//! in-progress (not-yet-finalized) utterance while [`Vad::speech_active`]
-//! reports speech, on the same worker thread, interleaved with normal chunk
-//! handling right after it. `should_decode_interim` is the pure gating rule
-//! (Global Constraints): only while speech is active, at most once every
-//! 400ms per channel, and only if the buffer actually grew since the last
-//! decode -- skip-if-busy is inherent to there being a single worker thread
-//! and isn't part of that decision. A decode only ever transcribes the last
-//! [`INTERIM_DECODE_CAP_SAMPLES`] of the buffer (perf guard: measured ~690ms
-//! for a full 8s decode on this machine with the real model, well under the
-//! ~1.5s budget, so the 8s cap stands -- see the task-3 report for the full
-//! measurement). Interim text is never written to disk; it only reaches the
-//! UI via `on_interim`. When a segment finalizes on a channel (naturally or
-//! via the backstop below), an empty-text interim event fires for it so the
-//! UI clears that channel's draft line.
-//!
-//! Callback shape: `Session::start` grew a third callback, `on_interim`,
-//! rather than folding `on_line` into a `SessionEvent` enum. The two payloads
-//! don't unify naturally (`on_line` carries an already fully-formatted
-//! `[hh:mm:ss] Who: text` line; interim carries a channel plus raw draft
-//! text the UI renders itself), and every existing `on_line`/`on_error` call
-//! site keeps working unchanged with one added parameter instead of a
-//! reshaped one.
-//!
-//! ## MAX_SPEECH forced-finalize backstop
-//!
-//! sherpa-onnx's Silero VAD `max_speech_duration` config is not a hard
-//! per-segment cutoff (see the task-3 report's empirical investigation): it
-//! can overshoot, and for sufficiently continuous speech can apparently fail
-//! to split at all. `FORCE_FINALIZE_SAMPLES` (10s) is a session-level
-//! backstop, independent of that config: if a channel's own accumulated
-//! buffer reaches it while speech is still active, the buffer is decoded and
-//! appended as a normal (non-interim) transcript line right there, and
-//! [`Vad::reset`] discards that channel's now-redundant in-flight segment so
-//! it doesn't later also finalize (and duplicate) the same audio. Because
-//! `Vad::reset` zeros the detector's own absolute sample counter (verified
-//! empirically), `ChannelInterim::epoch_base_samples` tracks the cumulative
-//! length of prior forced-cut epochs, and `epoch_elapsed_samples` tracks how
-//! far into the *current* epoch a finalize (natural or forced) has already
-//! accounted for, so later timestamps -- both further forced cuts and the
-//! eventual natural finalize -- stay correct even when a natural finalize
-//! happens inside the same epoch before a forced cut does.
+//! Recording worker connecting capture, VAD, ASR and Markdown. Each channel has
+//! independent speech detection; finalized lines are saved immediately and interim text
+//! remains in memory. The worker is the only live-file writer, including UI title and
+//! note edits. Continuation preserves existing content and uses the audio sink's
+//! reconciled base offset. Forced speech finalization resets VAD state while advancing
+//! the channel's absolute time base.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -82,39 +24,20 @@ use crate::audio_sink::{AudioFormat, AudioSink};
 /// it). Per-segment saves are unaffected by this throttle.
 const MIN_EDIT_SAVE_INTERVAL: Duration = Duration::from_secs(1);
 
-/// Global Constraints: minimum gap between interim decodes for the same
-/// channel.
+/// minimum gap between interim decodes for the same channel.
 const INTERIM_MIN_INTERVAL: Duration = Duration::from_millis(400);
 
-/// Perf guard cap: an interim decode only ever transcribes this many trailing
-/// samples of the buffer, however long the buffer has grown. 8s of 16kHz
-/// audio; see the module docs and task-3 report for the measured decode time
-/// that justifies keeping this at 8s rather than dropping to 5s.
+/// Limit interim decoding to the last eight seconds to bound work during long speech.
 const INTERIM_DECODE_CAP_SAMPLES: usize = 8 * 16_000;
 
-/// MAX_SPEECH forced-finalize backstop: once a channel's accumulated
-/// in-progress buffer reaches this many samples (10s of 16kHz audio) while
-/// speech is still active, it's decoded and appended as a real transcript
-/// line rather than left to accumulate indefinitely. See the module docs and
-/// task-3 report for why sherpa's own `max_speech_duration` config can't be
-/// trusted alone for this.
+/// Force a final segment after ten seconds of continuous speech; VAD max_speech_duration
+/// alone does not reliably split it.
 const FORCE_FINALIZE_SAMPLES: usize = 10 * 16_000;
 
-/// Per-channel state for interim decoding and the max-speech forced-finalize
-/// backstop. One instance per channel, living for the whole session.
-///
-/// Timestamp bookkeeping is split into two counters because a `Vad`'s own
-/// `start_sample` is only absolute *within the current epoch* (the stretch
-/// since the last `Vad::reset`, see `Vad::reset`'s docs): `epoch_base_samples`
-/// carries the total length of all earlier epochs, and `epoch_elapsed_samples`
-/// tracks how far into the *current* epoch has already been accounted for by
-/// a finalized segment. A previous version of this used a single counter
-/// that only advanced on a forced cut, which meant a natural finalize inside
-/// the same epoch (a normal, common thing) didn't move it at all: a forced
-/// cut following one would report an offset of 0 (or whatever the base was
-/// before that natural finalize) instead of the true elapsed time, and every
-/// segment after it would inherit the corrupted base. See the task-3 report's
-/// fix-pass section for the reproduction.
+/// Per-channel interim state. VAD start_sample is relative to its current epoch.
+/// epoch_base_samples counts completed epochs; epoch_elapsed_samples counts finalized
+/// audio within this epoch. Both natural and forced finalization must advance the
+/// timeline so later segments keep their correct timestamps.
 #[derive(Default)]
 struct ChannelInterim {
     /// Raw samples of the current in-progress (not-yet-finalized) utterance,
@@ -240,8 +163,8 @@ pub struct ContinueFrom {
     pub transcript_prefix: String,
     pub base_offset_secs: f64,
     pub previous_duration_secs: u64,
-    /// An existing `## Summary` (stage 0.11 enhance) survives recording into
-    /// the note, same as notes and the transcript prefix do.
+    /// An existing `## Summary` survives recording into the note, same as notes and the
+    /// transcript prefix do.
     pub summary: String,
     pub summary_model: Option<String>,
     pub summary_style: Option<String>,
@@ -343,33 +266,25 @@ impl RecordingActivity {
 }
 
 impl Session {
-    /// Spawns the worker thread and returns immediately (loading the ~622MB
-    /// ASR model happens on the worker thread, not here).
-    ///
-    /// `on_line` fires once per finalized transcript line, already formatted
-    /// as `[hh:mm:ss] Who: text`, for driving a UI. `on_interim` fires with a
-    /// channel and draft text while that channel is mid-speech (see the
-    /// module docs); an empty text clears that channel's draft, including
-    /// whenever a line finalizes on it. Interim text is never written to
-    /// disk. `on_error` fires on engine/VAD init failures and save failures
-    /// (these are also always `eprintln!`-ed, so `on_error` failing to reach
-    /// a UI never loses the diagnostic entirely).
-    ///
-    /// `continue_from`: `None` starts a brand-new session at `out_path` (the
-    /// existing behavior). `Some` continues an existing session already at
-    /// `out_path` instead -- see [`ContinueFrom`]'s docs for exactly what
-    /// gets seeded/offset.
-    ///
-    /// `keep_audio` (Global Constraints, config's `keep_audio` field): when
-    /// true, the worker also runs an [`AudioSink`] alongside the transcript,
-    /// writing `<out_path>`'s `.wav`/`.flac`-or-`.m4a` sibling (see
-    /// `audio_sink`'s module docs). When false, no audio file is written at
-    /// all. `audio_format` (stage-0.7 format change, ignored when
-    /// `keep_audio` is false) picks which of those two the encode target is;
-    /// callers derive it from `config::Config::audio_format` at the moment
-    /// recording starts, not from whatever format an existing session's
-    /// audio already happens to be in (a continuation can cross formats,
-    /// see `audio_sink`'s module docs).
+    /// Spawns the worker thread and returns immediately (loading the ~622MB ASR model
+    /// happens on the worker thread, not here). `on_line` fires once per finalized
+    /// transcript line, already formatted as `[hh:mm:ss] Who: text`, for driving a UI.
+    /// `on_interim` fires with a channel and draft text while that channel is mid-speech
+    /// (see the module docs); an empty text clears that channel's draft, including
+    /// whenever a line finalizes on it. Interim text is never written to disk.
+    /// `on_error` fires on engine/VAD init failures and save failures (these are also
+    /// always `eprintln!`-ed, so `on_error` failing to reach a UI never loses the
+    /// diagnostic entirely). `continue_from`: `None` starts a brand-new session at
+    /// `out_path` (the existing behavior). `Some` continues an existing session already
+    /// at `out_path` instead -- see [`ContinueFrom`]'s docs for exactly what gets
+    /// seeded/offset. `keep_audio` (config's `keep_audio` field): when true, the worker
+    /// also runs an [`AudioSink`] alongside the transcript, writing `<out_path>`'s
+    /// `.wav`/`.flac`-or-`.m4a` sibling (see `audio_sink`'s module docs). When false, no
+    /// audio file is written at all. `audio_format` (ignored when `keep_audio` is false)
+    /// picks which of those two the encode target is; callers derive it from
+    /// `config::Config::audio_format` at the moment recording starts, not from whatever
+    /// format an existing session's audio already happens to be in (a continuation can
+    /// cross formats, see `audio_sink`'s module docs).
     #[allow(clippy::too_many_arguments)]
     pub fn start(
         chunk_rx: Receiver<Chunk>,
@@ -499,24 +414,8 @@ fn report_error(on_error: &impl Fn(String), msg: String) {
     on_error(msg);
 }
 
-/// Whether a continuation's `audio_from` marker should be set, and to what
-/// value (Critical fix-review finding, stage 0.9 -- see
-/// `simstim_transcript::Transcript::set_audio_from_secs`'s doc comment for
-/// the destructive re-transcribe bug this exists to prevent). Only set when
-/// BOTH: `had_no_prior_audio` (this continuation's `AudioSink::
-/// new_continuing` call had no existing audio file to prefill from at all --
-/// typically because `delete_audio_after_retranscribe` removed it) and
-/// `target_base_secs` (the reconciled offset `new_continuing` returned) is
-/// positive -- a continuation of a session with no prior transcript content
-/// at all has nothing to mark, `audio_from: 0` would be indistinguishable
-/// from absent anyway. `target_base_secs` is always already a whole number
-/// of seconds in this specific case (it's derived from `last_offset_secs`,
-/// itself parsed back from a `[hh:mm:ss]`-truncated line -- see that
-/// function's docs), so `.round()` here is exact, not a lossy approximation.
-///
-/// Pure and independently testable, no `AudioSink`/engine/capture involved --
-/// mirrors this module's other extracted decision functions (e.g.
-/// `should_decode_interim`).
+/// Set audio_from when a continuation has no prior audio and a positive base offset. The
+/// synthetic silence prefix must not authorize replacing earlier transcript text.
 fn continuation_audio_from_secs(had_no_prior_audio: bool, target_base_secs: f64) -> Option<u64> {
     if had_no_prior_audio && target_base_secs > 0.0 {
         Some(target_base_secs.round() as u64)
@@ -589,45 +488,18 @@ fn run_worker(
         report_error(&on_error, format!("session: vad init failed: {e}"));
         e
     })?;
-    // Global Constraints: a problem standing up the audio sink must not
-    // block the recording from starting -- report it and continue with
-    // `audio_sink` left `None` (transcribing without audio) rather than
-    // propagating an `Err` the way engine/VAD init failures above do. This
-    // also covers the Critical fix-review finding for continuing a session:
-    // when `continue_from` is `Some`, the sink must be prefilled with the
-    // existing audio (or silence, padded up to the previous transcript's own
-    // last line offset) before any live capture lands, rather than starting
-    // a fresh WAV that would silently truncate/overwrite the old one on
-    // finish (see `audio_sink`'s "continuing a session's audio" docs). If
-    // that prefill itself fails (a corrupt or unreadable old file), audio is
-    // disabled for this recording entirely rather than silently continuing
-    // with misaligned timestamps -- the transcript still records normally,
-    // and the old audio file is left untouched since prefilling only ever
-    // reads it.
-    //
-    // `continued_base_offset_secs` (Important fix-review finding, wave 2):
-    // when `AudioSink::new_continuing` succeeds, it returns the RECONCILED
-    // base offset (the longer of the audio it actually prefilled and the
-    // transcript's own last line timestamp -- see `target_base_frames`'s
-    // docs) rather than leaving the transcript to separately recompute its
-    // own continuation offset from `seed.base_offset_secs` alone. Using this
-    // single value for both is what keeps audio position and new transcript
-    // timestamps on the same clock; two independently-computed offsets could
-    // silently disagree whenever trailing silence preceded the previous
-    // Stop. Left `None` when there's no audio to reconcile against (audio
-    // off, or its prefill failed), in which case the transcript falls back
-    // to `seed.base_offset_secs` alone below, exactly as before this fix.
+    // Report audio-sink initialization failure and continue text transcription without
+    // an audio sink. Continuation must prefill existing audio before accepting new
+    // capture; prefill failure must leave the old file intact.
     let mut continued_base_offset_secs: Option<f64> = None;
-    // Critical fix-review finding, stage 0.9: when a continuation prefills
-    // from NO prior audio at all (`existing_audio` below is `None` --
-    // typically because `delete_audio_after_retranscribe` removed it), the
-    // resulting file's first `target_base_secs` seconds are synthetic
-    // silence, not a recording of that portion of the call. Recorded on the
-    // transcript below (`Transcript::set_audio_from_secs`) so a later
-    // re-transcribe (`retranscribe.rs`) knows to keep the earlier text
-    // instead of replacing the whole transcript with whisper's new-audio-only
-    // output -- see that field's own doc comment for the destructive bug
-    // this closes.
+    // when a continuation prefills from NO prior audio at all (`existing_audio` below is
+    // `None` -- typically because `delete_audio_after_retranscribe` removed it), the
+    // resulting file's first `target_base_secs` seconds are synthetic silence, not a
+    // recording of that portion of the call. Recorded on the transcript below
+    // (`Transcript::set_audio_from_secs`) so a later re-transcribe (`retranscribe.rs`)
+    // knows to keep the earlier text instead of replacing the whole transcript with
+    // whisper's new-audio-only output -- see that field's own doc comment for the
+    // destructive bug this closes.
     let mut audio_from_secs: Option<u64> = None;
     let mut audio_sink: Option<AudioSink> = if keep_audio {
         let sink_result: anyhow::Result<AudioSink> = match continuation {
@@ -664,8 +536,7 @@ fn run_worker(
     let previous_duration_secs = continuation.map_or(0, |(duration, _)| duration);
     let base_offset_samples = match continuation {
         Some((_, transcript_base_offset_secs)) => {
-            // Critical fix-review finding, stage 0.9: mark how much of the
-            // timeline the audio file actually covers, when this
+            // mark how much of the timeline the audio file actually covers, when this
             // continuation had no real prior audio to prefill from (see
             // `audio_from_secs`'s doc comment above).
             if let Some(secs) = audio_from_secs {
@@ -677,13 +548,11 @@ fn run_worker(
                     );
                 }
             }
-            // Important fix-review finding, wave 2: prefer the reconciled
-            // offset `AudioSink::new_continuing` returned (see
-            // `continued_base_offset_secs`'s doc comment above) so the
-            // transcript's new-line offsets and the audio's actual length
-            // are computed from the exact same value, not two mechanisms
-            // that can silently disagree. Falls back to the transcript's
-            // own last-line offset when there's no audio to reconcile
+            // prefer the reconciled offset `AudioSink::new_continuing` returned (see
+            // `continued_base_offset_secs`'s doc comment above) so the transcript's
+            // new-line offsets and the audio's actual length are computed from the exact
+            // same value, not two mechanisms that can silently disagree. Falls back to
+            // the transcript's own last-line offset when there's no audio to reconcile
             // against.
             let base_offset_secs =
                 continued_base_offset_secs.unwrap_or(transcript_base_offset_secs);
@@ -796,15 +665,13 @@ fn run_worker(
         );
     }
 
-    // Transcript integrity comes first (Global Constraints): the final
-    // transcript save above always happens, and is reported/returned as the
-    // authoritative failure, before the audio sink's own (slower -- this is
-    // where FLAC encoding happens) finalize runs. That finalize still runs
-    // even if the save just above failed, rather than being skipped: losing
-    // the captured audio too on top of a save problem would only compound
-    // it, and a sink error here is reported the same non-fatal way (Global
-    // Constraints: a sink problem must not kill the recording, or in this
-    // case, its final outcome).
+    // Transcript integrity comes first: the final transcript save above always happens,
+    // and is reported/returned as the authoritative failure, before the audio sink's own
+    // (slower -- this is where FLAC encoding happens) finalize runs. That finalize still
+    // runs even if the save just above failed, rather than being skipped: losing the
+    // captured audio too on top of a save problem would only compound it, and a sink
+    // error here is reported the same non-fatal way (a sink problem must not kill the
+    // recording, or in this case, its final outcome).
     if let Some(sink) = audio_sink.take() {
         if let Err(e) = sink.finish(&on_error) {
             report_error(&on_error, format!("session: audio sink finish failed: {e}"));
@@ -870,9 +737,7 @@ fn finalize_text(
     samples: &[f32],
 ) -> bool {
     let raw_text = engine.transcribe(samples);
-    // Deferred risk from Task 6 review: Parakeet output could in theory
-    // contain newlines, which would break Transcript's one-line-per-entry
-    // rendering. Sanitize before handing text to the transcript.
+    // Normalize newlines in ASR output to preserve one timestamped entry per line.
     let text = raw_text.replace(['\n', '\r'], " ");
     let trimmed = text.trim();
     if trimmed.is_empty() {
@@ -935,14 +800,8 @@ fn process_channel_chunk(
     )
 }
 
-/// Same as [`process_channel_chunk`], with the max-speech forced-finalize
-/// threshold as an explicit parameter rather than the fixed
-/// [`FORCE_FINALIZE_SAMPLES`] constant. Split out so tests can deterministically
-/// exercise the forced-cut path (offset bookkeeping, `Vad::reset`, the
-/// segment-length bound) with a small threshold, well under real speech's
-/// natural VAD cut points, instead of depending on finding or constructing
-/// audio pathological enough to defeat sherpa's own segmentation for a full
-/// 10s (see the task-3 report).
+/// Accept an explicit cap so tests can force segmentation below the VAD natural cut
+/// point using the production processing path.
 #[allow(clippy::too_many_arguments)]
 fn process_channel_chunk_with_cap(
     engine: &Engine,
@@ -991,12 +850,8 @@ fn process_channel_chunk_with_cap(
     interim.buf.extend_from_slice(samples);
 
     if interim.buf.len() >= force_finalize_samples {
-        // `buf` has been accumulating since `epoch_elapsed_samples` (the
-        // last finalize in this epoch, natural or forced), so that's
-        // exactly where it started -- not 0, and not the stale
-        // `epoch_base_samples` alone; both from a previous version of this
-        // that never advanced its single offset counter on a natural
-        // finalize (see the task-3 report's fix-pass section).
+        // Include finalized audio within the current epoch when positioning a forced
+        // cut.
         let offset_secs =
             (interim.epoch_base_samples + interim.epoch_elapsed_samples) as f64 / 16000.0;
         if finalize_text(
@@ -1110,7 +965,7 @@ mod tests {
         assert_eq!(activity.silent_for_at(Channel::Them, 110), Duration::from_millis(5));
     }
 
-    // continuation_audio_from_secs: Critical fix-review finding, stage 0.9.
+    // Partial-audio continuation boundaries.
     mod audio_from {
         use super::*;
 
@@ -1211,14 +1066,8 @@ mod tests {
         }
     }
 
-    // MAX_SPEECH forced-finalize backstop: exercises the real Vad + Engine
-    // against 20+s of continuous synthetic speech-like audio (looped test
-    // wav) and asserts no finalized segment's audio exceeds
-    // FORCE_FINALIZE_SAMPLES by more than a small slack (a single chunk's
-    // worth of overshoot past the threshold, per `process_channel_chunk`'s
-    // check-after-append order). See the task-3 report for the empirical
-    // investigation into why sherpa's own `max_speech_duration` config can't
-    // be relied on alone for this.
+    // Continuous-speech tests verify segment length stays within the cap plus one input
+    // chunk, since the threshold is checked after appending.
     mod max_speech_backstop {
         use super::*;
         use simstim_engine::models_dir;
@@ -1275,17 +1124,8 @@ mod tests {
                 .collect()
         }
 
-        // With the real 10s production cap, sherpa's own Silero VAD already
-        // cuts this synthetic monologue naturally around ~9.5s per loop (see
-        // the task-3 report's empirical investigation) -- i.e. for THIS
-        // audio the backstop never actually needs to fire at 10s. That's a
-        // real, useful finding, but it means a production-cap test can't by
-        // itself prove the forced-cut path works: it would pass whether or
-        // not the backstop code ran at all. So this test drives the same
-        // code path (`process_channel_chunk_with_cap`) with a threshold well
-        // under sherpa's natural ~9.5s cut point, guaranteeing the forced
-        // cut -- not sherpa's own segmentation -- is what bounds every
-        // segment here.
+        // Use a cap below the synthetic clip's natural VAD boundary so this test
+        // exercises forced finalization.
         #[test]
         fn forced_cut_bounds_every_segment_when_speech_outlasts_the_cap() {
             if skip_without_real_models() {
@@ -1294,9 +1134,7 @@ mod tests {
             let models = models_dir();
             let clip =
                 load_wav_16k_mono(&models.join("parakeet-tdt-0.6b-v3-int8/test_wavs/en.wav"));
-            // ~3.8s per clip; 7 loops is ~27s of continuous "speech-like"
-            // audio with no real silence, reproducing the long-monologue
-            // scenario from the task brief.
+            // Repeated clips exercise forced finalization during continuous speech.
             let mut monologue = Vec::new();
             for _ in 0..7 {
                 monologue.extend_from_slice(&clip);
@@ -1386,15 +1224,8 @@ mod tests {
             );
         }
 
-        // Documents the empirical finding driving the root-cause writeup: for
-        // this synthetic monologue, sherpa's own VAD segmentation already
-        // keeps every naturally-finalized segment under the *production*
-        // FORCE_FINALIZE_SAMPLES (10s) bound on its own, cutting around
-        // ~9.5s per loop instead of running past 8s (the configured
-        // max_speech_duration) or not splitting at all. The 10s backstop
-        // exists for the pathological case this audio doesn't reproduce
-        // (see the task-3 report), so this test only checks the bound, not
-        // that the backstop specifically fired.
+        // Check the production segment-length bound. Natural VAD boundaries may split
+        // this fixture before the forced cap.
         #[test]
         fn production_cap_is_never_exceeded_even_though_natural_vad_segmentation_handles_this_audio(
         ) {

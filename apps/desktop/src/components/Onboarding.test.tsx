@@ -33,7 +33,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 
 const config: AppConfig = {
-  output_dir: "/Users/pavel/Calls",
+  output_dir: "/Users/alex/Calls",
   active_model: "live",
   onboarding_complete: false,
   theme: "system",
@@ -133,17 +133,17 @@ describe("Onboarding (one screen)", () => {
   });
 
   it("lets the user choose the notes folder", async () => {
-    vi.mocked(open).mockResolvedValue("/Users/pavel/Documents/simstim");
+    vi.mocked(open).mockResolvedValue("/Users/alex/Documents/simstim");
     vi.mocked(ipc.getConfig).mockResolvedValue({
       ...config,
-      output_dir: "/Users/pavel/Documents/simstim",
+      output_dir: "/Users/alex/Documents/simstim",
     });
     renderOnboarding([liveModel(true), whisperModel(true)]);
 
     fireEvent.click(screen.getByRole("button", { name: /choose/i }));
 
     await waitFor(() => {
-      expect(ipc.setOutputDir).toHaveBeenCalledWith("/Users/pavel/Documents/simstim");
+      expect(ipc.setOutputDir).toHaveBeenCalledWith("/Users/alex/Documents/simstim");
     });
     expect(await screen.findByText("~/Documents/simstim")).toBeVisible();
   });

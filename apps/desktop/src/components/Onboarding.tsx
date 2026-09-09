@@ -114,10 +114,9 @@ function combinedPercent(progress: Record<string, DownloadProgress>): number | n
 }
 
 /**
- * One screen (2026-09-04 product ruling: the old four steps asked a new user
- * to configure an AI stack before recording anything). The promise, the
- * folder, the two macOS permissions, and one honest line about summaries.
- * The speech models start downloading the moment the screen appears.
+ * First-run setup for folder, audio permissions and optional summaries.
+ * Speech models begin downloading when the screen appears.
+ *
  */
 export function Onboarding({ config, models, onOpenSettings, onComplete }: OnboardingProps) {
   const [permissionResult, setPermissionResult] = useState<PermissionCheckResult | null>(null);

@@ -6,11 +6,9 @@ export function cn(...inputs: ClassValue[]) {
 }
 
 /**
- * A call's length in words a person reads at a glance: "12 min", "1 h 55 min",
- * "< 1 min" (2026-09-07 ruling: "13:21 · 11:51" read as two clock times).
- * `null` in, `null` out: a session without audio has no duration to show.
- * Shared by the sidebar rows, the note's date line and the search palette so
- * the three can never drift apart.
+ * Format duration consistently for sidebar, note metadata and search
+ * results. Return null when no duration is available.
+ *
  */
 export function formatDuration(durationSecs: number | null): string | null {
   if (durationSecs === null) return null;

@@ -11,14 +11,14 @@ describe("MarkdownContent", () => {
   it("renders the Markdown used in notes and summaries, including GFM", async () => {
     const { container } = render(
       <MarkdownContent>
-        {"## Launch\n\n- [x] Ship **renderer**\n- [ ] Polish tables\n\n| Owner | Day |\n| --- | --- |\n| Pavel | Fri |"}
+        {"## Launch\n\n- [x] Ship **renderer**\n- [ ] Polish tables\n\n| Owner | Day |\n| --- | --- |\n| Alex | Fri |"}
       </MarkdownContent>,
     );
 
     expect(await screen.findByRole("heading", { level: 2, name: "Launch" })).toBeInTheDocument();
     expect(screen.getByText("renderer").tagName).toBe("STRONG");
     expect(screen.getAllByRole("checkbox")).toHaveLength(2);
-    expect(screen.getByRole("table")).toHaveTextContent("Pavel");
+    expect(screen.getByRole("table")).toHaveTextContent("Alex");
     expect(container).not.toHaveTextContent("## Launch");
   });
 

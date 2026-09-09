@@ -59,7 +59,7 @@ beforeEach(() => {
   vi.mocked(ipc.enhanceSession).mockClear().mockResolvedValue("");
 });
 
-describe("SessionView: stop-transition flush (Task 6 review fix)", () => {
+describe("SessionView: stop-transition flush", () => {
   it("routes an unblurred, still-debouncing notes edit through update_active_session when imperatively flushed", async () => {
     // Reproduces the bug: App's Stop button can be clicked while the notes
     // textarea still has focus and its 500ms debounce timer hasn't fired
@@ -119,7 +119,7 @@ describe("SessionView: stop-transition flush (Task 6 review fix)", () => {
   });
 });
 
-describe("SessionView: empty title normalization (Task 6 review fix)", () => {
+describe("SessionView: empty title normalization", () => {
   it("saves and displays 'Untitled' when the title is committed empty, for an inactive session", () => {
     render(
       <SessionView
@@ -193,7 +193,7 @@ describe("SessionView: multiline title field", () => {
   });
 });
 
-describe("SessionView: audio playback and re-transcribe (Task 4, stage-0.7)", () => {
+describe("SessionView: audio playback and re-transcribe", () => {
   it("renders no audio element and no re-transcribe button when audio_path is null", () => {
     render(
       <SessionView
@@ -224,9 +224,8 @@ describe("SessionView: audio playback and re-transcribe (Task 4, stage-0.7)", ()
       />
     );
 
-    // The custom AudioPlayer bar (stage 0.10) wraps a hidden <audio>
-    // element: no native `controls` chrome, playback drives through the
-    // bar's own play button and seek slider.
+    // The custom AudioPlayer bar wraps a hidden <audio> element: no native `controls`
+    // chrome, playback drives through the bar's own play button and seek slider.
     const audio = document.querySelector("audio");
     expect(audio).not.toBeNull();
     expect(audio).not.toHaveAttribute("controls");
@@ -340,7 +339,7 @@ describe("SessionView: audio playback and re-transcribe (Task 4, stage-0.7)", ()
     expect(screen.getByRole("button", { name: /^improve transcript$/i })).not.toBeDisabled();
   });
 
-  it("security-review fix: stays disabled across a remount while the job is still running for this path", () => {
+  it("stays disabled across a remount while the job is still running for this path", () => {
     // Reproduces the bug: a local `retranscribing` boolean reset to `false`
     // on every mount, so switching away from this session mid-job (which
     // unmounts this instance under React's `key={path}` remount, see the
@@ -402,7 +401,7 @@ describe("SessionView: audio playback and re-transcribe (Task 4, stage-0.7)", ()
     expect(ipc.readSession).not.toHaveBeenCalled();
   });
 
-  it("refetches the transcript even on the 'transcript updated, but the audio could not be deleted' rejection (minor fix-review finding)", async () => {
+  it("refetches the transcript even on the 'transcript updated, but the audio could not be deleted' rejection", async () => {
     // That rejection is the one case where the promise rejects even though
     // the transcript itself WAS rewritten on disk -- only the follow-up
     // audio-deletion step failed. Unlike an ordinary failure (the test
@@ -491,7 +490,7 @@ describe("SessionView: audio playback and re-transcribe (Task 4, stage-0.7)", ()
   });
 });
 
-describe("SessionView: notes/transcript tabs (stage 0.10)", () => {
+describe("SessionView: notes/transcript tabs", () => {
   it("renders Markdown in both Notes and Summary", async () => {
     render(
       <SessionView
@@ -667,7 +666,7 @@ describe("SessionView: notes/transcript tabs (stage 0.10)", () => {
   });
 });
 
-describe("SessionView: transcript find (stage 2.1)", () => {
+describe("SessionView: transcript find", () => {
   const transcript = [
     "[00:00:03] Me: Berlin first",
     "[00:00:09] Them: then Berlin again",
@@ -728,7 +727,7 @@ describe("SessionView: transcript find (stage 2.1)", () => {
   });
 });
 
-describe("SessionView: enhance (stage 0.11)", () => {
+describe("SessionView: enhance", () => {
   it("runs enhance from the toolbar pill and spins the Summary tab while the click is in flight", async () => {
     let resolveEnhance: (value: string) => void = () => {};
     vi.mocked(ipc.enhanceSession).mockImplementation(
@@ -750,10 +749,7 @@ describe("SessionView: enhance (stage 0.11)", () => {
     fireEvent.click(screen.getByRole("button", { name: /^summarize$/i }));
     await waitFor(() => expect(ipc.enhanceSession).toHaveBeenCalledExactlyOnceWith("/tmp/call.md", undefined));
 
-    // While the command is in flight the pill disappears and a disabled
-    // Summary tab appears with a spinner (stage 4.1 polish: the old work
-    // chip clipped against the toolbar) -- the refreshed summary itself
-    // arrives later via App (enhance-progress "done" refetches and remounts).
+    // Show summary progress in the tab. Completion events refetch the generated text.
     const summaryTab = screen.getByRole("tab", { name: /summary/i });
     expect(summaryTab).toBeDisabled();
     expect(screen.getByTestId("summary-tab-spinner")).toBeInTheDocument();

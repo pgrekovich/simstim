@@ -22,10 +22,8 @@ struct Line {
     text: String,
 }
 
-/// A recording session's transcript, title and notes. `render`/`save` write
-/// format v2 (see module docs in the stage-0.6 plan); `parse_session` and
-/// `parse_meta` read both v2 and legacy v1 files (date + asr frontmatter
-/// only, no title, no `## Notes` section).
+/// Markdown session data. Render format v2 and accept legacy v1 files without a title or
+/// Notes section.
 pub struct Transcript {
     started_at: DateTime<Local>,
     /// When set, overrides the rendered `date:` line with this exact string
@@ -33,11 +31,11 @@ pub struct Transcript {
     date_override: Option<String>,
     title: String,
     notes: String,
-    /// The ASR backend id rendered into the `asr:` frontmatter line. Defaults
-    /// to [`ASR_MODEL_ID`] (the live Parakeet pipeline); [`Self::set_asr`]
-    /// overrides it, for the stage-0.7 re-transcribe pass writing
-    /// `whisper-large-v3-turbo-q8` instead, or for `sessions::rewrite_session`
-    /// carrying an existing file's asr value through unchanged.
+    /// The ASR backend id rendered into the `asr:` frontmatter line. Defaults to
+    /// [`ASR_MODEL_ID`] (the live Parakeet pipeline); [`Self::set_asr`] overrides it,
+    /// for the re-transcribe pass writing `whisper-large-v3-turbo-q8` instead, or for
+    /// `sessions::rewrite_session` carrying an existing file's asr value through
+    /// unchanged.
     asr: String,
     duration_secs: Option<u64>,
     /// Overrides the rendered `audio_from:` frontmatter line. See
@@ -52,12 +50,11 @@ pub struct Transcript {
     /// of `lines` in the `## Transcript` section. See
     /// [`Transcript::set_transcript_prefix`].
     transcript_prefix: Option<String>,
-    /// AI-generated summary (stage 0.11 enhance), rendered as its own
-    /// `## Summary` section between Notes and Transcript. Generated text
-    /// NEVER mixes into `notes` (the user's words are sacred); it lives
-    /// here, labeled with the model that produced it via `summary_model`.
-    /// Empty = no section rendered at all, which keeps every pre-enhance
-    /// file byte-identical across a rewrite.
+    /// AI-generated summary, rendered as its own `## Summary` section between Notes and
+    /// Transcript. Generated text NEVER mixes into `notes` (the user's words are
+    /// sacred); it lives here, labeled with the model that produced it via
+    /// `summary_model`. Empty = no section rendered at all, which keeps every
+    /// pre-enhance file byte-identical across a rewrite.
     summary: String,
     /// The `summary_model:` frontmatter value naming what generated
     /// `summary` (e.g. "claude"). Only rendered while `summary` is
@@ -106,9 +103,9 @@ impl Transcript {
         }
     }
 
-    /// Sets the AI-generated `## Summary` section and the model label it
-    /// carries (stage 0.11 enhance). An empty `text` clears both -- the
-    /// section disappears from the rendered file entirely.
+    /// Sets the AI-generated `## Summary` section and the model label it carries. An
+    /// empty `text` clears both -- the section disappears from the rendered file
+    /// entirely.
     pub fn set_summary(&mut self, text: String, model: Option<String>) {
         self.summary_model = if text.trim().is_empty() { None } else { model };
         self.summary = text;
@@ -157,12 +154,11 @@ impl Transcript {
             .collect();
     }
 
-    /// Overrides the rendered `asr:` frontmatter value, which model produced
-    /// the CURRENT transcript text. Defaults to [`ASR_MODEL_ID`] (Parakeet,
-    /// the live pipeline); the stage-0.7 re-transcribe pass calls this with
-    /// the whisper model id after replacing the transcript section, and
-    /// `sessions::rewrite_session` calls it with whatever value an existing
-    /// file already had, so a plain title/notes edit doesn't silently reset
+    /// Overrides the rendered `asr:` frontmatter value, which model produced the CURRENT
+    /// transcript text. Defaults to [`ASR_MODEL_ID`] (Parakeet, the live pipeline); the
+    /// re-transcribe pass calls this with the whisper model id after replacing the
+    /// transcript section, and `sessions::rewrite_session` calls it with whatever value
+    /// an existing file already had, so a plain title/notes edit doesn't silently reset
     /// a whisper-produced file's `asr:` back to the Parakeet default.
     pub fn set_asr(&mut self, asr: impl Into<String>) {
         self.asr = asr.into();
@@ -227,25 +223,21 @@ impl Transcript {
         self.duration_secs = Some(secs);
     }
 
-    /// Overrides the rendered `audio_from:` frontmatter value: how many
-    /// whole seconds into the timeline the underlying audio FILE actually
-    /// starts covering real (non-silence-prefilled) audio. Set only when a
-    /// recording is continued with a silence prefill and NO real prior audio
-    /// was available (see `session.rs`'s continuing-a-session docs and
-    /// `audio_sink::AudioSink::new_continuing`): that file's first
-    /// `audio_from` seconds are synthetic silence written to keep new
-    /// timestamps aligned, not a recording of that portion of the call.
-    /// Absent (`None`, the default) means the audio file covers the whole
-    /// timeline -- every existing (pre-stage-0.9.x) file, and every ordinary
-    /// recording or continuation with real prior audio.
-    ///
-    /// Critical fix-review finding, stage 0.9: `retranscribe.rs`'s `run_job`
-    /// reads this (via `sessions::rewrite_transcript_at`) to decide how much
-    /// of the EXISTING transcript to keep rather than replace outright --
-    /// whisper's pass over the whole (silence + real) audio file only ever
-    /// produces segments for the real portion, so a naive full-replace would
-    /// silently destroy whatever text covered the earlier, now-silent-in-
-    /// this-file portion of the timeline. See [`split_transcript_at`].
+    /// Overrides the rendered `audio_from:` frontmatter value: how many whole seconds
+    /// into the timeline the underlying audio FILE actually starts covering real
+    /// (non-silence-prefilled) audio. Set only when a recording is continued with a
+    /// silence prefill and NO real prior audio was available (see `session.rs`'s
+    /// continuing-a-session docs and `audio_sink::AudioSink::new_continuing`): that
+    /// file's first `audio_from` seconds are synthetic silence written to keep new
+    /// timestamps aligned, not a recording of that portion of the call. Absent (`None`,
+    /// the default) means the audio file covers the whole timeline -- every existing
+    /// (pre-) file, and every ordinary recording or continuation with real prior audio.
+    /// `retranscribe.rs`'s `run_job` reads this (via `sessions::rewrite_transcript_at`)
+    /// to decide how much of the EXISTING transcript to keep rather than replace
+    /// outright -- whisper's pass over the whole (silence + real) audio file only ever
+    /// produces segments for the real portion, so a naive full-replace would silently
+    /// destroy whatever text covered the earlier, now-silent-in- this-file portion of
+    /// the timeline. See [`split_transcript_at`].
     pub fn set_audio_from_secs(&mut self, secs: u64) {
         self.audio_from_secs = Some(secs);
     }
@@ -393,34 +385,27 @@ pub fn last_offset_secs(raw: &str) -> f64 {
     raw.lines().rev().find_map(parse_line_offset_secs).unwrap_or(0.0)
 }
 
-/// Splits an existing `## Transcript` section body at `cutoff_secs`: returns
-/// the text to KEEP -- every line whose parsed `[hh:mm:ss]` offset is
-/// strictly less than `cutoff_secs`, plus any interleaved non-timestamped
-/// (hand-written) line encountered before the first line at or past the
-/// cutoff. Document order decides which side of the cut a hand-written line
-/// falls on: it's kept if it appears before the first line that gets
-/// dropped, so a hand-added annotation preceding the cutoff survives in the
-/// kept text rather than being silently discarded.
-///
-/// For `retranscribe.rs`'s `audio_from`-aware re-transcribe (Critical
-/// fix-review finding, stage 0.9): continuing a session whose audio was
-/// deleted silence-prefills the new recording up to `audio_from` seconds
-/// (see [`Transcript::set_audio_from_secs`]'s docs), so a later
-/// re-transcribe's whisper pass over that file never produces segments for
-/// the earlier, now-silent-in-this-file portion of the timeline. Keeping the
-/// pre-cutoff text (via this function) and appending only whisper's fresh
-/// output after it is what lets that earlier text survive a re-transcribe
-/// instead of being replaced outright.
-///
-/// Returns `None` when the split cannot be safely determined: `raw` has no
-/// parseable `[hh:mm:ss]` line at all while `cutoff_secs` is positive, so
-/// there is no reference point at all to decide which (if any) lines
-/// predate the cutoff -- callers must refuse the re-transcribe rather than
-/// guess (never lose text on an unknown shape). `cutoff_secs <= 0.0` always
-/// returns `Some(String::new())` (nothing to keep, matching a full
-/// replace); a document whose every parseable timestamp already sits at or
-/// past `cutoff_secs` is also a well-defined empty keep, `Some(String::
-/// new())`, not this failure case.
+/// Splits an existing `## Transcript` section body at `cutoff_secs`: returns the text to
+/// KEEP -- every line whose parsed `[hh:mm:ss]` offset is strictly less than
+/// `cutoff_secs`, plus any interleaved non-timestamped (hand-written) line encountered
+/// before the first line at or past the cutoff. Document order decides which side of the
+/// cut a hand-written line falls on: it's kept if it appears before the first line that
+/// gets dropped, so a hand-added annotation preceding the cutoff survives in the kept
+/// text rather than being silently discarded. For `retranscribe.rs`'s `audio_from`-aware
+/// re-transcribe: continuing a session whose audio was deleted silence-prefills the new
+/// recording up to `audio_from` seconds (see [`Transcript::set_audio_from_secs`]'s
+/// docs), so a later re-transcribe's whisper pass over that file never produces segments
+/// for the earlier, now-silent-in-this-file portion of the timeline. Keeping the
+/// pre-cutoff text (via this function) and appending only whisper's fresh output after
+/// it is what lets that earlier text survive a re-transcribe instead of being replaced
+/// outright. Returns `None` when the split cannot be safely determined: `raw` has no
+/// parseable `[hh:mm:ss]` line at all while `cutoff_secs` is positive, so there is no
+/// reference point at all to decide which (if any) lines predate the cutoff -- callers
+/// must refuse the re-transcribe rather than guess (never lose text on an unknown
+/// shape). `cutoff_secs <= 0.0` always returns `Some(String::new)` (nothing to keep,
+/// matching a full replace); a document whose every parseable timestamp already sits at
+/// or past `cutoff_secs` is also a well-defined empty keep, `Some(String:: new)`, not
+/// this failure case.
 pub fn split_transcript_at(raw: &str, cutoff_secs: f64) -> Option<String> {
     if cutoff_secs <= 0.0 || raw.is_empty() {
         return Some(String::new());
@@ -469,9 +454,8 @@ pub struct SessionData {
     /// [`Transcript::set_asr`] instead of silently resetting it to the
     /// default.
     pub asr: String,
-    /// The `## Summary` section body (stage 0.11 enhance), empty when the
-    /// file has none. Carried through rewrites the same way `asr` is, via
-    /// [`Transcript::set_summary`].
+    /// The `## Summary` section body, empty when the file has none. Carried through
+    /// rewrites the same way `asr` is, via [`Transcript::set_summary`].
     pub summary: String,
     /// The `summary_model:` frontmatter value; only ever `Some` while
     /// `summary` is non-empty.
@@ -548,11 +532,10 @@ pub fn parse_session(path: &Path) -> Result<SessionData> {
         find_last_exact_line(body, "## Transcript")
             .ok_or_else(|| anyhow!("not a transcript file: missing ## Transcript section"))?;
 
-    // The `## Summary` section (stage 0.11 enhance) sits between Notes and
-    // Transcript. Located by the LAST exact `## Summary` line before the
-    // transcript section -- same heuristic (and same documented limitation)
-    // as the `## Transcript` lookup above: the machine-written section
-    // header always follows the notes, so it wins over a passing mention in
+    // The `## Summary` section sits between Notes and Transcript. Located by the LAST
+    // exact `## Summary` line before the transcript section -- same heuristic (and same
+    // documented limitation) as the `## Transcript` lookup above: the machine-written
+    // section header always follows the notes, so it wins over a passing mention in
     // them.
     let pre_transcript = &body[..transcript_line_start];
     let summary_split = find_last_exact_line(pre_transcript, "## Summary");
@@ -920,13 +903,13 @@ mod tests {
     #[test]
     fn renders_sorted_transcript_with_frontmatter() {
         let mut t = Transcript::new(t0());
-        t.add(Speaker::Them, 15.2, "hello pavel".into());
+        t.add(Speaker::Them, 15.2, "hello alex".into());
         t.add(Speaker::Me, 3.0, "hi everyone".into());
         let md = t.render();
         assert!(md.starts_with("---\n"));
         assert!(md.contains("asr: parakeet-tdt-0.6b-v3"));
         let me = md.find("[00:00:03] Me: hi everyone").unwrap();
-        let them = md.find("[00:00:15] Them: hello pavel").unwrap();
+        let them = md.find("[00:00:15] Them: hello alex").unwrap();
         assert!(me < them, "lines not sorted by offset");
     }
 
@@ -1068,14 +1051,14 @@ mod tests {
         t.set_title("Weekly sync: part 2".into());
         t.set_notes("Line one\n\n- bullet\n- another".into());
         t.add(Speaker::Me, 3.0, "hi everyone".into());
-        t.add(Speaker::Them, 15.2, "hello pavel".into());
+        t.add(Speaker::Them, 15.2, "hello alex".into());
         t.save(&path).unwrap();
 
         let session = parse_session(&path).unwrap();
         assert_eq!(session.title, "Weekly sync: part 2");
         assert_eq!(session.notes, "Line one\n\n- bullet\n- another");
         assert!(session.transcript.contains("[00:00:03] Me: hi everyone"));
-        assert!(session.transcript.contains("[00:00:15] Them: hello pavel"));
+        assert!(session.transcript.contains("[00:00:15] Them: hello alex"));
     }
 
     #[test]
@@ -1309,9 +1292,7 @@ mod tests {
 
     #[test]
     fn parse_session_and_parse_meta_default_audio_from_secs_to_none_when_field_missing() {
-        // v1/v2 files (everything written before stage 0.9.x) have no
-        // `audio_from` field at all -- must load fine, not error, with
-        // `None` (whole timeline covered).
+        // Missing audio_from means the retained audio covers the whole timeline.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("call.md");
         std::fs::write(

@@ -1,15 +1,5 @@
-//! Regression cover for the failure that made an hour-long Polish lesson
-//! unreadable: a channel that opens with silence (a mic on a call someone
-//! else started) had its language detected from that silence, and then
-//! hallucinated one repeated English phrase over every quiet stretch. See
-//! `speech.rs`'s module docs for the full account.
-//!
-//! Uses the real whisper model, so it is `#[ignore]`d like every other
-//! model-dependent test in this crate (the Global Constraints forbid the test
-//! suite depending on multi-gigabyte model files). Run it manually:
-//!
-//!   cargo test -p simstim-engine --release -- --ignored \
-//!     speech_only_pass_survives_a_minute_of_leading_silence --nocapture
+//! Regression checks for silence handling in offline transcription. These optional tests
+//! require existing speech models and clips; ordinary test runs never download them.
 
 use simstim_engine::{detect_speech, models_dir, WhisperEngine};
 

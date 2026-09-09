@@ -35,7 +35,7 @@ simstim-capture = { path = "../../../crates/capture" }
 simstim-engine = { path = "../../../crates/engine" }
 simstim-transcript = { path = "../../../crates/transcript" }
 reqwest = { version = "0.13", default-features = false, features = ["stream", "rustls"] }
-# "sync" (stage 0.9): retranscribe's FIFO queue uses a `tokio::sync::oneshot`
+# "sync": retranscribe's FIFO queue uses a `tokio::sync::oneshot`
 # per queued job so a `retranscribe_session` call that gets queued behind
 # another one can still await its OWN job's result once its turn comes,
 # instead of resolving before the job actually ran.
@@ -52,7 +52,7 @@ claxon = "0.4"
 # defeats the watchdog (observed: a 200ms timeout blocking for the full 30s
 # of a grandchild's sleep).
 libc = "0.2"
-# Used at runtime (not just in tests) since stage-0.7's AAC format change:
+# Used at runtime for AAC conversion and recovery:
 # decoding a `.m4a` (re-transcribe, continuation prefill) shells out to
 # `afconvert` into a scratch WAV first (see `aac.rs`), which needs a real
 # temp file, not just a path string -- `tempfile::NamedTempFile`'s `Drop`

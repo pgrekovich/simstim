@@ -163,12 +163,12 @@
     letter-spacing: 0.04em;
 }
 
-/* Chat answers (stage 4.2, design 8b/8c): machine material reads as compact
-   UI sans, unlike the Summary's 15px reading serif -- and it must win over
-   .markdown-content's own font rules above, hence the dedicated variants
-   (a Tailwind text-[..] on the same element ties on specificity and loses
-   on order). Headings scale via em; --chat-answer-size lets each surface
-   set its size. */
+/*
+ * Chat typography must override markdown-content rules at higher
+ * specificity. Headings scale with em; --chat-answer-size controls each
+ * surface.
+ *
+ */
 .markdown-content.chat-answer {
     font-family: var(--font-ui);
     font-size: var(--chat-answer-size, 13px);
@@ -248,13 +248,12 @@
     --color-quiet-foreground: var(--quiet-foreground);
 }
 
-/* The palette follows Apple's Human Interface Guidelines (2026-09-07 owner
-   ruling, replacing the paper/tape palette of the interface redesign, which
-   lives on in git history): system grays for surfaces, the system font
-   everywhere, the blue accent, blue selection with white text, the system
-   red and green. Opaque on purpose: the app is cross-platform, so no
-   vibrancy. `:root` is light and `.dark` is dark; src/lib/theme.ts toggles
-   the class from config and the system preference. */
+/*
+ * System-style light and dark palettes with opaque surfaces.
+ * src/lib/theme.ts selects the class from configuration and system
+ * preference.
+ *
+ */
 :root {
     --radius: 0.5rem;
     --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", "Segoe UI", sans-serif;

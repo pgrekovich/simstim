@@ -20,10 +20,11 @@ import {
 } from "@/lib/ipc";
 
 /**
- * One question the surface's owner wants sent programmatically (the ⌘K
+ * One question the parent component wants sent programmatically (the ⌘K
  * palette's "Ask across all notes" handoff, a followup chip from outside).
  * The `id` makes repeats of the same text distinct, same recipe as
  * `TranscriptFindRequest`.
+ *
  */
 export interface ChatAskRequest {
   id: number;
@@ -96,17 +97,17 @@ export function distinctSourceCount(sources: ChatSource[]): number {
 }
 
 /**
- * One conversation surface (stage 4.2), shared by Ask your notes (pane) and
- * Ask this call (drawer). The BACKEND owns the conversation (`ChatState`,
- * in-memory, per scope); this component is a projection of it: it seeds
- * from `chat_history` on mount, sends questions with `chat_ask`, and
- * refetches whenever the scope's `chat-progress` reports a terminal phase --
- * so a remount (switching sessions, closing and reopening the surface, a
- * webview reload) can never lose the conversation or an in-flight ask.
+ * One conversation surface, shared by Ask your notes (pane) and Ask this
+ * call (drawer). The BACKEND owns the conversation (`ChatState`, in-memory,
+ * per scope); this component is a projection of it: it seeds from
+ * `chat_history` on mount, sends questions with `chat_ask`, and refetches
+ * whenever the scope's `chat-progress` reports a terminal phase -- so a
+ * remount (switching sessions, closing and reopening the surface, a webview
+ * reload) can never lose the conversation or an in-flight ask. A failed ask
+ * restores the question into the input for a retry; a cancelled one
+ * ("cancelled" from `chat_cancel`) does the same but shows no error -- the
+ * user just stopped it.
  *
- * A failed ask restores the question into the input for a retry; a
- * cancelled one ("cancelled" from `chat_cancel`) does the same but shows no
- * error -- the user just stopped it.
  */
 export function ChatConversation({
   scopePath,

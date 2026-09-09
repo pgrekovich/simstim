@@ -104,7 +104,7 @@ jobs:
           # grep would fail on a correctly signed build.
           codesign -dvv "$APP" 2>&1 | grep -q "Authority=$SIGN_IDENTITY"
           # Hardened runtime denies the microphone silently without this
-          # entitlement (see AGENTS.md, "Traps that already bit us"); a
+          # entitlement (see docs/architecture.md); a
           # build without it ships a mic channel of digital silence.
           codesign -d --entitlements - "$APP" 2>&1 \
             | grep -q "com.apple.security.device.audio-input"

@@ -34,11 +34,9 @@ function formatClock(secs: number): string {
 }
 
 /**
- * A compact custom bar around a hidden `<audio>` element: play/pause, a seek
- * slider, elapsed/total time and a playback-rate cycler. Replaces the native
- * `controls` chrome, which reads as a foreign embed inside the app (owner
- * design review). Kept a single row on purpose: it pins to the bottom of
- * the Transcript tab, where a chat input will later have to share space.
+ * Custom controls around a hidden audio element: playback, seeking, elapsed
+ * time and speed.
+ *
  */
 export const AudioPlayer = forwardRef<AudioPlayerHandle, AudioPlayerProps>(
   function AudioPlayer({ src, trailing }, ref) {

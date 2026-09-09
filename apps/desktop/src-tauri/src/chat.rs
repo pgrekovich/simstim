@@ -1,29 +1,9 @@
-//! Ask your notes / Ask this call (stage 4.2): a conversation over the whole
-//! notes folder, or over one note -- including a note that is being recorded
-//! into right now.
-//!
-//! Architecture, per the spec section:
-//! - CLI providers only (`claude` / `codex`), never the embedded local model:
-//!   chat must stay safe to use mid-call, and the live ASR owns the GPU.
-//! - Agentic read-only search, no index: the CLI greps and reads the notes
-//!   folder itself on every ask. claude gets `--add-dir <folder>` plus only
-//!   the `Read,Grep,Glob` tools from an empty temp cwd; codex runs its own
-//!   read-only sandbox with the folder as cwd. Nothing here can write notes.
-//! - Stateless per ask: one fresh subprocess per question, with a bounded
-//!   text replay of the conversation so far. Robust against a re-transcribe
-//!   replacing a transcript between asks and against provider switches.
-//! - Ephemeral: conversations live in this module's in-memory state and die
-//!   with the app. Chat text never lands in the `.md` files (rules 1 and 6).
-//! - The reply contract is line-oriented (trailing `SOURCE:` / `FOLLOWUP:`
-//!   lines, peeled off the same way enhance peels `TITLE:`), never JSON --
-//!   markdown answers survive verbatim and a sloppy model degrades to
-//!   chips-less text instead of a parse failure.
-//!
-//! UI contract: `chat_ask` validates, claims the scope's running slot and
-//! returns; the work happens on a blocking task and every visible consequence
-//! arrives as `chat-progress` events (the enhance pattern). `chat_history`
-//! seeds a freshly mounted view, including the running flag, so a remount or
-//! webview reload can't lose an in-flight ask.
+//! Questions over the notes folder or one note, including a live on-disk transcript
+//! snapshot. Claude runs restricted file-reading tools from an empty temporary
+//! directory; Codex uses its read-only sandbox. Connector questions use a separate
+//! restricted tool policy. Each request starts a fresh helper process; conversations and
+//! citations are retained in memory per scope. Blocking work runs off the main thread
+//! and progress events update the UI.
 
 use std::collections::HashMap;
 use std::io::Write;
@@ -478,9 +458,8 @@ fn validate_ask(
     question: &str,
     already_running: bool,
 ) -> Result<(), String> {
-    // One AI choice powers summaries AND chat (owner ruling, stage 4.2
-    // e2e) -- but chat can only run on the cloud CLIs: the on-device model
-    // cannot search the folder and would fight live ASR for the GPU.
+    // Summaries and chat share the configured CLI provider. Chat runs independently of
+    // the local transcription engine.
     if provider == "local" {
         return Err(
             "the on-device model can't search your notes; pick Claude Code or Codex under Settings > Summaries to ask questions"
@@ -505,14 +484,10 @@ fn validate_ask(
     Ok(())
 }
 
-/// The provider invocation for one ask. Both CLIs read the prompt from
-/// stdin; both are granted read-only reach into `notes_dir` and nothing
-/// else. Returns the command plus the codex `-o` answer file (codex's
-/// stdout is logs; claude's stdout IS the answer).
-/// Built-in tools a connector question must never reach: everything that
-/// writes, runs or browses. `--disallowedTools` denies them even though the
-/// built-in set stays open (the CLI only lists MCP tools when `--tools` is
-/// not restricting the set; verified against the real CLI 2026-09-07).
+/// Build a provider invocation with read-only access to notes. Codex writes the answer
+/// to its output file; Claude returns an answer envelope on stdout. Connector runs must
+/// deny writing and execution tools while leaving the built-in tool set open, because
+/// restricting --tools also hides MCP tools.
 pub(crate) const CONNECTOR_DENIED_TOOLS: &str = "Bash,Write,Edit,MultiEdit,NotebookEdit,WebFetch,WebSearch,Task,Agent,TodoWrite,KillShell,BashOutput,Skill";
 
 /// `connectors`: the `--allowedTools` rules for the user's MCP servers when
@@ -538,13 +513,9 @@ fn build_command(
             cmd.args(["-p", "--output-format", "stream-json", "--verbose", "--add-dir"]);
             cmd.arg(notes_dir);
             match connectors {
-                // The ordinary ask: --tools restricts the built-in set to
-                // the three read-only file tools, --allowedTools pre-approves
-                // them so -p mode never stalls on a permission it can't ask
-                // for, and --strict-mcp-config keeps the CLI from connecting
-                // every configured MCP server first (eleven connectors were
-                // 160k tokens of tool schemas and seconds of startup per
-                // ask, measured 2026-09-07).
+                // Allow only read-only file tools for ordinary questions. Strict MCP
+                // configuration avoids connecting unrelated servers and loading their
+                // tool schemas.
                 None => {
                     cmd.args([
                         "--tools",
@@ -810,8 +781,7 @@ fn ask_inner<R: tauri::Runtime>(
     question_name: Option<String>,
     connectors: bool,
 ) -> Result<(), String> {
-    // The ONE AI choice, shared with summaries (owner ruling): provider and
-    // its per-provider model override both come from the enhance settings.
+    // Use the same provider and model override as summaries.
     let cfg = Config::load();
     let provider = cfg.enhance_provider.clone();
     let binary = crate::enhance::resolve_binary(&provider);
@@ -1281,8 +1251,8 @@ mod tests {
     mod claude_json {
         use super::*;
 
-        /// The real CLI envelope shape (2026-09, `claude -p --output-format
-        /// json`): the answer in `result`, the exact model in `modelUsage`.
+        /// Claude JSON envelopes carry the answer in result and model provenance in
+        /// modelUsage.
         #[test]
         fn takes_the_answer_and_the_dominant_model() {
             let raw = r#"{"is_error":false,"result":"The answer.\nSOURCE: a.md @ 00:00:01",

@@ -25,10 +25,9 @@ export function formatHours(audioSecs: number): string {
 }
 
 /**
- * Ask your notes (stage 4.2, design 8b): the full-pane conversation over the
- * whole notes folder. The conversation itself lives in the backend's
- * ChatState; this surface adds the header (badge from `storage_stats`,
- * clear-conversation) and the folder-scope wiring.
+ * Folder-wide chat view backed by in-memory ChatState, with storage metadata
+ * and clear-conversation controls.
+ *
  */
 export function AskNotesView({ sessions, askRequest, onOpenCitation }: AskNotesViewProps) {
   const [badge, setBadge] = useState<string | null>(null);

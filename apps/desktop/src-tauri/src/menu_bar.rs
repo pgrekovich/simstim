@@ -1,8 +1,5 @@
-//! Native macOS menu-bar presence for Stage 3.
-//!
-//! The controller mirrors only ephemeral recording state. Every action is
-//! routed back through the existing main-window coordinator, so the session
-//! worker remains the sole writer for every live file.
+//! Native macOS menu-bar status. Route actions through the main-window coordinator so
+//! live files retain a single writer.
 
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -157,13 +154,12 @@ impl MenuBar {
     }
 
     fn tick_timer(&self, generation: u64) -> bool {
-        // Copy what the tick needs and drop the lock BEFORE touching the
-        // tray: `set_title` from a non-main thread enqueues onto the main
-        // thread and blocks until it runs, while the tray menu handler runs
-        // ON the main thread and takes this same mutex (`is_recording` for
-        // the NOTE_ID arm). Holding the lock across that dispatch let an
-        // "Add Note" click landing inside a tick deadlock the whole app
-        // mid-recording (review finding).
+        // Copy what the tick needs and drop the lock BEFORE touching the tray:
+        // `set_title` from a non-main thread enqueues onto the main thread and blocks
+        // until it runs, while the tray menu handler runs ON the main thread and takes
+        // this same mutex (`is_recording` for the NOTE_ID arm). Holding the lock across
+        // that dispatch let an "Add Note" click landing inside a tick deadlock the whole
+        // app mid-recording.
         let started_at = {
             let state = self.presentation.lock().unwrap();
             let Some(recording) = &state.recording else {

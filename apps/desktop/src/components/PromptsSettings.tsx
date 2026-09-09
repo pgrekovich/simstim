@@ -101,12 +101,9 @@ const FIELD_CLASS =
   "w-full rounded-[7px] border border-input bg-background px-2.5 py-1.5 text-[13px] leading-[1.5] outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/40";
 
 /**
- * Settings: the Prompts section (2026-09-07). Three things a person owns:
- * standing instructions for every summary, summary styles (how the note's
- * Summary section is written), and quick questions (shortcuts in the chat).
- * Everything is one file, `prompts.toml` next to the config; this section
- * edits it whole and saves automatically. Lists are rows in the Notes idiom
- * with an inline editor, so dozens of entries stay legible.
+ * Edit summary instructions, styles and quick questions. Save the complete
+ * prompts.toml automatically.
+ *
  */
 export function PromptsSettings({ open }: { open: boolean }) {
   const [doc, setDoc] = useState<Doc | null>(null);

@@ -1,30 +1,13 @@
-//! AI enhance (stage 0.11): Granola's core mechanic on our terms.
+//! Optional summaries through Claude Code or Codex. User notes guide the summary, with
+//! the transcript as supporting material. Only text is sent.
 //!
-//! The user's rough notes are the primary signal; the transcript is backing
-//! material. `enhance_session` feeds both to a locally-installed AI CLI
-//! (`claude` or `codex`, the user's own subscription) and writes the result
-//! into the note's `## Summary` section, labeled with the exact
-//! provider/model.
+//! Generated text goes into the separate Summary section with model provenance. Writes
+//! are serialized and atomic; reread the note before applying the result so concurrent
+//! user edits survive. Only machine-owned titles can be replaced.
 //!
-//! Product rules honored here:
-//! - Text-only leaves the machine, never audio (rule 2). The onboarding
-//!   screen shows the summaries choice explicitly before the first call, and
-//!   Settings can turn it off in one switch.
-//! - The user's words are sacred (rule 6): output lands in `## Summary`,
-//!   never inside `## Notes`. Re-enhancing replaces only the summary.
-//! - Single writer (rule 5): the currently-recording or finalizing session
-//!   is rejected, and the write itself is the same atomic tmp+rename every
-//!   other rewrite uses.
-//!
-//! Subprocess hygiene, learned the careful way:
-//! - Both CLIs are agentic and read project context from their cwd (a
-//!   CLAUDE.md, a git repo). They're spawned in a fresh empty temp dir so
-//!   the ONLY thing they ever see is our prompt.
-//! - `codex exec` runs with `-s read-only` (its own sandbox) and writes the
-//!   final message to a file via `-o`; stdout is logs. `claude -p
-//!   --output-format text` prints the answer to stdout.
-//! - A GUI app's PATH doesn't include /opt/homebrew/bin, so binaries are
-//!   resolved against a small list of well-known install dirs plus PATH.
+//! Provider subprocesses run off the main thread with deadlines and cancellation.
+//! Ordinary summaries use no connectors; calendar lookup and connector questions use
+//! restricted read operations.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -42,11 +25,7 @@ use crate::AppState;
 /// transcript is a big prompt, and subscription CLIs can queue.
 const ENHANCE_TIMEOUT: Duration = Duration::from_secs(300);
 
-/// One runnable provider: a CLI the user already has a subscription for.
-/// The embedded on-device model was retired on 2026-09-04 (product ruling:
-/// its summaries could change what was decided on a call, which poisons
-/// trust in the whole note; the audio-stays-local promise is about audio,
-/// and both CLIs only ever receive text).
+/// A supported CLI provider using the user's existing authentication.
 struct ProviderSpec {
     id: &'static str,
     name: &'static str,
@@ -89,10 +68,8 @@ impl EnhanceState {
     }
 }
 
-/// Clears the enhance slot when dropped, so a panic anywhere inside the
-/// pipeline (which unwinds through `spawn_blocking`) can't leave the slot
-/// occupied forever -- that would refuse every future enhance until restart
-/// (review finding).
+/// Release the enhance slot on every exit, including panic unwinding, so later requests
+/// remain possible.
 struct SlotGuard<'a>(&'a EnhanceState);
 
 impl Drop for SlotGuard<'_> {
@@ -160,10 +137,7 @@ pub(crate) fn resolve_binary(binary: &str) -> Option<PathBuf> {
     candidates.into_iter().find(|p| p.is_file())
 }
 
-/// Async + `spawn_blocking`: probing spawns `--version` subprocesses, and a
-/// non-async tauri command would run them on the MAIN thread, freezing the
-/// UI (the enhance command below froze the whole app exactly this way, owner
-/// bug report).
+/// Probe CLI version and authentication off the main thread to keep the UI responsive.
 #[tauri::command]
 pub async fn list_enhance_providers() -> Vec<EnhanceProviderInfo> {
     tauri::async_runtime::spawn_blocking(|| {
@@ -224,10 +198,8 @@ pub(crate) fn calendar_window(start: &str, duration_secs: Option<u64>) -> Option
     ))
 }
 
-/// The dedicated lookup prompt: a single narrow job with a machine-checkable
-/// answer, instead of burying tool use inside the big summary prompt (owner
-/// bug report: the event must be matched by date and time, deterministically,
-/// and re-enhance must re-apply it).
+/// Match a calendar event by date and time in a separate lookup with a machine-readable
+/// result. Repeat the lookup when generating a new summary.
 pub(crate) fn calendar_lookup_prompt(start: &str, end: &str) -> String {
     format!(
         "Use your calendar MCP tools to find the user's calendar event that OVERLAPS          this exact time window:\n\
@@ -261,14 +233,13 @@ pub(crate) fn parse_calendar_reply(text: &str) -> Option<CalendarEvent> {
     })
 }
 
-/// Invitations often list a mailing list ("internal@company.com",
-/// "team@...") instead of, or next to, the people on it. A group is not a
-/// person: it would render as "with Internal" under the note (owner report).
-/// The calendar connector may also hand back the list's display name alone
-/// ("internal"), so a bare one-word entry is judged by the same list.
-/// Name-based and deliberately narrow; a list this misses is simply kept.
-/// The UI applies the same rule at render time (`lib/people.ts`) so notes
-/// written before this filter existed read right too; keep the two in step.
+/// Invitations often list a mailing list ("internal@company.com", "team@...") instead
+/// of, or next to, the people on it. A group is not a person: it would render as "with
+/// Internal" under the note. The calendar connector may also hand back the list's
+/// display name alone ("internal"), so a bare one-word entry is judged by the same list.
+/// Name-based and deliberately narrow; a list this misses is simply kept. The UI applies
+/// the same rule at render time (`lib/people.ts`) so notes written before this filter
+/// existed read right too; keep the two in step.
 pub(crate) fn drop_group_addresses(attendees: Vec<String>) -> Vec<String> {
     const GROUP_WORDS: &[&str] = &[
         "all", "everyone", "everybody", "team", "teams", "staff", "internal", "external",
@@ -384,23 +355,12 @@ fn run_cli_capture(
     Ok(out.trim().to_string())
 }
 
-/// The Granola contract, spelled out (owner decision, stage 0.11): the
-/// user's rough notes lead, the transcript backs them up. With EMPTY notes
-/// (owner decision: the auto-enhance case for a call nobody took notes on)
-/// the ask flips to a fixed structure: short summary, key points, action
-/// items. Kept as a plain function of the inputs so tests can pin its shape
-/// without running any CLI.
+/// Build the summary prompt from user notes and supporting transcript. Without notes,
+/// request a short summary, key points and action items.
 ///
-/// `propose_title` adds the TITLE output contract (opt-in
-/// `enhance_rename_title`, only while the title is machine-owned and only
-/// when no calendar event was matched): the reply must lead with one
-/// `TITLE: ...` line, which [`split_title_line`] peels off before the
-/// summary is written. `event` is the calendar event the dedicated lookup
-/// already matched by date and time: it enters the prompt as source data
-/// (this IS the meeting), while its verbatim name is applied to the title
-/// by the app itself, never trusted to the model to echo back.
-/// The prompt with no user tuning; production goes through
-/// [`build_prompt_tuned`], this is the tests' shorthand.
+/// When enabled for a machine-owned title, request a leading `TITLE:` line. A matched
+/// calendar event provides its title directly instead. Optional people extraction uses
+/// names found in the transcript.
 #[cfg(test)]
 pub(crate) fn build_prompt(
     title: &str,
@@ -545,15 +505,9 @@ pub(crate) fn build_prompt_tuned(
     )
 }
 
-/// The optional trailing prompt rules: the matched calendar event as source
-/// data, the TITLE output contract and the PEOPLE output contract, in the
-/// branch's language. Empty when none applies.
-///
-/// `list_people` is set when the calendar named nobody (no event, or an
-/// invitation carrying only a group address such as "internal@"): the
-/// model then lists the people it can actually find named in the
-/// transcript, so an all-hands still records who spoke (owner report: an
-/// empty roster is as useless as "with Internal").
+/// Append matched calendar context and optional TITLE/PEOPLE output instructions.
+/// Request people from the transcript only when the calendar provided no individual
+/// attendees.
 fn build_extra_rules(
     propose_title: bool,
     list_people: bool,
@@ -803,18 +757,9 @@ fn compact_transcript(transcript: &str) -> String {
     }
 }
 
-/// Speaker labels and prompt instructions are English even when the call is
-/// not. Give the model a deterministic script hint so those wrapper tokens
-/// cannot make it translate a Russian call into English.
-/// The output language, decided by precedence (owner ruling 2026-09-07):
-/// the call's main language is the one most of the transcript is spoken in,
-/// and words, phrases or whole exchanges in another language do not change
-/// it. The only thing that overrides it is the language the user wrote
-/// their notes in. So the notes decide when they hold real text; otherwise
-/// the transcript does. The two are never pooled: a long English call must
-/// not outvote a user who took notes in Russian, nor the other way round.
-/// Script-level (Cyrillic vs Latin) because that is the branch the prompt
-/// has; within one script the prompt's own wording carries the same rule.
+/// Use the language of meaningful user notes when present, otherwise the main transcript
+/// language. Do not pool notes and transcript: a long transcript would override a short
+/// note. Ignore English speaker labels and prompt wrappers when detecting language.
 fn uses_cyrillic_output(notes: &str, transcript: &str) -> bool {
     /// Fewer letters than this is a stray word or an emoji title, not a
     /// language choice.
@@ -847,9 +792,8 @@ fn output_language_rule(cyrillic_output: bool) -> &'static str {
     }
 }
 
-/// The label written into the note's `summary_model:` field: bare provider
-/// id on the CLI's default model, `provider/model` with an override -- the
-/// user asked to always be able to tell WHAT generated a summary.
+/// Store summary provenance as the provider id, or provider/model when a model override
+/// is configured.
 fn summary_label(spec: &ProviderSpec, model: Option<&str>) -> String {
     match model {
         Some(m) => format!("{}/{}", spec.id, m),
@@ -1007,12 +951,9 @@ fn run_provider(spec: &ProviderSpec, model: Option<&str>, prompt: &str) -> Resul
     let codex_out = workdir.path().join("last-message.txt");
     match spec.id {
         "claude" => {
-            // A summary uses no tools at all, so the CLI must not connect
-            // every configured MCP server first: with eleven claude.ai
-            // connectors that was 160k tokens of tool schemas per request
-            // (measured 2026-09-07: $0.96 vs $0.04 for a one-word reply)
-            // and seconds of startup. Only the calendar lookup, which does
-            // need a connector, runs without this flag.
+            // Summaries need no tools. Strict MCP configuration avoids connecting
+            // unrelated servers and adding their schemas to each request. Calendar
+            // lookup uses a separate connector run.
             cmd.args(["-p", "--output-format", "text", "--strict-mcp-config"]);
             if let Some(m) = model {
                 cmd.args(["--model", m]);
@@ -1125,11 +1066,10 @@ fn validate_enhance(
             "another note is being enhanced; wait for it to finish".to_string()
         });
     }
-    // A running or queued re-transcribe will replace this note's transcript
-    // (architecture-review finding): summarizing the pre-retranscribe text is
-    // stale on arrival at best, and both final writes are whole-file
-    // read-modify-write, so an interleaving could revert the fresh transcript
-    // outright. The re-transcribe completion re-triggers auto-enhance itself.
+    // A running or queued re-transcribe will replace this note's transcript :
+    // summarizing the pre-retranscribe text is stale on arrival at best, and both final
+    // writes are whole-file read-modify-write, so an interleaving could revert the fresh
+    // transcript outright. The re-transcribe completion re-triggers auto-enhance itself.
     if retranscribe_involves {
         return Err(
             "this note is being re-transcribed; enhance it once that finishes".to_string(),
@@ -1141,19 +1081,9 @@ fn validate_enhance(
     Ok(())
 }
 
-/// Enhances `path`'s notes with the configured provider and writes the
-/// result into its `## Summary` section (replacing any previous summary --
-/// generated text is regenerable, the notes are never touched).
-///
-/// Async, with the whole blocking pipeline (parse, subprocess, atomic write)
-/// inside `spawn_blocking`: a non-async tauri command runs ON THE MAIN
-/// THREAD, and the first version of this froze the entire app for the whole
-/// generation (owner bug report). The `AppHandle` crosses into the blocking
-/// closure instead of `State` guards, which can't outlive the request.
-/// `style` is a summary style id from prompts.toml, `"standard"` for the
-/// built-in prompt, or `None` to repeat whatever style the note remembers
-/// (`summary_style:` frontmatter), which is what "Again" and the automatic
-/// run after a call do.
+/// Generate a summary off the main thread and atomically replace its section while
+/// preserving user edits. `style` selects a prompt style or the standard prompt.
+/// Progress and failures are emitted through enhance-progress events.
 #[tauri::command]
 pub async fn enhance_session(
     path: String,
@@ -1222,11 +1152,10 @@ fn enhance_path_inner<R: tauri::Runtime>(
     // Which style writes this summary: the one asked for, else the one the
     // note remembers; a deleted style quietly means standard.
     let style = prompts.resolve_style(requested_style.or(existing.summary_style.as_deref()));
-    // A title proposal only ever lands while the title is machine-owned:
-    // the automatic "Untitled"/detected shape, or one a previous enhance
-    // wrote (`title_by:` frontmatter) -- so re-enhancing regenerates the
-    // title too (owner request). The writer re-checks against the freshly
-    // parsed file, so a title the user types mid-run still wins.
+    // A title proposal only ever lands while the title is machine-owned: the automatic
+    // "Untitled"/detected shape, or one a previous enhance wrote (`title_by:`
+    // frontmatter) -- so re-enhancing regenerates the title too. The writer re-checks
+    // against the freshly parsed file, so a title the user types mid-run still wins.
     let title_machine_owned =
         crate::sessions::title_is_auto(&existing.title) || existing.title_by.is_some();
     let rename_title = cfg.enhance_rename_title && title_machine_owned;
@@ -1274,9 +1203,8 @@ fn enhance_path_inner<R: tauri::Runtime>(
         } else {
             None
         };
-        // With a matched event the app applies its name itself, verbatim
-        // (owner rule: never rephrased or improved); the TITLE output
-        // contract is only requested when the model must compose one.
+        // Apply matched calendar titles verbatim; request a TITLE only when the model
+        // must compose one.
         let compose_title = rename_title && event.is_none();
         // The calendar's roster wins when it has one; otherwise the model
         // names the people it finds in the transcript (see build_extra_rules).
@@ -1322,11 +1250,8 @@ fn enhance_path_inner<R: tauri::Runtime>(
                     .to_string(),
             );
         }
-        // Who was on the call goes into the note's `people:` frontmatter
-        // (owner request: it belongs in the file, for search and context):
-        // the calendar's attendees when it named any, else the names the
-        // model found in the transcript. Nothing found preserves what an
-        // earlier enhance saved (see `set_summary_at`'s docs).
+        // Store calendar attendees, or names extracted from the transcript, in people
+        // frontmatter. An empty result preserves previously saved people.
         let people = calendar_people.or(transcript_people);
         crate::sessions::set_summary_at(
             md_path,
@@ -1345,22 +1270,9 @@ fn enhance_path_inner<R: tauri::Runtime>(
     result
 }
 
-/// Fires an auto-enhance for `path` if the setting is on (stage 0.11,
-/// owner request: "call ends -> finished note, hands-free"). Called from
-/// two places:
-///
-/// - `stop_recording`'s finalization tail. If an auto re-transcribe was
-///   just enqueued for this same path, the check below defers to it -- the
-///   summary should be built from the BETTER transcript, and the
-///   re-transcribe completion re-triggers this.
-/// - `retranscribe::run_job` after a successful pass (by which point the
-///   queue no longer involves this path, so the check passes): a rewritten
-///   transcript makes any existing summary stale, so it regenerates.
-///
-/// Fire-and-forget: the outcome lands as `enhance-progress` events (emitted
-/// by `enhance_path_blocking` for every run, manual or auto), never a
-/// blocked stop. Failures (provider missing, another enhance running) are
-/// reported through the same events rather than dropped.
+/// Run an optional summary after recording finalization, or after a successful accurate
+/// pass. Defer while re-transcription involves this path, because the summary must use
+/// the final transcript. Automatic failures are reported through progress events.
 pub(crate) fn maybe_auto_enhance<R: tauri::Runtime>(app: tauri::AppHandle<R>, path: String) {
     let cfg = Config::load();
     if !cfg.auto_enhance {
@@ -1423,9 +1335,8 @@ mod tests {
             assert!(p.ends_with("Stay under the requested word limit.\n"));
         }
 
-        /// Owner ruling 2026-09-07: the transcript's main language is the
-        /// call's language, foreign phrases do not change it, and only the
-        /// language of the user's notes overrides it.
+        /// Notes determine summary language when present; otherwise use the main
+        /// language of the transcript. Foreign phrases do not change that choice.
         #[test]
         fn notes_language_overrides_transcript_language_and_neither_is_pooled() {
             let russian_call = "[00:00:01] Me: Давайте выпустим новую версию в пятницу и проверим тесты\n\
@@ -1555,9 +1466,9 @@ mod tests {
         #[test]
         fn people_line_is_peeled_cleaned_and_filtered() {
             let (people, body) = split_people_line(
-                "PEOPLE: Алиса, \"Zu\", Them, Me, internal, Алиса, Pavel Hrakovich\n\nСтатус: ok",
+                "PEOPLE: Алиса, \"Zu\", Them, Me, internal, Алиса, Alex Morgan\n\nСтатус: ok",
             );
-            assert_eq!(people.unwrap(), vec!["Алиса", "Zu", "Pavel Hrakovich"]);
+            assert_eq!(people.unwrap(), vec!["Алиса", "Zu", "Alex Morgan"]);
             assert_eq!(body, "Статус: ok");
 
             // Nobody named: no people, the note is untouched.
@@ -1630,11 +1541,11 @@ mod tests {
         fn a_matched_calendar_event_is_source_data_in_both_languages() {
             let event = CalendarEvent {
                 title: "Q3 Budget Review".to_string(),
-                attendees: vec!["Pavel".to_string(), "Dana".to_string()],
+                attendees: vec!["Alex".to_string(), "Dana".to_string()],
             };
             let english = build_prompt("Untitled", "", "[00:00:01] Me: hi", false, false, Some(&event));
             assert!(english.contains("\"Q3 Budget Review\""), "{english}");
-            assert!(english.contains("participants: Pavel, Dana"));
+            assert!(english.contains("participants: Alex, Dana"));
             assert!(english.contains("This IS the meeting"));
             // No event means no TITLE contract was requested here either.
             assert!(!english.contains("TITLE:"));
@@ -1648,7 +1559,7 @@ mod tests {
                 Some(&event),
             );
             assert!(cyrillic.contains("«Q3 Budget Review»"), "{cyrillic}");
-            assert!(cyrillic.contains("участники: Pavel, Dana"));
+            assert!(cyrillic.contains("участники: Alex, Dana"));
         }
     }
 
@@ -1683,25 +1594,25 @@ mod tests {
         #[test]
         fn reply_parsing_takes_the_event_verbatim_and_rejects_junk() {
             let event = parse_calendar_reply(
-                r#"{"found": true, "title": "Q3 Budget Review", "attendees": ["Pavel"]}"#,
+                r#"{"found": true, "title": "Q3 Budget Review", "attendees": ["Alex"]}"#,
             )
             .unwrap();
             assert_eq!(event.title, "Q3 Budget Review");
-            assert_eq!(event.attendees, vec!["Pavel"]);
+            assert_eq!(event.attendees, vec!["Alex"]);
         }
 
         #[test]
         fn group_addresses_are_not_people() {
             let kept = drop_group_addresses(vec![
-                "internal@demoboost.com".to_string(),
+                "internal@example.com".to_string(),
                 "Internal".to_string(),
-                "m.suwald@demoboost.com".to_string(),
+                "m.rivera@example.com".to_string(),
                 "Anna Berg".to_string(),
-                "Pavel".to_string(),
+                "Alex".to_string(),
                 "dev-team@x.io".to_string(),
                 "all-hands@x.io".to_string(),
             ]);
-            assert_eq!(kept, vec!["m.suwald@demoboost.com", "Anna Berg", "Pavel"]);
+            assert_eq!(kept, vec!["m.rivera@example.com", "Anna Berg", "Alex"]);
 
             // Stray prose or fences around the JSON are tolerated.
             let fenced = parse_calendar_reply(
@@ -1725,9 +1636,8 @@ mod tests {
             assert_eq!(event.title, "Weekly sync with platform");
         }
 
-        /// The exact output shape of the owner's real CLI (2.1.228): a
-        /// health-check header, then `name: url - status` lines where names
-        /// carry spaces and dots.
+        /// Parse CLI server listings with a health-check header and names containing
+        /// spaces or dots.
         #[test]
         fn mcp_list_text_parses_claude_ai_connector_names() {
             let stdout = "Checking MCP server health…\n\n\

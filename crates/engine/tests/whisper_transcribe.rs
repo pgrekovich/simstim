@@ -33,14 +33,12 @@ fn resample_linear(input: &[f32], from_rate: u32, to_rate: u32) -> Vec<f32> {
         .collect()
 }
 
-/// Real transcription against the real shipped whisper model. NOT run by
-/// `cargo test --workspace` (the Global Constraints forbid downloading the
-/// ~870MB model in the test suite): `#[ignore]`d, and this crate has no
-/// download step of its own, so the model must already be present in the
-/// real models dir before running this manually:
-///
-///   cargo test -p simstim-engine --release -- --ignored \
-///     whisper_transcribes_a_real_test_wav --nocapture
+/// Real transcription against the real shipped whisper model. NOT run by `cargo test
+/// --workspace` (the forbid downloading the ~870MB model in the test suite):
+/// `#[ignore]`d, and this crate has no download step of its own, so the model must
+/// already be present in the real models dir before running this manually: cargo test -p
+/// simstim-engine --release -- --ignored \ whisper_transcribes_a_real_test_wav
+/// --nocapture
 #[test]
 #[ignore = "downloads/uses the real ~870MB model; run manually, see doc comment"]
 fn whisper_transcribes_a_real_test_wav() {

@@ -2,7 +2,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { findTranscriptMatches, nearestLineIndex, TranscriptView } from "@/components/TranscriptView";
 
-describe("TranscriptView: transcript find (stage 2.1)", () => {
+describe("TranscriptView: transcript find", () => {
   it("finds every case-insensitive occurrence in finalized spoken text", () => {
     expect(findTranscriptMatches([
       "[00:00:01] Me: Berlin then berlin",
@@ -48,8 +48,8 @@ describe("TranscriptView: consecutive same-speaker lines group into one turn", (
 
     expect(screen.getAllByText("Me")).toHaveLength(1);
     expect(screen.getAllByText("Them")).toHaveLength(1);
-    // No clock is printed anywhere (owner ruling 2026-09-07); each chunk
-    // still says when it was said, on hover, through the native tooltip.
+    // No clock is printed anywhere; each chunk still says when it was said, on hover,
+    // through the native tooltip.
     for (const clock of ["00:00:02", "00:00:06", "00:00:10", "00:00:15"]) {
       expect(screen.queryByText(clock)).toBeNull();
     }
@@ -101,7 +101,7 @@ describe("TranscriptView: consecutive same-speaker lines group into one turn", (
   });
 });
 
-describe("TranscriptView: click-to-seek (Task 4, stage-0.7)", () => {
+describe("TranscriptView: click-to-seek", () => {
   it("calls onSeek with the offset in seconds parsed from a clicked line's timestamp", () => {
     const onSeek = vi.fn();
     render(<TranscriptView lines={["[00:01:05] Me: hello there"]} onSeek={onSeek} />);
@@ -156,7 +156,7 @@ describe("TranscriptView: click-to-seek (Task 4, stage-0.7)", () => {
   });
 });
 
-describe("TranscriptView: citation jump (stage 4.2)", () => {
+describe("TranscriptView: citation jump", () => {
   const lines = [
     "[00:00:05] Me: opening",
     "[00:10:00] Them: berlin stays on hold",

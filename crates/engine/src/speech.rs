@@ -1,30 +1,7 @@
-//! Which parts of a channel are speech, and how to get from a speech-only
-//! view of it back to real file time.
-//!
-//! The live pipeline only ever hands the ASR the chunks Silero finalized as
-//! speech (see `session.rs`), but the offline whisper pass used to feed it a
-//! whole channel end to end, silence included. That is not a wasted-cycles
-//! problem, it is a correctness one, and it cost a real call its transcript:
-//!
-//! - whisper.cpp detects the language ONCE, from the first 30 seconds it is
-//!   given, and applies it to everything after. A channel that opens with a
-//!   minute of silence (the ordinary case for a mic on a call that someone
-//!   else starts) gets its language decided by that silence. In the call that
-//!   surfaced this, a Polish lesson, the mic channel was detected as English
-//!   and every Polish sentence in it came back as English nonsense
-//!   ("poszliśmy do cukierni... z tortami" as "went to the soup... with
-//!   different tort").
-//! - long silence makes whisper hallucinate. The same channel produced
-//!   "Thank you." on a two-second cadence for the entire hour, and
-//!   `keep_context: true` (see `whisper.rs`) then kept feeding that phrase
-//!   back as its own prompt, locking the loop in place.
-//!
-//! Removing the silence fixes both at once: the first window whisper sees is
-//! speech, so detection has something real to work with, and there is no
-//! silence left to hallucinate over. Cutting audio out mid-file does mean
-//! whisper's timestamps no longer refer to the file, so this module owns the
-//! mapping back ([`SpeechTimeline::to_absolute_secs`]) -- transcript lines
-//! must stay anchored to the recording, since the audio player seeks by them.
+//! Extract speech regions and map speech-only timestamps back to file time. Leading
+//! silence can corrupt Whisper language detection, while silent gaps can produce
+//! hallucinated text. Use independent VAD state per channel, omit silent regions from
+//! inference and retain their original offsets for timestamp mapping.
 
 use anyhow::{Context, Result};
 use std::path::Path;
@@ -82,22 +59,9 @@ impl SpeechRegion {
     }
 }
 
-/// The speech-only view of one channel: an ordered, non-overlapping set of
-/// regions, plus the arithmetic to move between condensed time (what whisper
-/// reports, having only been given the speech) and file time (what a
-/// transcript line means). Regions are written back to back, with nothing
-/// between them.
-///
-/// Do not "restore" the turn boundaries by writing a short silence between
-/// regions instead. It is a tempting idea -- whisper segments largely at
-/// pauses, so a channel condensed with no pauses left comes back as run-on
-/// lines covering half a minute of real time each -- and it was tried, on the
-/// call that prompted all of this. Measured result: the inserted silence is
-/// still silence, and whisper hallucinates over silence. The mic channel
-/// flipped from correct Polish to Russian and filled the transcript with a
-/// repeated YouTube subtitle credit, once per separator. Run-on lines are the
-/// better trade; anything that wants finer segments has to come from
-/// whisper's own token timestamps, not from feeding it fake pauses.
+/// Map decoded speech offsets back to the recording timeline. Adjacent speech regions
+/// are concatenated without inserted silence; optional seam padding must not alter the
+/// original file offsets.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SpeechTimeline {
     regions: Vec<SpeechRegion>,
@@ -140,12 +104,8 @@ impl SpeechTimeline {
         &self.regions
     }
 
-    /// Whether no speech was detected at all -- a muted mic, a call the owner
-    /// only listened to, a channel that never carried audio. Callers must skip
-    /// whisper entirely for such a channel rather than hand it an empty
-    /// buffer: there is nothing to transcribe, and the old whole-channel
-    /// behavior is exactly what filled an hour of transcript with
-    /// "Thank you." (see the module docs).
+    /// Skip Whisper when no speech regions exist; empty or silent buffers can produce
+    /// hallucinated text.
     pub fn is_empty(&self) -> bool {
         self.regions.is_empty()
     }

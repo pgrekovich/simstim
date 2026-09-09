@@ -15,17 +15,17 @@ interface GlobalSearchProps {
   sessions: SessionMeta[];
   onOpenSession: (path: string, spoken?: SpokenSearchTarget) => void;
   /**
-   * Hands the typed query to the Ask your notes surface as a question
-   * (stage 4.2, design 8a's bottom row): reachable as the list's last row
-   * and directly via ⌘↵ from the input. Absent, the row doesn't render.
-   */
+ * Hands the typed query to the Ask your notes surface as a question:
+ * reachable as the list's last row and directly via ⌘↵ from the input.
+ * Absent, the row doesn't render.
+ *
+ */
   onAskAllNotes?: (question: string) => void;
   /**
-   * Hands the typed query to the Ask this call drawer for the OPEN note
-   * (2026-09-04 ruling: one field reaches everything; the sidebar's own
-   * ask row is gone). Absent when no note is open, and the row doesn't
-   * render.
-   */
+ * Send the query to the open note's chat drawer. Omit the action when no
+ * note is open.
+ *
+ */
   onAskThisCall?: (question: string) => void;
 }
 

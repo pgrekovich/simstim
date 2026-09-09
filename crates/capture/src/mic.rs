@@ -52,7 +52,7 @@ pub fn start_mic(tx: Sender<Chunk>) -> Result<CaptureHandle> {
             let device = host
                 .default_input_device()
                 .ok_or_else(|| anyhow!("no input device"))?;
-            // Never bind to our own tap aggregate device (set up in Task 5).
+            // Exclude the system-audio tap's aggregate device from microphone selection.
             if let Ok(desc) = device.description()
                 && desc.name().contains("simstim")
             {

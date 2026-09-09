@@ -3,23 +3,25 @@ import { useRef, type PointerEvent as ReactPointerEvent } from "react";
 interface ResizeHandleProps {
   /** Accessible name ("Resize sidebar", "Resize Ask this call"). */
   label: string;
-  /** The drag began: the owner snapshots the width being resized. */
+  /**
+ * On drag start, the parent snapshots the pane width.
+ *
+ */
   onDragStart: () => void;
   /** Total horizontal travel since the drag began, in px (signed). */
   onDrag: (deltaX: number) => void;
-  /** Double-click: the owner restores the default width. */
+  /**
+ * On double-click, the parent restores the default width.
+ *
+ */
   onReset: () => void;
 }
 
 /**
- * A draggable pane divider (stage 4.2 polish: the owner asked for resizable
- * sidebar and Ask-this-call panes). Zero layout width: the outer element
- * contributes nothing to the flex row, the inner strip straddles the
- * neighboring panes' shared border with a 9px hit area.
+ * Pane divider with a nine-pixel hit area and zero layout width. Window
+ * listeners keep dragging active outside the divider and are removed on
+ * pointerup.
  *
- * Window-level listeners rather than pointer capture: the pointer leaves the
- * 9px strip on any real drag, capture is spotty under jsdom, and window
- * listeners removed on pointerup behave identically for this use.
  */
 export function ResizeHandle({ label, onDragStart, onDrag, onReset }: ResizeHandleProps) {
   // The active drag's cleanup, so an unmount mid-drag can't leak listeners.

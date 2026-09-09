@@ -205,7 +205,7 @@ describe("App: guided first run", () => {
   });
 });
 
-describe("App: call detection via the banner window (stage 1.1)", () => {
+describe("App: call detection via the banner window", () => {
   /** Fires the event BannerApp (the banner window) sends on Start. */
   async function emitBannerStart(
     payload = { bundle_id: "com.tinyspeck.slackmacgap", app_name: "Slack" },
@@ -362,7 +362,7 @@ describe("App: call detection via the banner window (stage 1.1)", () => {
   });
 });
 
-describe("App: menu-bar recording toggle (stage 3)", () => {
+describe("App: menu-bar recording toggle", () => {
   async function emitMenuBarToggle() {
     await waitFor(() =>
       expect(
@@ -390,10 +390,8 @@ describe("App: menu-bar recording toggle (stage 3)", () => {
   });
 
   it("resizes the sidebar by dragging its border and resets on double-click", async () => {
-    // Derived from the spec, not repeated literals: the default is an owner
-    // taste call (224 -> 296 on 2026-09-04) and may move again. The drag
-    // target must stay under jsdom's 1024px window minus the note pane's
-    // 640px minimum (the drag clamp), so the delta is small.
+    // Derive widths from the exported constants. Keep the drag within the test window's
+    // space after reserving the main pane minimum.
     const fallback = SIDEBAR_WIDTH.default;
     const dragged = fallback + 40;
     render(<App />);
@@ -484,7 +482,7 @@ describe("App: menu-bar recording toggle (stage 3)", () => {
     Object.defineProperty(window, "innerWidth", { value: originalWidth, configurable: true });
   });
 
-  it("opens the Ask this call drawer from its toolbar button (stage 4.2)", async () => {
+  it("opens the Ask this call drawer from its toolbar button", async () => {
     vi.mocked(ipc.listSessions).mockResolvedValueOnce([
       {
         path: "/tmp/old.md",
@@ -566,7 +564,7 @@ describe("App: menu-bar recording toggle (stage 3)", () => {
   });
 });
 
-describe("App: hot-mic fix (final review Critical finding)", () => {
+describe("App: hot-mic fix", () => {
   it("leaves recording mode immediately while slow finalization stays in the background", async () => {
     let finishStop!: (path: string) => void;
     vi.mocked(ipc.stopRecording).mockImplementation(
@@ -619,7 +617,7 @@ describe("App: hot-mic fix (final review Critical finding)", () => {
   });
 });
 
-describe("App: a saving session must not block the next call (owner bug: missed a call start)", () => {
+describe("App: a saving session must not block the next call", () => {
   /** Starts a recording, then stops it with `stopRecording` left pending, so
    *  the app sits in the "saving" state a long encode produces. Returns the
    *  resolver for the pending stop. */
@@ -710,14 +708,14 @@ describe("App: a saving session must not block the next call (owner bug: missed 
     fireEvent.click(await findStartControl());
     await screen.findByRole("button", { name: /stop/i });
 
-    // A save failure means the old call's file may be incomplete; the owner
-    // must see it even though a new recording is already running.
+    // A save failure means the old call's file may be incomplete; the user must see it
+    // even though a new recording is already running.
     act(() => failStop("encode failed: disk full"));
     expect(await screen.findByText(/encode failed: disk full/)).toBeVisible();
   });
 });
 
-describe("App: active-session notes survive a switch-away-and-back (final review Important finding)", () => {
+describe("App: active-session notes survive a switch-away-and-back", () => {
   it("reseeds SessionView from the last typed notes, not a blank placeholder, when returning to the active session", async () => {
     const sessions: SessionMeta[] = [
       { path: "/tmp/active.md", title: "Untitled", date: new Date().toISOString(), duration_secs: null },
@@ -813,10 +811,8 @@ describe("App: record continues into the open note (behavior fix)", () => {
     // once the session flips to actively recording.
     await screen.findByDisplayValue("Other call");
     await screen.findByDisplayValue("old notes");
-    // The existing transcript line must still be visible: recording into an
-    // open note must not lose what was already there.
-    // Its clock is not printed (owner ruling 2026-09-07), it lives on the
-    // chunk's tooltip.
+    // Continuing the open note preserves existing transcript text and timestamp
+    // tooltips.
     await waitFor(() => expect(screen.getByTitle("00:00:01")).toHaveTextContent("hi"));
   });
 
@@ -875,7 +871,7 @@ describe("App: record continues into the open note (behavior fix)", () => {
   });
 });
 
-describe("App: refreshes a re-transcribed session after a background done event (fix-review finding, wave 2)", () => {
+describe("App: refreshes a re-transcribed session after a background done event", () => {
   it("remounts the currently selected SessionView with the fresh transcript once retranscribe-progress reports done", async () => {
     // Reproduces the bug: a SessionView only re-seeds its local transcript
     // state on mount. If a re-transcribe job finishes while the user is
@@ -971,7 +967,7 @@ describe("App: refreshes a re-transcribed session after a background done event 
     expect(vi.mocked(ipc.readSession).mock.calls.length).toBe(callsBeforeEvent);
   });
 
-  it("also refetches on the 'transcript updated, but the audio could not be deleted' error (minor fix-review finding)", async () => {
+  it("also refetches on the 'transcript updated, but the audio could not be deleted' error", async () => {
     // That specific "error" phase is the one case where the transcript on
     // disk DID change even though the phase isn't "done" -- the whisper pass
     // succeeded and wrote the new transcript; only the follow-up audio
@@ -1059,7 +1055,7 @@ describe("App: refreshes a re-transcribed session after a background done event 
   });
 });
 
-describe("App: surfaces terminal re-transcribe errors from background jobs (stage 0.9 Task 2 review finding)", () => {
+describe("App: surfaces terminal re-transcribe errors from background jobs", () => {
   it("shows the error message in the header for a session other than the one currently viewed", async () => {
     // Reproduces the bug: an auto-triggered re-transcribe job is
     // fire-and-forget (see retranscribe.rs's module docs) and has no other
@@ -1103,14 +1099,8 @@ describe("App: surfaces terminal re-transcribe errors from background jobs (stag
   });
 
   it("shows an AUTO job's failure in the header even for the session currently being viewed (the common case)", async () => {
-    // Second review round finding: an earlier version of this fix suppressed
-    // the header whenever `path === selectedPath`, on the theory that a
-    // manual click's own inline error would already cover it. But
-    // `selectedPath` stays pointed at whatever session just stopped
-    // recording (`handleStop` never changes it), which is exactly the
-    // session an auto job runs for -- so that guard silenced precisely the
-    // ordinary case this whole fix exists for. Nobody clicked anything here;
-    // the failure must still reach the header.
+    // Automatic failures must appear in the header even when the affected note is
+    // selected. Only manual requests have a separate inline error.
     const sessions: SessionMeta[] = [
       { path: "/tmp/viewed.md", title: "Viewed call", date: new Date().toISOString(), duration_secs: null },
     ];
@@ -1189,16 +1179,9 @@ describe("App: surfaces terminal re-transcribe errors from background jobs (stag
     expect(screen.queryByText(/whisper model not downloaded/i)).not.toBeInTheDocument();
   });
 
-  it("does not permanently silence a LATER auto-job failure after a manual click rejects with no terminal event (third review round)", async () => {
-    // Reproduces the leak: `retranscribe_session` rejects up front, before
-    // emitting anything at all, on several validation paths (model not
-    // downloaded, missing audio, not-active, already-running/queued -- see
-    // retranscribe.rs). A manual click hitting one of those shows its error
-    // inline correctly (SessionView's own catch), but no
-    // `retranscribe-progress` event ever fires for it -- so the listener's
-    // terminal-event cleanup never runs, and the old code left the path
-    // marked "manual in flight" forever. The very next genuine auto-job
-    // failure for that same session would then be silently swallowed too.
+  it("does not permanently silence a LATER auto-job failure after a manual click rejects with no terminal event", async () => {
+    // Early validation can reject a manual request without emitting a terminal event.
+    // Clear its tracking so later automatic errors for the same note remain visible.
     const sessions: SessionMeta[] = [
       { path: "/tmp/viewed.md", title: "Viewed call", date: new Date().toISOString(), duration_secs: null },
     ];
@@ -1227,7 +1210,7 @@ describe("App: surfaces terminal re-transcribe errors from background jobs (stag
     const retranscribeButton = await screen.findByRole("button", { name: /^improve transcript$/i });
     fireEvent.click(retranscribeButton);
 
-    // The manual click's own inline error, exactly as before this fix.
+    // Manual failures remain visible inline.
     await screen.findByText(/whisper model not downloaded/i);
 
     // A LATER, genuinely automatic job for the SAME session fails. Nothing
@@ -1244,15 +1227,9 @@ describe("App: surfaces terminal re-transcribe errors from background jobs (stag
     await screen.findByText(/delete-after-retranscribe failed: permission denied/i);
   });
 
-  it("does not lose a background error that lands mid-recording -- surfaces it once the recording stops (final review Important finding)", async () => {
-    // Reproduces the bug: `maybe_auto_retranscribe` emits its terminal error
-    // inside `stop_recording`, before that command's own promise resolves.
-    // The listener already (correctly) refuses to clobber a genuinely live
-    // "recording" status with an unrelated background failure -- but the old
-    // code just discarded the message right there in that branch, forever.
-    // If status never happens to be non-"recording" again while some OTHER
-    // background error also fires, the owner would never learn about this
-    // one at all.
+  it("does not lose a background error that lands mid-recording -- surfaces it once the recording stops", async () => {
+    // An automatic error can arrive before Stop resolves. Preserve it while recording
+    // status is visible, then surface it after that state ends.
     render(<App />);
 
     const recordButton = await findStartControl();
@@ -1284,7 +1261,7 @@ describe("App: surfaces terminal re-transcribe errors from background jobs (stag
   });
 });
 
-describe("App: sidebar refresh on model-ready (final review Important finding)", () => {
+describe("App: sidebar refresh on model-ready", () => {
   it("refreshes the session list exactly once when the model finishes loading, not on every later line", async () => {
     render(<App />);
 
@@ -1311,7 +1288,7 @@ describe("App: sidebar refresh on model-ready (final review Important finding)",
   });
 });
 
-describe("App: deleting a note from the sidebar (stage 0.10)", () => {
+describe("App: deleting a note from the sidebar", () => {
   const doomed: SessionMeta[] = [
     { path: "/tmp/doomed.md", title: "Doomed call", date: new Date().toISOString(), duration_secs: null },
   ];
@@ -1398,7 +1375,7 @@ describe("App: deleting a note from the sidebar (stage 0.10)", () => {
   });
 });
 
-describe("App: global search (stage 2.0)", () => {
+describe("App: global search", () => {
   const all: SessionMeta[] = [
     { path: "/tmp/sync.md", title: "Weekly sync", date: new Date().toISOString(), duration_secs: null },
     { path: "/tmp/standup.md", title: "Standup", date: new Date().toISOString(), duration_secs: null },
@@ -1501,7 +1478,7 @@ describe("App: global search (stage 2.0)", () => {
   });
 });
 
-describe("App: empty state and active-window shortcuts (stage 0.10)", () => {
+describe("App: empty state and active-window shortcuts", () => {
   it("shows the shortcut menu when nothing is selected, and its rows work", async () => {
     render(<App />);
     await screen.findByText("New Note");
@@ -1597,7 +1574,7 @@ describe("App: empty state and active-window shortcuts (stage 0.10)", () => {
   });
 });
 
-describe("App: note actions menu (stage 0.10)", () => {
+describe("App: note actions menu", () => {
   const one: SessionMeta[] = [
     { path: "/tmp/sync.md", title: "Weekly sync", date: new Date().toISOString(), duration_secs: null },
   ];
@@ -1637,7 +1614,7 @@ describe("App: note actions menu (stage 0.10)", () => {
   });
 });
 
-describe("App: enhance progress (stage 0.11)", () => {
+describe("App: enhance progress", () => {
   const one: SessionMeta[] = [
     { path: "/tmp/sync.md", title: "Weekly sync", date: new Date().toISOString(), duration_secs: null },
   ];
@@ -1688,8 +1665,7 @@ describe("App: enhance progress (stage 0.11)", () => {
     await waitFor(() => expect(document.body.textContent).toContain("hi"));
 
     emit("enhance-progress", { path: "/tmp/sync.md", phase: "running", provider: "local", message: null });
-    // The Summary tab appears with a spinner (stage 4.1: no more toolbar
-    // chip); the step detail rides in its tooltip.
+    // Summary progress appears in its tab spinner and tooltip.
     const tab = await screen.findByRole("tab", { name: /summary/i });
     expect(screen.getByTestId("summary-tab-spinner")).toBeInTheDocument();
     expect(tab).toHaveAttribute("title", "Summarizing...");

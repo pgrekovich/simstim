@@ -39,7 +39,10 @@ import { describePeople } from "@/lib/people";
 import { STANDARD_STYLE, styleName, usePrompts } from "@/lib/prompts";
 import { isTranscriptUpdatedButAudioDeleteFailed, type RetranscribeJob } from "@/lib/retranscribeStatus";
 
-/** Global Constraints (Task 6): notes save 500ms after the last keystroke. */
+/**
+ * Debounce note saves for 500 ms after the last keystroke.
+ *
+ */
 const NOTES_DEBOUNCE_MS = 500;
 const TOPBAR_GAP_PX = 12;
 const MIN_FIND_GAP_PX = 16;
@@ -96,14 +99,10 @@ interface SessionViewProps {
   interimMe: string;
   interimThem: string;
   /**
-   * Which session (if any) currently has a re-transcribe job running, owned
-   * by App instead of local state (security-review fix, Task 4): a job can
-   * outlive this component's mounted lifetime (switching sessions away and
-   * back remounts it under a fresh `key={path}`, per the class doc comment
-   * below), so "is a job running for MY path" has to be read from something
-   * that survives that remount rather than reset to `false` by it. See
-   * `RetranscribeJob`'s own doc comment for the full rationale.
-   */
+ * Job state lives in App so it survives switching notes and remounting this
+ * view.
+ *
+ */
   retranscribingJob: RetranscribeJob;
   /**
    * Whether an enhance is currently running for THIS path -- owned by App
@@ -115,10 +114,9 @@ interface SessionViewProps {
    */
   enhanceRunning?: boolean;
   /**
-   * The running job's step message ("Summarizing part 2 of 7..."), when the
-   * local provider reports map/reduce progress; shown as the spinning
-   * Summary tab's tooltip. Owned by App's `enhance-progress` listener too.
-   */
+ * Progress text from App's enhance-progress listener, shown in the Summary
+ * tab tooltip.
+ */
   enhanceProgress?: string | null;
   /** Notifies the caller after a title save resolves, so it can refresh the sidebar. */
   onTitleChange?: () => void;
@@ -140,42 +138,26 @@ interface SessionViewProps {
    */
   onSaveError?: (message: string) => void;
   /**
-   * Fires the instant `handleRetranscribe` starts a MANUAL job for this
-   * `path`, before awaiting `retranscribeSession` (stage 0.9 Task 2 review
-   * fix). App tracks this so its `retranscribe-progress` listener can tell a
-   * manual click's failure (already shown inline here via
-   * `retranscribeError`, right below) apart from an auto-triggered job's
-   * failure, which has no inline display anywhere and needs the header
-   * instead -- see App's `manualRetranscribePathsRef` doc comment for the
-   * full rationale. Never called for the active session (the Re-transcribe
-   * button only ever renders when `initialData.audio_path` is set, which is
-   * never true while `isActive`).
-   */
+ * Mark a manual request before awaiting it so App can distinguish inline
+ * failures from automatic background errors.
+ *
+ */
   onRetranscribeStart?: (path: string) => void;
   /**
-   * Fires when a MANUAL job for this `path` ends WITHOUT ever producing a
-   * terminal `retranscribe-progress` event (stage 0.9 Task 2, second review
-   * round): `retranscribe_session` rejects up front, before emitting
-   * anything, on several validation paths (not-active/finalizing check,
-   * missing audio, retired/missing model, already-running/already-queued --
-   * see `retranscribe.rs`'s doc comments), so `handleRetranscribe`'s catch
-   * is the only signal App ever gets that this attempt is over. Without
-   * this, `path` would stay marked "manual in flight" forever, permanently
-   * suppressing the header for a LATER genuine auto-job failure on the same
-   * session -- exactly the silence this whole fix exists to remove, just
-   * deferred. Harmless to also fire when a terminal event DID already
-   * arrive first (App's cleanup there is a plain `Set.delete`, a no-op on
-   * an already-removed path), so this only needs to cover the no-event
-   * case, not detect it.
-   */
+ * Clear manual-job tracking when validation rejects before a terminal
+ * progress event. Otherwise later automatic failures on this path could be
+ * suppressed.
+ *
+ */
   onRetranscribeEnd?: (path: string) => void;
   transcriptFindRequest?: TranscriptFindRequest | null;
   /**
-   * Scroll-to-citation (stage 4.2): a chat source chip for THIS session was
-   * clicked. Switches to the transcript tab and centers the line nearest the
-   * cited timestamp (passed through to `TranscriptView`'s `jumpRequest`).
-   * Same monotonic-id recipe as `transcriptFindRequest`.
-   */
+ * Scroll-to-citation: a chat source chip for THIS session was clicked.
+ * Switches to the transcript tab and centers the line nearest the cited
+ * timestamp (passed through to `TranscriptView`'s `jumpRequest`). Same
+ * monotonic-id recipe as `transcriptFindRequest`.
+ *
+ */
   transcriptJumpRequest?: { id: number; timestamp: string } | null;
 }
 
@@ -197,70 +179,12 @@ export interface SessionViewHandle {
 }
 
 /**
- * Renders one session: editable title, a debounced notes editor and the
- * transcript.
+ * Render one session with editable notes and transcript. App keys the
+ * component by path, so local state is seeded on mount and preserved during
+ * edits. Flush debounced edits before recording ownership changes; use the
+ * current active writer when saving. Background processing can outlive this
+ * view and is tracked by App.
  *
- * App keys this component by path (`<SessionView key={path} .../>`), so
- * switching sessions fully unmounts the old instance and mounts a fresh one.
- * Title/notes state is seeded from `initialData` exactly once, on mount
- * (`useState(initialData.title)`), and is never re-seeded from later prop
- * changes -- the remount-on-key-change is what gives "reset when the session
- * changes, keep local edits otherwise" for free, without an effect that
- * would have to distinguish "the path changed" from "the same session's data
- * was refetched out from under an in-progress edit".
- *
- * For the active session specifically, `initialData` on any given mount is
- * NOT a fixed placeholder: App lifts the active session's title/notes into
- * its own state (updated live via `onActiveEdit`, called on every keystroke
- * and on the empty-title normalization) and passes that back in as
- * `initialData` on the next mount. Without this, switching away from the
- * active session and back would remount this component seeded with a stale
- * "Untitled"/"" placeholder instead of what was actually last typed, and the
- * very next keystroke would then debounce-save that near-empty state over
- * the real notes.
- *
- * Routing: while `isActive`, edits go through `update_active_session` --
- * the worker owns that file under the single-writer rule (see
- * `src-tauri/src/session.rs`). Once recording stops, `isActive` flips to
- * `false` on this same mounted instance in the ordinary case (App keeps
- * `selectedPath` steady across stop while this session stays selected), and
- * subsequent edits route through `save_session` instead. `isActiveRef` (not
- * the `isActive` prop) is read inside the notes-debounce timeout callback
- * and the unmount cleanup, kept in sync via an effect below.
- *
- * That said, the stop transition specifically does NOT go through an
- * isActive=false re-render of this same instance in App's actual JSX: App
- * renders the active session and an inactive session as different ternary
- * branches, and on stop the branch flips straight to a "loading" placeholder
- * (sessionData is reset to null first) before the real data streams back in.
- * React therefore unmounts this instance outright rather than re-rendering
- * it with isActive=false, so this component never observes the flip and
- * isActiveRef.current is still `true` in the unmount cleanup -- but by then
- * `stop_recording` may have already resolved and torn down the worker, so a
- * flush routed through `update_active_session` at that point can reject
- * with "not recording", silently losing whatever was still unsaved. That's
- * exactly what `flushPendingEdits` exists to close: App calls it explicitly,
- * awaited, BEFORE calling `stop_recording`, while this instance is still
- * mounted and the backend is still genuinely recording -- see App's
- * `handleStop`.
- *
- * Audio playback and re-transcribe (Task 4, stage-0.7): when
- * `initialData.audio_path` is set (never true while `isActive`, since App
- * only fills it in from a `read_session` disk read), an `<audio>` player and
- * a "Re-transcribe" button render above the transcript. Clicking a
- * transcript line seeks that player (`handleSeek`, wired through
- * `TranscriptView`'s `onSeek`); the button runs `retranscribeSession` and,
- * once it resolves, re-reads the file so the rewritten transcript appears
- * without a full remount (`transcript` state, seeded once like title/notes
- * above).
- *
- * "Is a job running, and its progress text" is deliberately NOT local state
- * here (security-review fix, Task 4): it's the `retranscribingJob` prop,
- * owned by App. A local boolean would reset to `false` on exactly the kind
- * of remount described above (switching away from this session and back
- * mid-job), silently re-enabling the button while the backend job (global,
- * one at a time, see `retranscribe.rs`) was still genuinely running. See
- * `RetranscribeJob`'s doc comment for the full rationale.
  */
 export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(function SessionView(
   {
@@ -286,18 +210,9 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
 ) {
   const [title, setTitle] = useState(initialData.title);
   const [notes, setNotes] = useState(initialData.notes);
-  // Seeded once from initialData (same "reset on remount, live otherwise"
-  // pattern as title/notes above), then updated in place after a successful
-  // re-transcribe -- see handleRetranscribe. `initialData.audio_path` is
-  // read directly from the prop rather than mirrored into its own state --
-  // NOT because it's immutable across a re-transcribe (fix-review
-  // correction, stage 0.9: `delete_audio_after_retranscribe` can remove the
-  // audio file entirely once a pass succeeds), but because this component
-  // never needs to react to that change live: a delete-after failure/success
-  // doesn't change what this mounted instance renders for `audioPath` below
-  // until the next remount (switching sessions away and back, or the
-  // App-driven `reloadTick` remount after a background job) re-seeds it fresh
-  // from a real `read_session` disk read.
+  // Seed transcript state on mount and refresh it after transcription. Audio
+  // availability comes from the parent's refreshed data because successful cleanup can
+  // remove the file.
   const [transcript, setTranscript] = useState(initialData.transcript);
   // Read straight from the mount's initialData: when an enhance finishes,
   // App refetches the session and remounts this component under a bumped
@@ -461,25 +376,9 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
     isActiveRef.current = isActive;
   }, [isActive]);
 
-  // Saves the title if it changed since the last save, routed by whether
-  // this session is currently the active recording. A no-op save (title
-  // unchanged) is skipped so blurring without editing never fires an IPC
-  // call. An emptied-out title is normalized to "Untitled" on commit (both
-  // in the saved value and the displayed input) rather than left blank --
-  // otherwise the sidebar would show an empty row for it. `save_session`
-  // takes the full title+notes pair (it rewrites the whole file), so the
-  // inactive branch sends the current notes alongside.
-  //
-  // `savedTitleRef` only advances once the IPC call actually resolves
-  // (Critical fix-review finding): an earlier version set it eagerly,
-  // before awaiting the result, so a rejected save (e.g. `save_session`
-  // rejecting because this path just became the active recording, right as
-  // App's `handleStart` flips `AppState` synchronously) was marked "saved"
-  // anyway -- the edit was shown in the UI but silently never written, and
-  // nothing would ever retry it since the next blur/debounce would see the
-  // value already matching `savedTitleRef` and skip. Not advancing on
-  // failure is itself the "revert": a later commit with the same value
-  // will retry instead of no-op-ing.
+  // Save changed titles through the current writer, normalizing empty titles to
+  // Untitled. Include current notes in inactive-file saves. Advance savedTitleRef only
+  // after successful IPC so a failed save can be retried.
   function commitTitle(): Promise<void> {
     const rawValue = titleRef.current;
     const value = rawValue.trim().length > 0 ? rawValue : "Untitled";
@@ -566,27 +465,17 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Click-to-seek (Task 4): seeks the player to the clicked transcript
-  // line's offset and starts playback. Only ever wired up by the JSX below
-  // when `initialData.audio_path` is set, so `playerRef.current` being null
-  // here would mean the player was unmounted out from under an in-flight
-  // click -- defensive, not expected in practice.
+  // Click-to-seek: seeks the player to the clicked transcript line's offset and starts
+  // playback. Only ever wired up by the JSX below when `initialData.audio_path` is set,
+  // so `playerRef.current` being null here would mean the player was unmounted out from
+  // under an in-flight click -- defensive, not expected in practice.
   function handleSeek(offsetSecs: number) {
     playerRef.current?.seek(offsetSecs);
   }
 
-  // Starts an offline re-transcribe of this session's audio and, once it
-  // resolves, re-reads the file from disk so the new transcript (and the
-  // updated `asr:`) show up without a full remount -- `retranscribeSession`
-  // only rewrites the `## Transcript` section and frontmatter, it doesn't
-  // push the new text back through an event, so a re-read is the only way
-  // to pick it up. Progress text/"is running" in the meantime come from the
-  // `retranscribingJob` prop (App's listener), not from local state -- see
-  // the class doc comment above for why. `clicking` only covers the brief
-  // window before that prop updates. Calls `onRetranscribeStart` right
-  // before the await so App can record this as a MANUAL job -- see that
-  // prop's own doc comment for why (its `retranscribe-progress` listener
-  // needs to tell this apart from an auto-triggered job on failure).
+  // Start a manual transcription request and reread the note after completion. Job
+  // progress lives in App because it can outlive this view. Notify App when starting and
+  // when early validation rejects without a progress event.
   async function handleRetranscribe() {
     if (!initialData.audio_path || isActive || clicking || jobRunningHere) return;
     setClicking(true);
@@ -599,14 +488,13 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
     } catch (err) {
       console.error("failed to re-transcribe session", err);
       setRetranscribeError(String(err));
-      // Minor fix-review finding, stage 0.9 final review: the "transcript
-      // updated, but the audio could not be deleted" rejection is the one
-      // case where the promise rejects even though the transcript itself WAS
-      // rewritten -- `maybe_delete_audio`'s own failure surfaces through the
-      // same "error" phase/rejection as a genuine pipeline failure, but only
-      // the deletion step afterward actually failed. Without refetching
-      // here too, this on-screen transcript stays stale (the success path
-      // above never runs, since the promise rejected).
+      // the "transcript updated, but the audio could not be deleted" rejection is the
+      // one case where the promise rejects even though the transcript itself WAS
+      // rewritten -- `maybe_delete_audio`'s own failure surfaces through the same
+      // "error" phase/rejection as a genuine pipeline failure, but only the deletion
+      // step afterward actually failed. Without refetching here too, this on-screen
+      // transcript stays stale (the success path above never runs, since the promise
+      // rejected).
       if (isTranscriptUpdatedButAudioDeleteFailed(String(err))) {
         readSession(path)
           .then((data) => setTranscript(data.transcript))
@@ -624,18 +512,18 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
     }
   }
 
-  // Enhance (stage 0.11): the user's rough notes lead, the transcript backs
-  // them, and the configured provider writes the result into `## Summary`.
-  // Flushes pending edits FIRST so what the model reads from disk is what's
-  // on screen. Progress, the refreshed summary and any failure all flow
-  // through the backend's `enhance-progress` events (App's listener), which
-  // this command also emits for its own run -- so the rejection here is
+  // Enhance: the user's rough notes lead, the transcript backs them, and the configured
+  // provider writes the result into `## Summary`. Flushes pending edits FIRST so what
+  // the model reads from disk is what's on screen. Progress, the refreshed summary and
+  // any failure all flow through the backend's `enhance-progress` events (App's
+  // listener), which this command also emits for its own run -- so the rejection here is
   // deliberately not shown a second time.
   /**
-   * Copies the summary as the Markdown it is (owner-shareable in one paste).
-   * The clipboard API is user-gesture gated, and this only ever runs from a
-   * click; a rejection just leaves the label as "copy".
-   */
+ * Copies the summary as the Markdown it is (shareable in one paste).
+ * The clipboard API is user-gesture gated, and this only ever runs from a
+ * click; a rejection just leaves the label as "copy".
+ *
+ */
   function handleCopySummary() {
     const text = summary.trim();
     if (!text) return;
@@ -801,7 +689,7 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
   // truncates rather than wraps under the title.
   const sessionMeta = formatSessionMeta(initialData.date, durationSecs);
   // Who was on the call, on its own line so a big meeting never truncates
-  // the date: readable names (emails become "M. Suwald"), the first few
+  // the date: readable names (emails become "M. Rivera"), the first few
   // spelled out and the rest counted, the full roster on hover.
   const people = describePeople(initialData.people);
 
@@ -1130,12 +1018,8 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
             onSeek={audioPath ? handleSeek : undefined}
             matches={transcriptMatches}
             activeMatchIndex={findOpen ? activeFindIndex : -1}
-            // Withheld until the transcript tab is actually the visible one:
-            // the tab contents are force-mounted and CSS-hidden, and
-            // scrollIntoView inside a display:none container is a silent
-            // no-op -- the jump effect above switches the tab, and only the
-            // re-render that shows it may deliver the request (owner bug
-            // report: chip click opened the transcript but never scrolled).
+            // Wait until the transcript tab is visible before scrolling. scrollIntoView
+            // is ineffective inside a display:none panel.
             jumpRequest={activeTab === "transcript" ? transcriptJumpRequest : null}
           />
 

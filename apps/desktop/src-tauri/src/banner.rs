@@ -1,10 +1,5 @@
-//! Floating call-banner window: state controller (pure) and, in stage 1.1
-//! task B2, the shell that applies its decisions to the Tauri window.
-//!
-//! The controller is deliberately free of Tauri types so every transition is
-//! unit-testable. It answers one question: given what just happened, what
-//! should the banner window render now? `Some(state)` means "the visible
-//! state changed, apply it"; `None` means "ignore, nothing to re-render".
+//! Floating call-banner controller and Tauri window adapter. The pure controller returns
+//! a new state only when rendering needs to change.
 
 use std::sync::Mutex;
 
@@ -86,11 +81,8 @@ impl BannerController {
         }
     }
 
-    /// A whitelisted app started a call. Ignored while a recording is live
-    /// (detect.rs already suppresses these on its own thread; this closes
-    /// the cross-thread window, see the `recording_live` field) and while
-    /// the ended banner is up. A newer detection replaces the shown one:
-    /// latest call wins, same as the stage-1.0 in-app banner.
+    /// Ignore detections while recording or showing the ended banner. Otherwise the
+    /// latest detected call replaces the previous suggestion.
     pub fn on_detected(&mut self, bundle_id: &str, app_name: &str) -> Option<BannerState> {
         if self.recording_live || self.state == BannerState::Ended {
             return None;
@@ -328,9 +320,7 @@ fn convert_to_panel(window: &WebviewWindow) -> tauri::Result<()> {
     use tauri_nspanel::cocoa::appkit::NSWindowCollectionBehavior;
     use tauri_nspanel::WebviewWindowExt;
 
-    /// NSWindowStyleMaskNonactivatingPanel: clicking the banner's buttons
-    /// must not activate simstim, the call app keeps focus (spec, stage
-    /// 1.1). The window is borderless, so this is the whole mask.
+    /// Showing a call suggestion must preserve focus in the calling app.
     const NON_ACTIVATING_PANEL: i32 = 1 << 7;
     /// NSStatusWindowLevel: above normal windows and full-screen spaces'
     /// menu bar reveals; where system notification banners live.

@@ -1,22 +1,7 @@
-//! Folder-backed session listing, reading and saving.
-//!
-//! Per the stage-0.6 Global Constraints, the `.md` files in the output
-//! folder are the ONLY store: no index, no cache, no DB. `list_sessions`
-//! rescans the folder on every call; a frontmatter-only read per file
-//! (`parse_meta`) keeps that cheap even for a folder with hundreds of
-//! transcripts.
-//!
-//! Single-writer rule: while a session is actively recording, only its
-//! worker (`crate::session::Session`) writes that file (see `session.rs`'s
-//! module docs). `save_session` enforces this from the IPC side by rejecting
-//! the currently-active session's path; UI edits to the active session route
-//! through `update_active_session` instead (`crate::session::PendingEdits`).
-//!
-//! The Tauri `#[tauri::command]` wrappers here are thin: all the actual logic
-//! lives in plain functions (`list_sessions_in`, `read_session_at`,
-//! `save_session_at`) that take explicit paths/state instead of Tauri's
-//! `State<...>`, so they're unit-testable on tempdir fixtures without a
-//! running Tauri app.
+//! Folder-backed session listing, reading and atomic updates. Markdown files are the
+//! source of truth; listing scans frontmatter without an index. Live edits route through
+//! the recording worker. Finished-file updates hold per-path ownership and preserve
+//! sections they do not modify.
 
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, FixedOffset, Local};
@@ -30,7 +15,7 @@ use crate::config::Config;
 use crate::AppState;
 
 /// IPC-facing session summary for the sidebar list. Mirrors `SessionMeta` in
-/// `apps/desktop/src/lib/ipc.ts` exactly (Global Constraints).
+/// `apps/desktop/src/lib/ipc.ts` exactly.
 #[derive(Debug, Clone, Serialize)]
 pub struct SessionMeta {
     pub path: String,
@@ -46,15 +31,10 @@ pub struct SessionDataOut {
     pub date: String,
     pub notes: String,
     pub transcript: String,
-    /// The session's audio file, if any (Task 4, stage-0.7): the `.flac`
-    /// sibling, or its `.wav` fallback (see `retranscribe::resolve_audio_path`,
-    /// reused here so the read/playback path and the re-transcribe path never
-    /// disagree about which file counts as "this session's audio"). `None`
-    /// when neither exists -- `keep_audio` was off, or the session predates
-    /// stage-0.7's audio sink entirely.
+    /// Resolved AAC, FLAC or recoverable WAV audio path. Playback and re-transcription
+    /// share the resolver. None when audio is absent.
     pub audio_path: Option<String>,
-    /// The `## Summary` section body (stage 0.11 enhance), empty when the
-    /// file has none.
+    /// The `## Summary` section body, empty when the file has none.
     pub summary: String,
     /// What generated `summary` ("claude" / "codex"), `None` without one.
     pub summary_model: Option<String>,
@@ -105,9 +85,8 @@ fn parse_rfc3339(date: &str) -> Option<DateTime<FixedOffset>> {
     DateTime::parse_from_rfc3339(date).ok()
 }
 
-/// IPC-facing breakdown of what the notes folder weighs (stage 4.1 Storage
-/// page): the user's own data, split into notes vs audio. Mirrors
-/// `StorageStats` in `ipc.ts`.
+/// IPC-facing breakdown of what the notes folder weighs (Storage page): the user's own
+/// data, split into notes vs audio. Mirrors `StorageStats` in `ipc.ts`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct StorageStats {
     /// Parseable session `.md` files found.
@@ -144,17 +123,9 @@ pub fn storage_stats() -> StorageStats {
     storage_stats_in(&Config::load().output_dir)
 }
 
-/// Full read of one session file for the session view.
-///
-/// `finalizing` is the path of a session currently in the stop-to-encode
-/// window, if any (`AppState::finalizing_path`, see its doc comment):
-/// resolving `path`'s audio while it equals `finalizing` would risk handing
-/// back a `.wav` that `session.stop()` is still writing to (or is about to
-/// delete once the FLAC encode finishes) as if it were the session's
-/// finished audio. Reporting `None` for that one session until finalizing
-/// clears is simpler and safer than trying to resolve a file mid-write; the
-/// UI just shows no audio player for the brief window right after Stop
-/// instead of a broken/racy one.
+/// Read a note and resolve retained audio for playback. Hide audio while this session is
+/// finalizing, since the WAV may still be changing or about to be replaced by encoded
+/// audio.
 pub fn read_session_at(path: &Path, finalizing: Option<&Path>) -> Result<SessionDataOut> {
     let data = parse_session(path)?;
     let audio_path = if finalizing == Some(path) {
@@ -190,59 +161,44 @@ pub fn save_session_at(
     finalizing: Option<&Path>,
 ) -> Result<()> {
     if active_path == Some(path) {
-        // User-facing (Important fix-review finding): the previous wording
-        // ("use update_active_session instead") leaked an internal IPC
-        // command name into a message a real user could see surfaced as a
-        // save error.
+        // Keep save errors user-facing; do not expose internal IPC command names.
         return Err(anyhow!(
             "this note is currently recording; edits are saved automatically"
         ));
     }
-    // Architecture-review finding: every other writer of a session file
-    // checks BOTH owners. During the stop-to-encode window the worker is
-    // still inside session.stop() writing the final transcript lines; a
-    // title/notes rewrite racing that is a genuine second writer (rule 5),
-    // and last-atomic-write-wins would silently drop one side's content.
+    // Both recording and finalizing sessions still have a writer. A competing whole-file
+    // rewrite can lose content even when each rename is atomic.
     if finalizing == Some(path) {
         return Err(anyhow!("this call is still being saved, try again in a moment"));
     }
     rewrite_session(path, title, notes)
 }
 
-/// Rewrites `path` with new title/notes, preserving date, asr and duration
-/// frontmatter and the transcript section verbatim. Reconstructs a
-/// `Transcript` from the parsed file (duration -> `set_duration_secs`) and
-/// reuses its `render`/`save` so the on-disk format stays defined in exactly
-/// one place (`simstim_transcript::Transcript`) rather than duplicated here.
-///
-/// The date is carried through via `set_raw_date` (the original string,
-/// byte-exact) rather than parsed into a `DateTime<Local>` and reformatted:
-/// reformatting would silently rewrite the date to the *current* process's
-/// local UTC offset, corrupting the wall-clock date used for sorting and
-/// Today/Yesterday grouping for any file recorded under a different offset
-/// (traveling, or before a timezone change). `started_at` still needs a
-/// placeholder value to satisfy `Transcript::new`, but `set_raw_date`
-/// immediately overrides what actually gets rendered, so a parse failure
-/// there (shouldn't happen -- `parse_session` already required a `date`
-/// field to exist) falls back to `Local::now()` rather than erroring the
-/// whole rewrite.
-///
-/// The transcript section itself is carried through the same way, via
-/// `set_raw_transcript`, rather than reparsed into `(Speaker, offset, text)`
-/// triples and re-added via `Transcript::add`. An earlier version did the
-/// reparse: it recognized only `[hh:mm:ss] Who: text` lines and silently
-/// skipped anything else, which meant any hand-added annotation a user typed
-/// directly into the `## Transcript` section (this being a plain `.md` file,
-/// nothing stops that) was silently destroyed the next time the title or
-/// notes were saved. Carrying the raw section through verbatim makes a
-/// title/notes save touch only the frontmatter and `## Notes`, never the
-/// transcript body.
-///
-/// The `asr` field is carried through byte-exact from the existing file
-/// (`meta.asr`, via `Transcript::set_asr`) rather than left to `Transcript`'s
-/// own default: since stage 0.7, a file's `asr` can be the whisper
-/// re-transcribe model's id (see `rewrite_transcript_at` below) instead of
-/// always the Parakeet default, and a plain title/notes edit through this
+/// Rewrites `path` with new title/notes, preserving date, asr and duration frontmatter
+/// and the transcript section verbatim. Reconstructs a `Transcript` from the parsed file
+/// (duration -> `set_duration_secs`) and reuses its `render`/`save` so the on-disk
+/// format stays defined in exactly one place (`simstim_transcript::Transcript`) rather
+/// than duplicated here. The date is carried through via `set_raw_date` (the original
+/// string, byte-exact) rather than parsed into a `DateTime<Local>` and reformatted:
+/// reformatting would silently rewrite the date to the *current* process's local UTC
+/// offset, corrupting the wall-clock date used for sorting and Today/Yesterday grouping
+/// for any file recorded under a different offset (traveling, or before a timezone
+/// change). `started_at` still needs a placeholder value to satisfy `Transcript::new`,
+/// but `set_raw_date` immediately overrides what actually gets rendered, so a parse
+/// failure there (shouldn't happen -- `parse_session` already required a `date` field to
+/// exist) falls back to `Local::now` rather than erroring the whole rewrite. The
+/// transcript section itself is carried through the same way, via `set_raw_transcript`,
+/// rather than reparsed into `(Speaker, offset, text)` triples and re-added via
+/// `Transcript::add`. An earlier version did the reparse: it recognized only `[hh:mm:ss]
+/// Who: text` lines and silently skipped anything else, which meant any hand-added
+/// annotation a user typed directly into the `## Transcript` section (this being a plain
+/// `.md` file, nothing stops that) was silently destroyed the next time the title or
+/// notes were saved. Carrying the raw section through verbatim makes a title/notes save
+/// touch only the frontmatter and `## Notes`, never the transcript body. The `asr` field
+/// is carried through byte-exact from the existing file (`meta.asr`, via
+/// `Transcript::set_asr`) rather than left to `Transcript`'s own default: since a file's
+/// `asr` can be the whisper re-transcribe model's id (see `rewrite_transcript_at` below)
+/// instead of always the Parakeet default, and a plain title/notes edit through this
 /// function must not silently reset that back.
 fn rewrite_session(path: &Path, title: &str, notes: &str) -> Result<()> {
     crate::session_files::edit(path, || {
@@ -279,36 +235,9 @@ fn rewrite_session(path: &Path, title: &str, notes: &str) -> Result<()> {
     })
 }
 
-/// Rewrites `path`'s `## Transcript` section with `new_transcript` (already
-/// formatted, one `[hh:mm:ss] Who: text` line per entry, no leading/trailing
-/// blank lines) and sets `asr` to `asr_id`, while preserving title, notes,
-/// date and duration exactly. A sibling to `rewrite_session` above with the
-/// opposite split: that one preserves the transcript and asr and replaces
-/// title/notes; this one preserves title/notes/date/duration and replaces
-/// the transcript and asr.
-///
-/// Used by the stage-0.7 re-transcribe pipeline (`retranscribe.rs`): per the
-/// Global Constraints, re-transcribing REPLACES the transcript section with
-/// `new_transcript` -- normally outright (the owner's ruling: the app never
-/// edits transcripts, so the previous pass's text is not kept once a new one
-/// lands) -- EXCEPT when `meta.audio_from_secs` is set (Critical fix-review
-/// finding, stage 0.9): that field means the underlying audio file's first
-/// `audio_from_secs` seconds are synthetic silence, not a recording of that
-/// portion of the call (see `simstim_transcript::Transcript::
-/// set_audio_from_secs`'s docs -- this happens when a session is continued
-/// after its audio was deleted). Whisper's pass over that file, which
-/// produced `new_transcript`, can only ever have real content for the
-/// portion AFTER `audio_from_secs`, so in that case this keeps whatever of
-/// the EXISTING transcript predates `audio_from_secs`
-/// (`simstim_transcript::split_transcript_at`) and appends `new_transcript`
-/// after it, rather than blowing away the earlier call's only copy of its
-/// text. If that split can't be safely computed (an existing transcript with
-/// no parseable timestamp at all -- see `split_transcript_at`'s docs), this
-/// returns `Err` WITHOUT writing anything: never guess and risk losing text
-/// on an unknown shape.
-///
-/// The file gate covers both parsing and saving, so simultaneous notes or
-/// summary edits are carried forward rather than overwritten.
+/// Atomically replace the transcript and ASR metadata while preserving notes, title,
+/// date and duration. With audio_from, retain earlier text and replace only the covered
+/// timeline. Reject an unsafe split instead of dropping older content.
 pub fn rewrite_transcript_at(path: &Path, new_transcript: &str, asr_id: &str) -> Result<()> {
     crate::session_files::edit(path, || {
         let existing = parse_session(path)?;
@@ -396,32 +325,25 @@ fn tail_is_clock_time(tail: &str) -> bool {
         && minutes.chars().all(|c| c.is_ascii_digit())
 }
 
-/// Rewrites `path` with a new `## Summary` section (stage 0.11 enhance),
-/// preserving notes, date, duration, asr and the transcript exactly -- the
-/// third sibling of `rewrite_session` (title/notes) and
-/// `rewrite_transcript_at` (transcript), replacing only its own section.
-/// `model` labels the section via the `summary_model:` frontmatter field.
-///
+/// Rewrites `path` with a new `## Summary` section, preserving notes, date, duration,
+/// asr and the transcript exactly -- the third sibling of `rewrite_session`
+/// (title/notes) and `rewrite_transcript_at` (transcript), replacing only its own
+/// section. `model` labels the section via the `summary_model:` frontmatter field.
 /// `proposed_title` is the enhance run's suggested title (the opt-in
-/// `enhance_rename_title` setting): a verbatim calendar-event name, or one
-/// the model composed. It is applied ONLY while the title on disk is still
-/// machine-owned -- the automatic "Untitled"/detected shape, or one a
-/// previous enhance wrote (`title_by:` frontmatter) -- so re-enhancing
-/// regenerates the title too (owner request), while a title the user typed
-/// themselves is never replaced. Checked here against the freshly parsed
-/// file, not against whatever the caller read minutes earlier: if the user
-/// typed a real title while the model was thinking, their words win and
-/// the proposal is dropped.
-///
-/// `people` is the matched calendar event's attendee list: `Some` replaces
-/// the file's `people:` line outright (a re-enhance re-applies the freshest
-/// event data, same as the title), `None` -- no event, or an event carrying
-/// no attendees -- leaves whatever the file already has untouched, so a
-/// lookup miss never erases previously saved names.
-///
-/// `style` is the id of the user's summary style that wrote this summary
-/// (`summary_style:` frontmatter), `None` for the built-in prompt. Written
-/// outright, like the model label: it describes THIS summary.
+/// `enhance_rename_title` setting): a verbatim calendar-event name, or one the model
+/// composed. It is applied ONLY while the title on disk is still machine-owned -- the
+/// automatic "Untitled"/detected shape, or one a previous enhance wrote (`title_by:`
+/// frontmatter) -- so re-enhancing regenerates the title too, while a title the user
+/// typed themselves is never replaced. Checked here against the freshly parsed file, not
+/// against whatever the caller read minutes earlier: if the user typed a real title
+/// while the model was thinking, their words win and the proposal is dropped. `people`
+/// is the matched calendar event's attendee list: `Some` replaces the file's `people:`
+/// line outright (a re-enhance re-applies the freshest event data, same as the title),
+/// `None` -- no event, or an event carrying no attendees -- leaves whatever the file
+/// already has untouched, so a lookup miss never erases previously saved names. `style`
+/// is the id of the user's summary style that wrote this summary (`summary_style:`
+/// frontmatter), `None` for the built-in prompt. Written outright, like the model label:
+/// it describes THIS summary.
 pub fn set_summary_at(
     path: &Path,
     summary: &str,
@@ -466,19 +388,8 @@ pub fn set_summary_at(
     })
 }
 
-/// Creates a new, empty session note for the user to type into without
-/// recording -- a real, first-class way to start a session (Global
-/// Constraints, stage-0.6 polish): title "Untitled", empty notes, empty
-/// transcript, timestamped `now`. Returns the created file's path.
-///
-/// Collision guard: `output_path` names files by whole second, the same
-/// granularity `start_recording` already relies on never colliding within a
-/// single recording. Two calls landing in the same second (or a manual note
-/// racing a recording that starts that same second) would otherwise silently
-/// overwrite one another's file. A session file is user data, so this
-/// refuses to overwrite: it errors instead of overwriting or bumping the
-/// filename, and the caller can simply retry a moment later -- simpler and
-/// safer than inventing a suffix scheme for a collision this rare.
+/// Create an empty note without recording. Use exclusive creation and a filename suffix
+/// for same-second collisions; never overwrite another note.
 pub fn create_session_in(dir: &Path) -> Result<PathBuf> {
     create_session_at(dir, Local::now())
 }
@@ -530,15 +441,8 @@ pub struct SearchHit {
 /// note, not a replacement for opening it.
 const MAX_SNIPPETS: usize = 3;
 
-/// Full-text search over the output folder (stage 0.10): case-insensitive
-/// substring match against each session's title, notes and transcript --
-/// the `.md` files ARE the database and grep semantics are exactly what the
-/// owner expects of them. Returns matching lines as snippets so the UI can
-/// show WHERE each hit is, not just that the note matched. A blank query
-/// returns everything (empty snippets), same order as `list_sessions_in`
-/// (date desc). Reads every listed file on each call; at hundreds of
-/// transcripts that's still a handful of milliseconds, and the frontend
-/// debounces keystrokes.
+/// Case-insensitive substring search across session titles, notes and transcripts.
+/// Return matching lines as snippets; an empty query returns the ordinary session list.
 pub fn search_sessions_in(dir: &Path, query: &str) -> Vec<SearchHit> {
     let needle = query.trim().to_lowercase();
     let all = list_sessions_in(dir);
@@ -655,10 +559,10 @@ pub fn read_session(path: String, state: State<AppState>) -> Result<SessionDataO
     read_session_at(Path::new(&path), finalizing.as_deref()).map_err(|e| e.to_string())
 }
 
-/// Moves a session's `.md` and its audio to the Trash (stage 0.10). Rejects
-/// the currently-recording session (single-writer rule -- and its worker
-/// would just keep writing a resurrected file anyway), one still being
-/// finalized, and one with an in-flight or queued re-transcribe job.
+/// Moves a session's `.md` and its audio to the Trash. Rejects the currently-recording
+/// session (single-writer rule -- and its worker would just keep writing a resurrected
+/// file anyway), one still being finalized, and one with an in-flight or queued
+/// re-transcribe job.
 #[tauri::command]
 pub fn delete_session(
     path: String,
@@ -927,10 +831,9 @@ mod tests {
             assert!(search_sessions_in(dir.path(), "nobody").is_empty());
         }
 
-        /// Re-enhance regenerates a machine-given title (owner request):
-        /// once an enhance wrote the title (title_by frontmatter), a later
-        /// proposal may replace it again -- until the user renames the note
-        /// themselves, which clears the marker for good.
+        /// Re-enhance regenerates a machine-given title: once an enhance wrote the title
+        /// (title_by frontmatter), a later proposal may replace it again -- until the
+        /// user renames the note themselves, which clears the marker for good.
         #[test]
         fn a_machine_given_title_is_replaced_again_and_a_user_rename_ends_that() {
             let dir = tempfile::tempdir().unwrap();
@@ -1228,12 +1131,11 @@ mod tests {
         assert_eq!(data.audio_path, None);
     }
 
-    /// Important fix-review finding: while `path` is finalizing (the
-    /// stop-to-encode window, see `AppState`'s `finalizing` field doc
-    /// comment), `read_session_at` must not resolve its audio path even
-    /// though a `.flac`/`.wav` sibling exists on disk -- it may still be
-    /// mid-write by `session.stop()`. A different or absent finalizing path
-    /// must not affect the resolution.
+    /// while `path` is finalizing (the stop-to-encode window, see `AppState`'s
+    /// `finalizing` field doc comment), `read_session_at` must not resolve its audio
+    /// path even though a `.flac`/`.wav` sibling exists on disk -- it may still be
+    /// mid-write by `session.stop`. A different or absent finalizing path must not
+    /// affect the resolution.
     #[test]
     fn read_session_at_hides_the_audio_path_while_finalizing() {
         let dir = tempfile::tempdir().unwrap();
@@ -1255,14 +1157,13 @@ mod tests {
         );
     }
 
-    /// Important fix-review finding, wave 3: `resolve_audio_path` now falls
-    /// back to a session's `.recording.wav` (a continued recording's
-    /// in-progress working file) as a last resort. Guards against the
-    /// finalizing gate somehow only covering the `.flac`/`.wav` cases and
-    /// missing this third one -- the gate lives entirely in the `finalizing
-    /// == Some(path)` check BEFORE `resolve_audio_path` is ever called, so
-    /// it must hide the audio here exactly the same way regardless of which
-    /// file `resolve_audio_path` would have resolved to.
+    /// `resolve_audio_path` now falls back to a session's `.recording.wav` (a continued
+    /// recording's in-progress working file) as a last resort. Guards against the
+    /// finalizing gate somehow only covering the `.flac`/`.wav` cases and missing this
+    /// third one -- the gate lives entirely in the `finalizing == Some(path)` check
+    /// BEFORE `resolve_audio_path` is ever called, so it must hide the audio here
+    /// exactly the same way regardless of which file `resolve_audio_path` would have
+    /// resolved to.
     #[test]
     fn read_session_at_hides_the_audio_path_while_finalizing_even_via_the_recording_wav_fallback() {
         let dir = tempfile::tempdir().unwrap();
@@ -1298,10 +1199,8 @@ mod tests {
         );
     }
 
-    /// Rule 5 (architecture-review fix): during the stop-to-encode window
-    /// the worker is still writing this file; a title/notes rewrite then is
-    /// a second writer and must be refused, exactly like delete,
-    /// re-transcribe and enhance already refuse it.
+    /// Reject title and notes rewrites during finalization, while the recording worker
+    /// still owns the file.
     #[test]
     fn save_session_at_rejects_the_finalizing_path() {
         let dir = tempfile::tempdir().unwrap();
@@ -1340,7 +1239,7 @@ mod tests {
         tr.set_notes("Old notes".into());
         tr.set_duration_secs(600);
         tr.add(Speaker::Me, 3.0, "hi everyone".into());
-        tr.add(Speaker::Them, 15.0, "hello pavel".into());
+        tr.add(Speaker::Them, 15.0, "hello alex".into());
         tr.save(&path).unwrap();
         let before = std::fs::read_to_string(&path).unwrap();
 
@@ -1353,7 +1252,7 @@ mod tests {
         assert!(after.contains("asr: parakeet-tdt-0.6b-v3"));
         assert!(after.contains("duration: 10m"));
         assert!(after.contains("[00:00:03] Me: hi everyone"));
-        assert!(after.contains("[00:00:15] Them: hello pavel"));
+        assert!(after.contains("[00:00:15] Them: hello alex"));
 
         let date_line_before = before.lines().find(|l| l.starts_with("date:")).unwrap();
         let date_line_after = after.lines().find(|l| l.starts_with("date:")).unwrap();
@@ -1386,13 +1285,8 @@ mod tests {
 
     #[test]
     fn rewrite_preserves_hand_edited_transcript_lines_byte_exact() {
-        // Regression test for the final-review Important finding: an
-        // earlier version of `rewrite_session` reparsed `[hh:mm:ss] Who:
-        // text` lines back into structured entries via `Transcript::add`,
-        // silently dropping any line that didn't match that exact shape --
-        // including a hand-added annotation typed directly into the file.
-        // A title/notes save must leave the transcript section untouched,
-        // stray line and all.
+        // Saving titles or notes must preserve hand-edited transcript lines byte for
+        // byte, including annotations outside the generated timestamp format.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("call.md");
         let content = "---\ndate: 2026-06-01T09:00:00+02:00\ntitle: Old title\nasr: parakeet-tdt-0.6b-v3\n---\n\n## Notes\n\nOld notes\n\n## Transcript\n\n[00:00:01] Me: hi\n-- stray hand-added annotation, not a real transcript line --\n[00:00:04] Them: hey\n";
@@ -1487,7 +1381,7 @@ mod tests {
 
         rewrite_transcript_at(
             &path,
-            "[00:00:03] Me: hi everyone (whisper)\n[00:00:15] Them: hello pavel",
+            "[00:00:03] Me: hi everyone (whisper)\n[00:00:15] Them: hello alex",
             "whisper-large-v3-turbo-q8",
         )
         .unwrap();
@@ -1501,7 +1395,7 @@ mod tests {
             "asr must be updated to the new model: {after}"
         );
         assert!(after.contains("[00:00:03] Me: hi everyone (whisper)"));
-        assert!(after.contains("[00:00:15] Them: hello pavel"));
+        assert!(after.contains("[00:00:15] Them: hello alex"));
         assert!(
             !after.contains("parakeet"),
             "the previous transcript text must not survive: {after}"
@@ -1531,11 +1425,10 @@ mod tests {
         assert!(after.contains("[00:00:04] Them: hey"));
     }
 
-    /// Critical fix-review finding, stage 0.9: continuing a session whose
-    /// audio was deleted, then re-transcribing, must keep the earlier call's
-    /// text (everything before `audio_from`) and only replace the rest with
-    /// whisper's new output -- not blow away the whole transcript the way a
-    /// plain `audio_from`-less rewrite always has.
+    /// continuing a session whose audio was deleted, then re-transcribing, must keep the
+    /// earlier call's text (everything before `audio_from`) and only replace the rest
+    /// with whisper's new output -- not blow away the whole transcript the way a plain
+    /// `audio_from`-less rewrite always has.
     mod audio_from_aware_rewrite {
         use super::*;
 

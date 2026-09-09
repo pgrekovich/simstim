@@ -20,8 +20,6 @@
 
 ![Simstim showing a design review, its decisions and next steps, alongside a list of recent calls](docs/images/beta-summary.png)
 
-<p align="center"><sub>A real Simstim window with fictional meeting notes.</sub></p>
-
 ## Remember the conversation
 
 Record a call, take a few notes, and come back to a searchable transcript.

@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>Your calls. Your files. Your AI.</strong><br>
-  Local call transcription for Mac. Saved as Markdown, in your folder.
+  Record and transcribe calls on your Mac. Save them as Markdown.
 </p>
 
 <p align="center">
@@ -18,26 +18,25 @@
 
 <p align="center"><sub>macOS 14.2+ · Apple Silicon · Free · MIT license</sub></p>
 
-![Simstim showing a design review, its decisions and next steps, alongside a list of recent calls](docs/images/beta-summary.png)
+![A meeting summary in Simstim](docs/images/beta-summary.png)
 
-## Remember the conversation
+## Recording
 
-Record a call, take a few notes, and come back to a searchable transcript.
-Simstim captures your microphone and the other side of the call directly
-on your Mac. Audio stays on your machine.
+Simstim records your microphone and system audio, transcribes the call
+locally, and saves it in a folder you choose. Audio stays on your Mac.
 
-- **Follow along live.** Read the transcript as people speak. After the call,
-  a second local pass improves the wording.
-- **Keep your own notes.** Your writing, the transcript and the optional
-  AI summary stay in separate sections.
-- **Find the moment.** Search past calls or click a timestamp to hear it again
-  when the recording is kept.
-- **Pick up where you left off.** Continue a finished note with more recording,
-  preserving the earlier audio and timestamps.
+- A live transcript appears during the call. After you stop, a second local
+  transcription pass improves accuracy.
+- You can take notes during the call. Your notes, the transcript and AI
+  summaries have separate sections.
+- Search across past calls. If you keep the audio, click a timestamp to
+  play that part of the recording.
+- Resume recording into an existing note. Earlier audio and timestamps
+  are preserved.
 
-## A folder you can use anywhere
+## Plain files
 
-Each call is a Markdown file. Keep the audio and it sits right beside it.
+Each call is a Markdown file, with an optional audio file beside it.
 
 ```text
 Your notes/
@@ -46,28 +45,30 @@ Your notes/
 └── 2026-09-09 11-00-00 call.md
 ```
 
-Open the folder in Obsidian. Search it with your own tools. Back it up with
-anything you trust. The file you see on disk is the note Simstim uses, so
-there is nothing to export.
+Simstim reads and writes these files directly. You can open the same folder
+in Obsidian, keep it in git or sync it with your usual backup service.
+There is no export step.
 
-[See an example note →](docs/examples/2026-09-09%2010-00-00%20call.md)
+[Example note](docs/examples/2026-09-09%2010-00-00%20call.md)
 
-## Bring the AI you already use
+## Optional AI
 
 Connect **Claude or ChatGPT** to get summaries and ask questions about your
 calls. Simstim sets up the official Claude Code or Codex helper and opens
-its browser sign-in. No terminal needed, no Simstim account.
+its browser sign-in. Setup does not require a terminal.
 
-Want a PDF, a presentation or a follow-up email? Give the Markdown to your
-usual assistant. Use the tools and integrations you already have there.
-Simstim takes care of recording, transcription and files.
+For PDFs, presentations and follow-up emails, give the Markdown to your
+usual assistant. Those tasks use its existing tools and integrations.
+They do not need separate features in the recorder.
 
-Your provider's plan limits and billing settings apply; Simstim adds no AI
-fee. Optional AI sends text to the chosen provider, never audio. You can
-skip it entirely: recording, transcription, notes, playback and ordinary
-search work locally. Your files work with local models too.
+AI requests send text to your provider, never audio. Your provider's plan
+limits and billing settings apply; Simstim adds no fee.
 
-[AI setup and example workflows →](docs/your-ai.md)
+Without AI, recording, transcription, notes, playback and text search still
+work locally. You can also use your own tools, including local models,
+on the saved files.
+
+[AI setup and example workflows](docs/your-ai.md)
 
 ## Getting started
 
@@ -79,15 +80,15 @@ search work locally. Your files work with local models too.
    pair. You can start once the live model is ready.
 3. Connect an AI assistant if you want summaries, then start a recording.
 
-Recording starts only when you choose it, including when Simstim suggests
-recording a detected call. Let the other people know before you record.
+Simstim can suggest recording when it detects a call, but always waits for
+your click. Let the other people know before you record.
 
-No Simstim accounts, subscriptions or telemetry. Model downloads and
-optional AI setup need the internet. Your folder's sync settings still
-apply. [What stays local, and what gets sent →](docs/privacy.md)
+Simstim has no accounts, subscriptions or telemetry. Model downloads, AI
+setup and cloud AI requests need internet access. If you choose a synced
+folder, its files will sync through that service. [Privacy details](docs/privacy.md).
 
 <details>
-<summary><strong>A few things to know about the beta</strong></summary>
+<summary><strong>Beta limitations</strong></summary>
 
 - Apple Silicon Macs only, on macOS 14.2 or later.
 - **Me / Them** distinguish your microphone from system audio, not individual
@@ -102,15 +103,15 @@ apply. [What stays local, and what gets sent →](docs/privacy.md)
 
 </details>
 
-## Make it yours
+## Settings and contributing
 
 Choose your summary instructions, styles and quick questions in Settings.
 They are saved in `~/.config/simstim/prompts.toml`, alongside the app's
 configuration. [Configuration reference](docs/configuration.md).
 
-Found a rough edge? [Report a bug](CONTRIBUTING.md#reporting-a-bug).
-Want to contribute? Start with the [development guide](docs/development.md),
-[contribution guidelines](CONTRIBUTING.md) and [roadmap](docs/ROADMAP.md).
+[Report a bug](CONTRIBUTING.md#reporting-a-bug) ·
+[Development guide](docs/development.md) ·
+[Contributing](CONTRIBUTING.md) · [Roadmap](docs/ROADMAP.md)
 
 ---
 

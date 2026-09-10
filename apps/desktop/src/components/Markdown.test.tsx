@@ -1,5 +1,5 @@
 import { createRef } from "react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import {
   MarkdownContent,
@@ -14,6 +14,11 @@ describe("MarkdownContent", () => {
         {"## Launch\n\n- [x] Ship **renderer**\n- [ ] Polish tables\n\n| Owner | Day |\n| --- | --- |\n| Alex | Fri |"}
       </MarkdownContent>,
     );
+
+    // Wait for the real lazy parser import before checking rendered content.
+    await act(async () => {
+      await vi.dynamicImportSettled();
+    });
 
     expect(await screen.findByRole("heading", { level: 2, name: "Launch" })).toBeInTheDocument();
     expect(screen.getByText("renderer").tagName).toBe("STRONG");

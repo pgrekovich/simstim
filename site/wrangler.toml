@@ -1,0 +1,14 @@
+# simstim.tech is a Worker that serves only static assets (the current form of
+# Cloudflare Pages). `wrangler deploy` uploads dist/; _headers and _redirects
+# inside it are applied by the platform. Custom domains here make Cloudflare
+# create and manage the DNS records itself.
+name = "simstim"
+compatibility_date = "2026-10-30"
+
+routes = [
+  { pattern = "simstim.tech", custom_domain = true },
+  { pattern = "www.simstim.tech", custom_domain = true },
+]
+
+[assets]
+directory = "./dist"

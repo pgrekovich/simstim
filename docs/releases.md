@@ -58,7 +58,7 @@ always points at the latest stable release.
 
 ## Landing page
 
-`site/` holds simstim.tech, a static page deployed to Cloudflare Pages by
+`site/` holds simstim.tech, a static page deployed to Cloudflare Workers by
 `.github/workflows/site.yml`. A stable release calls that workflow after
 publishing, so the page names the new version and `/download` redirects to
 its DMG without a manual step. Prereleases do not change the page. See

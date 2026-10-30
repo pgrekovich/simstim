@@ -1,7 +1,8 @@
 # simstim.tech
 
 The landing page for Simstim: one static HTML page, one stylesheet, no
-JavaScript, no analytics, no cookies. It is hosted on Cloudflare Pages.
+JavaScript, no analytics, no cookies. It is served by Cloudflare Workers as
+static assets, which is what Cloudflare Pages has become.
 
 ## How it is built
 
@@ -26,21 +27,20 @@ pnpm --dir site preview
 
 ## Deployment
 
-`.github/workflows/site.yml` builds and deploys on every push to `main`
+`wrangler.toml` names the Worker `simstim` and its custom domains;
+Cloudflare creates the DNS records for them on the first deploy.
+`.github/workflows/site.yml` runs `wrangler deploy` on every push to `main`
 that touches `site/`, and `release.yml` calls it after a stable release so
 the download link moves to the new version without a manual step.
 
-One-time Cloudflare setup:
+CI needs two repository secrets:
 
-1. Create the Pages project: `npx wrangler pages project create simstim
-   --production-branch main` (or in the dashboard with Direct Upload).
-2. Add the custom domain `simstim.tech` to the project and let Cloudflare
-   create the DNS records. Add `www.simstim.tech` as well, or a Bulk
-   Redirect rule from `www` to the apex.
-3. Create an API token with the "Cloudflare Pages: Edit" permission and
-   store it as the `CLOUDFLARE_API_TOKEN` repository secret, with the
-   account id as `CLOUDFLARE_ACCOUNT_ID`.
-4. Run the Site workflow once by hand from the Actions tab.
+- `CLOUDFLARE_ACCOUNT_ID`: the account id shown by `wrangler whoami`.
+- `CLOUDFLARE_API_TOKEN`: an API token created in the Cloudflare dashboard
+  from the "Edit Cloudflare Workers" template, limited to this account.
+
+A manual deploy from a logged-in machine is `wrangler deploy` inside `site/`
+after `node build.mjs`.
 
 Downloads come from GitHub Releases. Visitors can only download while the
 repository is public.

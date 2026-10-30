@@ -5,7 +5,8 @@
   "description": "Static landing page for simstim.tech",
   "scripts": {
     "build": "node build.mjs",
-    "preview": "node build.mjs && npx --yes wrangler pages dev dist"
+    "preview": "node build.mjs && npx --yes wrangler dev",
+    "deploy": "node build.mjs && npx --yes wrangler deploy"
   },
   "engines": {
     "node": ">=22"

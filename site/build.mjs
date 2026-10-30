@@ -114,5 +114,7 @@ const assets = await hashAssets();
 const template = await readFile(path.join(root, "src", "index.html"), "utf8");
 await writeFile(path.join(dist, "index.html"), render(template, { ...release, site: SITE }, assets));
 // Stable download address; the README and the app can point here without knowing the version.
+// Only relative sources are allowed here, so www is not redirected; it serves
+// the same site and the canonical link points at the apex.
 await writeFile(path.join(dist, "_redirects"), `/download ${release.asset_url} 302\n`);
 console.log(`Built simstim.tech for ${release.version} (${release.asset_name}, ${release.size})`);

@@ -15,7 +15,6 @@
     "jsx": "react-jsx",
 
     /* Path aliases (shadcn/ui) */
-    "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"]
     },
@@ -26,6 +25,5 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src"],
-  "references": [{ "path": "./tsconfig.node.json" }]
+  "include": ["src"]
 }

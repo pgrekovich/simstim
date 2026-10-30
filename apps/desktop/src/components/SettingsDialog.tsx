@@ -14,6 +14,9 @@ import {
   deleteModel,
   downloadModel,
   getConfig,
+  getLaunchAtLogin,
+  setLaunchAtLogin,
+  type LoginStatus,
   listEnhanceProviders,
   listModels,
   setAutoStopAfterCall,
@@ -36,7 +39,7 @@ import {
   type StorageStats,
 } from "@/lib/ipc";
 import { applyTheme } from "@/lib/theme";
-import { ENHANCE_MODEL_OPTIONS } from "@/lib/enhanceModels";
+import { enhanceModelOptions } from "@/lib/enhanceModels";
 import { downloadProgressPercent, mergeDownloadProgress } from "@/lib/modelProgress";
 
 const THEME_OPTIONS: { value: string; label: string }[] = [
@@ -302,6 +305,11 @@ function ModelActions({
  */
 export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: SettingsDialogProps) {
   const [config, setConfig] = useState<AppConfig | null>(null);
+  const [loginStatus, setLoginStatus] = useState<LoginStatus | null>(null);
+  const [loginError, setLoginError] = useState<string | null>(null);
+  const [loginBusy, setLoginBusy] = useState(false);
+  const loginPending = useRef(false);
+  const loginRevision = useRef(0);
   const [models, setModels] = useState<ModelInfo[]>([]);
   // The Storage figures. Fetched on every open (one cheap pass over the
   // local notes folder); `null` renders "...".
@@ -365,6 +373,45 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
       .then(setStorage)
       .catch(() => {});
   }, [isOpen, refresh]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    let active = true;
+    const refreshLogin = () => {
+      if (loginPending.current) return;
+      const revision = ++loginRevision.current;
+      getLaunchAtLogin().then((status) => {
+        if (active && revision === loginRevision.current && !loginPending.current) {
+          setLoginStatus(status);
+          setLoginError(null);
+        }
+      }).catch((err) => {
+        if (active && revision === loginRevision.current) setLoginError(String(err));
+      });
+    };
+    refreshLogin();
+    window.addEventListener("focus", refreshLogin);
+    return () => {
+      active = false;
+      window.removeEventListener("focus", refreshLogin);
+    };
+  }, [isOpen]);
+
+  async function handleSetLaunchAtLogin(enabled: boolean) {
+    if (loginPending.current) return;
+    loginPending.current = true;
+    loginRevision.current += 1;
+    setLoginBusy(true);
+    setLoginError(null);
+    try {
+      setLoginStatus(await setLaunchAtLogin(enabled));
+    } catch (err) {
+      setLoginError(String(err));
+    } finally {
+      loginPending.current = false;
+      setLoginBusy(false);
+    }
+  }
 
   async function handleSetAutoEnhance(autoEnhance: boolean) {
     const previous = config?.auto_enhance;
@@ -711,6 +758,24 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                   ))}
                 </Row>
                 <Row
+                  label="Launch at login"
+                  htmlFor="launch-at-login"
+                  description={loginStatus === "requires_approval"
+                    ? "Allow Simstim in System Settings > General > Login Items."
+                    : loginStatus === "unavailable"
+                      ? "Available in the installed Simstim app on macOS."
+                      : "Open Simstim when you sign in to your Mac. Recording starts only when you choose."}
+                  error={loginError}
+                >
+                  <Checkbox
+                    variant="switch"
+                    id="launch-at-login"
+                    checked={loginStatus === "enabled" || loginStatus === "requires_approval"}
+                    disabled={loginStatus === null || loginStatus === "unavailable" || loginBusy}
+                    onCheckedChange={(checked) => handleSetLaunchAtLogin(checked === true)}
+                  />
+                </Row>
+                <Row
                   label="Show in Dock"
                   htmlFor="show-in-dock"
                   description="Off keeps Simstim in the menu bar only."
@@ -884,13 +949,18 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                 limits apply. Turn off automatic summaries to keep text local; your files
                 also work with any assistant you use separately.
               </p>
-              {isOpen && <AiSetup providers={enhanceProviders} onConnected={async (provider) => {
+              {isOpen && <AiSetup allowUpdates providers={enhanceProviders} onConnected={async (provider, updating) => {
                 const fresh = await listEnhanceProviders();
                 setEnhanceProviders(fresh);
-                if (fresh.some((p) => p.id === provider && p.available)) {
+                if (!updating && fresh.some((p) => p.id === provider && p.available)) {
                   await handleSetEnhanceProvider(provider);
                 }
               }} />}
+              {selectedProvider?.available && selectedProvider.models == null && (
+                <p role="status" className="text-[11.5px] text-muted-foreground">
+                  Could not load {selectedProvider.name} models. Choose Default or update {selectedProvider.name} to refresh model support.
+                </p>
+              )}
               <Group>
                 {!summariesPossible ? (
                   <Row
@@ -912,7 +982,7 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                       onChange={(e) => handleSetEnhanceModel(availableProviders[0].id, e.target.value)}
                       className="h-7 rounded-md border border-input bg-transparent px-2 text-xs outline-none focus-visible:border-ring"
                     >
-                      {(ENHANCE_MODEL_OPTIONS[availableProviders[0].id] ?? [{ value: "", label: "Default" }]).map(
+                      {enhanceModelOptions(availableProviders[0], config?.enhance_models?.[availableProviders[0].id]).map(
                         (option) => (
                           <option key={option.value} value={option.value}>
                             {option.label}
@@ -936,7 +1006,7 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                           onChange={(e) => handleSetEnhanceModel(provider.id, e.target.value)}
                           className="h-7 rounded-md border border-input bg-transparent px-2 text-xs outline-none focus-visible:border-ring"
                         >
-                          {(ENHANCE_MODEL_OPTIONS[provider.id] ?? [{ value: "", label: "Default" }]).map(
+                          {enhanceModelOptions(provider, config?.enhance_models?.[provider.id]).map(
                             (option) => (
                               <option key={option.value} value={option.value}>
                                 {option.label}

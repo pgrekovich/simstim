@@ -4,8 +4,8 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-cpal = "0.17"
+cpal = "0.18"
 anyhow = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-cidre = { version = "0.15", features = ["av", "blocks"] }
+cidre = { version = "0.29", default-features = false, features = ["av", "blocks", "core_audio", "dispatch", "macos_14_2"] }

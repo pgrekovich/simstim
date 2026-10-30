@@ -54,6 +54,7 @@ pub struct EnhanceProviderInfo {
     pub available: bool,
     pub installed: bool,
     pub version: Option<String>,
+    pub models: Option<Vec<crate::ai_setup::ProviderModel>>,
 }
 
 /// At most one enhance at a time, app-wide (same reasoning as the
@@ -144,15 +145,23 @@ pub async fn list_enhance_providers() -> Vec<EnhanceProviderInfo> {
         PROVIDERS
             .iter()
             .map(|spec| {
-                let (version, available) = resolve_binary(spec.binary)
-                    .map(|path| crate::ai_setup::probe(spec.id, &path))
+                let binary = resolve_binary(spec.binary);
+                let (version, available) = binary.as_ref()
+                    .map(|path| crate::ai_setup::probe(spec.id, path))
                     .unwrap_or((None, false));
+                let models = binary.as_ref().filter(|_| available).and_then(|path| {
+                    match spec.id {
+                        "claude" => crate::ai_setup::claude_models(path),
+                        _ => crate::ai_setup::codex_models(path),
+                    }.ok()
+                });
                 EnhanceProviderInfo {
                     id: spec.id.to_string(),
                     name: spec.name.to_string(),
                     available,
                     installed: version.is_some(),
                     version,
+                    models,
                 }
             })
             .collect()
@@ -954,7 +963,7 @@ fn run_provider(spec: &ProviderSpec, model: Option<&str>, prompt: &str) -> Resul
             // Summaries need no tools. Strict MCP configuration avoids connecting
             // unrelated servers and adding their schemas to each request. Calendar
             // lookup uses a separate connector run.
-            cmd.args(["-p", "--output-format", "text", "--strict-mcp-config"]);
+            cmd.args(["-p", "--output-format", "text", "--strict-mcp-config", "--tools", ""]);
             if let Some(m) = model {
                 cmd.args(["--model", m]);
             }
@@ -1017,6 +1026,16 @@ fn run_provider(spec: &ProviderSpec, model: Option<&str>, prompt: &str) -> Resul
     let (out, err) = reader.join().unwrap_or_default();
 
     if !status.success() {
+        if spec.id == "claude" {
+            if let Some(message) = claude_error(&out).or_else(|| claude_error(&err)) {
+                return Err(message);
+            }
+        }
+        if spec.id == "codex" {
+            if let Some(message) = model_access_error(&err).or_else(|| model_access_error(&out)) {
+                return Err(message);
+            }
+        }
         let detail = if err.trim().is_empty() { out } else { err };
         let detail = detail.trim();
         let tail: String = detail
@@ -1041,6 +1060,46 @@ fn run_provider(spec: &ProviderSpec, model: Option<&str>, prompt: &str) -> Resul
         return Err(format!("{} returned an empty response", spec.name));
     }
     Ok(text)
+}
+
+/// CLI diagnostics may repeat the server's JSON error alongside metadata warnings.
+/// Keep model access failures actionable without retrying with another model.
+pub(crate) fn model_access_error(detail: &str) -> Option<String> {
+    let denied = detail.lines().any(|line| {
+        let Some(start) = line.find('{') else { return false; };
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&line[start..]) else { return false; };
+        value.pointer("/error/code").or_else(|| value.get("code"))
+            .and_then(serde_json::Value::as_str) == Some("model_not_found")
+    });
+    denied.then(|| "Codex could not use the selected model. In Settings > Summaries, update Codex or choose Default, then retry. Model availability also depends on your account.".to_owned())
+}
+
+/// Claude can report failures as result envelopes, API JSON, or a model-selection message.
+/// Preserve ordinary provider errors, and give model failures a Settings recovery path.
+pub(crate) fn claude_error(detail: &str) -> Option<String> {
+    let model_guidance = "Claude Code could not use the selected model. In Settings > Summaries, update Claude Code or choose Default, then retry. Model availability also depends on your account.";
+    let plain = detail.trim().strip_prefix("Error: ").unwrap_or(detail.trim());
+    if plain.starts_with("There's an issue with the selected model")
+        || plain.starts_with("There is an issue with the selected model") {
+        return Some(model_guidance.to_owned());
+    }
+    for line in detail.lines() {
+        let Some(start) = line.find('{') else { continue; };
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&line[start..]) else { continue; };
+        let error = &value["error"];
+        if error["type"] == "not_found_error" && error["message"].as_str().unwrap_or("").to_lowercase().contains("model") {
+            return Some(model_guidance.to_owned());
+        }
+        if value["is_error"].as_bool() == Some(true)
+            || value["subtype"].as_str().is_some_and(|subtype| subtype.starts_with("error_")) {
+            let messages = value["errors"].as_array().map(|errors| errors.iter().filter_map(|error| error.as_str())
+                .filter(|error| !error.trim().is_empty()).collect::<Vec<_>>().join("; ")).unwrap_or_default();
+            let message = if messages.is_empty() { value["result"].as_str().unwrap_or("").trim() } else { messages.as_str() };
+            if message.is_empty() { return Some("Claude Code reported an error. Please try again.".to_owned()); }
+            return Some(claude_error(message).unwrap_or_else(|| message.to_owned()));
+        }
+    }
+    None
 }
 
 /// Rejections for `enhance_session`, split out for direct unit tests (the
@@ -1825,7 +1884,7 @@ mod tests {
             false,
             None,
         );
-        let summary = run_provider(spec, None, &prompt).expect("provider run failed");
+        let summary = run_provider(spec, Some("haiku"), &prompt).expect("provider run failed");
         eprintln!("--- summary ---\n{summary}\n---------------");
         assert!(!summary.is_empty());
     }

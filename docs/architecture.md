@@ -94,7 +94,17 @@ Helper setup downloads unmodified native binaries only on an explicit
 request, verifies upstream checksums, and installs with atomic replacement.
 Claude signatures are also checked. The helper owns browser authentication
 and credential storage. Simstim checks readiness through the official auth
-status command without making a model request.
+status command without making a model request. Model choices come from
+Codex app-server model/list or the Claude Agent SDK initialize response,
+using bounded temporary subprocesses without sending a user message or
+starting an AI turn. Claude discovery disables tools, customizations,
+MCP connections and session persistence. The main window checks official
+release metadata for installed helpers on launch and focus, at most once
+per day during an app run. Results stay in memory and are invalidated after
+an installation. Settings reads the same status and can explicitly bypass
+the daily cache for a fresh metadata check. Unknown checks remain distinct
+from current versions. Updates start only from an explicit banner or Settings
+action and use the same verified installation path.
 
 See [AI setup](your-ai.md), [configuration](configuration.md) and
 [privacy](privacy.md) for user-facing behavior.

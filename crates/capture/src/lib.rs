@@ -21,7 +21,7 @@ pub struct Chunk {
 /// RAII handle for a running capture stream. Dropping it signals the capture
 /// thread to tear down its stream. Used by `mic`; `speaker` has its own
 /// `SpeakerHandle` instead, since the Core Audio tap doesn't need a dedicated
-/// parked thread the way a `cpal::Stream` does (`speaker`'s object graph is
+/// parked thread used by the microphone worker (`speaker`'s object graph is
 /// plain HAL object IDs, so it can be dropped directly from whatever thread
 /// holds it, and its teardown order matters more than a single stop signal
 /// can express).

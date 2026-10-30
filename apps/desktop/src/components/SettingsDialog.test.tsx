@@ -6,12 +6,18 @@ import type { AppConfig, ModelInfo } from "@/lib/ipc";
 
 vi.mock("@/lib/ipc", () => ({
   aiSetupStatus: vi.fn().mockResolvedValue(null),
+  getAiProviderStatus: vi.fn().mockResolvedValue([
+    { id: "claude", name: "Claude Code", installed_version: "2.1.236", latest_version: "2.1.314", update_available: true },
+    { id: "codex", name: "Codex", installed_version: "0.152.0", latest_version: "0.166.0", update_available: true },
+  ]),
   setupAi: vi.fn().mockResolvedValue(undefined),
   cancelAiSetup: vi.fn().mockResolvedValue(undefined),
   getPrompts: vi.fn().mockResolvedValue({ summary_instructions: "", summary_styles: [], quick_questions: [] }),
   savePrompts: vi.fn().mockResolvedValue({ summary_instructions: "", summary_styles: [], quick_questions: [] }),
   restoreDefaultPrompts: vi.fn().mockResolvedValue({ summary_instructions: "", summary_styles: [], quick_questions: [] }),
   getConfig: vi.fn(),
+  getLaunchAtLogin: vi.fn(),
+  setLaunchAtLogin: vi.fn(),
   listModels: vi.fn().mockResolvedValue([]),
   downloadModel: vi.fn().mockResolvedValue(undefined),
   setRetranscribeModel: vi.fn().mockResolvedValue(undefined),
@@ -126,12 +132,17 @@ const qwenRetired: ModelInfo = {
 };
 
 const onlyClaude = [
-  { id: "claude", name: "Claude Code", available: true, version: "2.0.0 (Claude Code)" },
+  { id: "claude", name: "Claude Code", available: true, version: "2.0.0 (Claude Code)", models: [
+    { value: "claude-fable-5[1m]", label: "Fable" },
+    { value: "haiku", label: "Haiku" },
+  ] },
   { id: "codex", name: "Codex", available: false, version: null },
 ];
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(ipc.getLaunchAtLogin).mockResolvedValue("disabled");
+  vi.mocked(ipc.setLaunchAtLogin).mockImplementation(async (enabled) => enabled ? "enabled" : "disabled");
   vi.mocked(ipc.getConfig).mockResolvedValue(baseConfig);
   vi.mocked(ipc.listModels).mockResolvedValue([parakeet, whisperQ8, whisperLargeV3]);
   vi.mocked(ipc.storageStats).mockResolvedValue({
@@ -302,8 +313,8 @@ describe("SettingsDialog: summaries", () => {
     expect(screen.queryByRole("radio", { name: /claude|codex/i })).not.toBeInTheDocument();
 
     const select = screen.getByRole("combobox", { name: /claude code model/i });
-    fireEvent.change(select, { target: { value: "fable" } });
-    await waitFor(() => expect(ipc.setEnhanceModel).toHaveBeenCalledExactlyOnceWith("claude", "fable"));
+    fireEvent.change(select, { target: { value: "claude-fable-5[1m]" } });
+    await waitFor(() => expect(ipc.setEnhanceModel).toHaveBeenCalledExactlyOnceWith("claude", "claude-fable-5[1m]"));
   });
 
   it("offers a choice only when two assistants are installed", async () => {
@@ -318,6 +329,95 @@ describe("SettingsDialog: summaries", () => {
     fireEvent.click(codex);
     await waitFor(() => expect(ipc.setEnhanceProvider).toHaveBeenCalledExactlyOnceWith("codex"));
     expect(codex).toBeChecked();
+  });
+
+  it("offers current Codex models and persists the chosen model", async () => {
+    vi.mocked(ipc.listEnhanceProviders).mockResolvedValue([
+      { id: "codex", name: "Codex", available: true, version: "codex-cli 0.166.0", models: [
+        { value: "gpt-6.1-sol", label: "GPT-6.1 Sol" },
+        { value: "gpt-6.1-terra", label: "GPT-6.1 Terra" },
+        { value: "gpt-6-luna", label: "GPT-6 Luna" },
+      ] },
+    ]);
+    render(<SettingsDialog open onOpenChange={() => {}} />);
+
+    const select = await screen.findByRole("combobox", { name: "Codex model" });
+    expect(within(select).getByRole("option", { name: "GPT-6.1 Sol" })).toHaveValue("gpt-6.1-sol");
+    expect(within(select).getByRole("option", { name: "GPT-6.1 Terra" })).toHaveValue("gpt-6.1-terra");
+    expect(within(select).getByRole("option", { name: "GPT-6 Luna" })).toHaveValue("gpt-6-luna");
+    expect(within(select).queryByRole("option", { name: /spark/i })).not.toBeInTheDocument();
+    fireEvent.change(select, { target: { value: "gpt-6.1-sol" } });
+    await waitFor(() => expect(ipc.setEnhanceModel).toHaveBeenCalledExactlyOnceWith("codex", "gpt-6.1-sol"));
+  });
+
+  it("keeps a saved model visible until the user chooses a replacement", async () => {
+    vi.mocked(ipc.getConfig).mockResolvedValue({
+      ...baseConfig,
+      enhance_models: { claude: "claude-haiku-4-5" },
+    });
+    render(<SettingsDialog open onOpenChange={() => {}} />);
+
+    const select = await screen.findByRole("combobox", { name: "Claude Code model" });
+    expect(select).toHaveValue("claude-haiku-4-5");
+    expect(within(select).getByRole("option", { name: "claude-haiku-4-5 (saved; not listed)" })).toBeInTheDocument();
+    expect(ipc.setEnhanceModel).not.toHaveBeenCalled();
+    fireEvent.change(select, { target: { value: "haiku" } });
+    await waitFor(() => expect(ipc.setEnhanceModel).toHaveBeenCalledExactlyOnceWith("claude", "haiku"));
+    expect(select).toHaveValue("haiku");
+  });
+
+  it("uses the helper catalog instead of offering models unknown to an older Codex", async () => {
+    vi.mocked(ipc.listEnhanceProviders).mockResolvedValue([
+      { id: "codex", name: "Codex", available: true, version: "codex-cli 0.152.0", models: [
+        { value: "account-model", label: "Available to this account" },
+      ] },
+    ]);
+    render(<SettingsDialog open onOpenChange={() => {}} />);
+    const select = await screen.findByRole("combobox", { name: "Codex model" });
+    expect(within(select).queryByRole("option", { name: "GPT-6.1 Terra" })).not.toBeInTheDocument();
+    fireEvent.change(select, { target: { value: "account-model" } });
+    await waitFor(() => expect(ipc.setEnhanceModel).toHaveBeenCalledWith("codex", "account-model"));
+  });
+
+  it("keeps a saved Codex selection visible and offers Default when discovery fails", async () => {
+    vi.mocked(ipc.getConfig).mockResolvedValue({ ...baseConfig, enhance_provider: "codex", enhance_models: { codex: "gpt-6.1-terra" } });
+    vi.mocked(ipc.listEnhanceProviders).mockResolvedValue([
+      { id: "codex", name: "Codex", available: true, version: "codex-cli 0.152.0", models: null },
+    ]);
+    render(<SettingsDialog open onOpenChange={() => {}} />);
+    const select = await screen.findByRole("combobox", { name: "Codex model" });
+    expect(select).toHaveValue("gpt-6.1-terra");
+    expect(screen.getByText(/could not load codex models/i)).toBeInTheDocument();
+    expect(ipc.setEnhanceModel).not.toHaveBeenCalled();
+    fireEvent.change(select, { target: { value: "" } });
+    await waitFor(() => expect(ipc.setEnhanceModel).toHaveBeenCalledWith("codex", ""));
+  });
+
+  it.each([
+    { id: "codex", name: "Codex", model: "gpt-6.1-terra", label: "GPT-6.1 Terra" },
+    { id: "claude", name: "Claude Code", model: "claude-fable-5[1m]", label: "Fable" },
+  ])("refreshes $name models after an update without changing the provider", async ({ id, name, model, label }) => {
+    vi.mocked(ipc.getConfig).mockResolvedValue({ ...baseConfig, enhance_provider: id });
+    vi.mocked(ipc.listEnhanceProviders)
+      .mockResolvedValueOnce([{ id, name, available: true, version: "old-version", models: [] }])
+      .mockResolvedValue([{ id, name, available: true, version: "new-version", models: [{ value: model, label }] }]);
+    render(<SettingsDialog open onOpenChange={() => {}} />);
+    fireEvent.click(await screen.findByRole("button", { name: `Update ${name}` }));
+    await waitFor(() => expect(ipc.setupAi).toHaveBeenCalledExactlyOnceWith(id, true));
+    expect(await screen.findByRole("option", { name: label })).toHaveValue(model);
+    expect(ipc.setEnhanceProvider).not.toHaveBeenCalled();
+    expect(ipc.setEnhanceModel).not.toHaveBeenCalled();
+  });
+
+  it("offers Default when the Claude catalog cannot be loaded instead of guessing model aliases", async () => {
+    vi.mocked(ipc.listEnhanceProviders).mockResolvedValue([
+      { id: "claude", name: "Claude Code", available: true, version: "2.1.236", models: null },
+    ]);
+    render(<SettingsDialog open onOpenChange={() => {}} />);
+    const select = await screen.findByRole("combobox", { name: "Claude Code model" });
+    expect(within(select).getAllByRole("option")).toHaveLength(1);
+    expect(select).toHaveValue("");
+    expect(screen.getByText(/could not load claude code models/i)).toBeInTheDocument();
   });
 
   it("says plainly when nothing is installed and dims the behavior toggles", async () => {
@@ -411,5 +511,71 @@ describe("SettingsDialog: storage", () => {
     fireEvent.click(within(reopened).getByRole("button", { name: /delete balanced/i }));
     fireEvent.click(await within(reopened).findByRole("button", { name: /delete 874 mb\?/i }));
     await waitFor(() => expect(ipc.deleteModel).toHaveBeenCalledExactlyOnceWith(whisperQ8.id));
+  });
+});
+
+
+describe("SettingsDialog: launch at login", () => {
+  it("reads system state and enables and disables login launch through IPC", async () => {
+    render(<SettingsDialog open onOpenChange={() => {}} />);
+    const toggle = await screen.findByRole("checkbox", { name: "Launch at login" });
+    await waitFor(() => expect(toggle).toBeEnabled());
+    expect(toggle).not.toBeChecked();
+    expect(ipc.setLaunchAtLogin).not.toHaveBeenCalled();
+    fireEvent.click(toggle);
+    await waitFor(() => expect(toggle).toBeChecked());
+    expect(ipc.setLaunchAtLogin).toHaveBeenLastCalledWith(true);
+    fireEvent.click(toggle);
+    await waitFor(() => expect(toggle).not.toBeChecked());
+    expect(ipc.setLaunchAtLogin).toHaveBeenLastCalledWith(false);
+  });
+
+  it("keeps the previous state and displays registration errors", async () => {
+    vi.mocked(ipc.setLaunchAtLogin).mockRejectedValueOnce("Registration failed");
+    render(<SettingsDialog open onOpenChange={() => {}} />);
+    const toggle = await screen.findByRole("checkbox", { name: "Launch at login" });
+    await waitFor(() => expect(toggle).toBeEnabled());
+    fireEvent.click(toggle);
+    await screen.findByText("Registration failed");
+    expect(toggle).not.toBeChecked();
+    expect(toggle).toBeEnabled();
+  });
+
+  it("shows pending system approval and lets the user unregister it", async () => {
+    vi.mocked(ipc.setLaunchAtLogin).mockResolvedValueOnce("requires_approval");
+    render(<SettingsDialog open onOpenChange={() => {}} />);
+    const toggle = await screen.findByRole("checkbox", { name: "Launch at login" });
+    await waitFor(() => expect(toggle).toBeEnabled());
+    fireEvent.click(toggle);
+    await screen.findByText("Allow Simstim in System Settings > General > Login Items.");
+    expect(toggle).toBeChecked();
+    fireEvent.click(toggle);
+    await waitFor(() => expect(toggle).not.toBeChecked());
+    expect(ipc.setLaunchAtLogin).toHaveBeenLastCalledWith(false);
+  });
+
+  it("refreshes changes from macOS when the window regains focus", async () => {
+    vi.mocked(ipc.getLaunchAtLogin).mockResolvedValue("enabled");
+    render(<SettingsDialog open onOpenChange={() => {}} />);
+    const toggle = await screen.findByRole("checkbox", { name: "Launch at login" });
+    await waitFor(() => expect(toggle).toBeChecked());
+    vi.mocked(ipc.getLaunchAtLogin).mockResolvedValue("disabled");
+    fireEvent.focus(window);
+    await waitFor(() => expect(toggle).not.toBeChecked());
+  });
+
+  it("disables the toggle while saving", async () => {
+    let finish!: (status: ipc.LoginStatus) => void;
+    vi.mocked(ipc.setLaunchAtLogin).mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
+    render(<SettingsDialog open onOpenChange={() => {}} />);
+    const toggle = await screen.findByRole("checkbox", { name: "Launch at login" });
+    await waitFor(() => expect(toggle).toBeEnabled());
+    fireEvent.click(toggle);
+    expect(toggle).toBeDisabled();
+    fireEvent.click(toggle);
+    expect(ipc.setLaunchAtLogin).toHaveBeenCalledTimes(1);
+    finish("enabled");
+    await waitFor(() => expect(toggle).toBeEnabled());
+    expect(toggle).toBeChecked();
   });
 });

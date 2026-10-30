@@ -17,8 +17,8 @@ transcribes them locally into Markdown files. Read
 - No Simstim accounts, telemetry, upsell or AI credits. Official helpers
   own provider login and credentials; do not add an OAuth client or store
   provider credentials in Simstim. Network activity is model downloads,
-  explicit official AI helper setup/authentication, and optional AI or
-  connector calls.
+  official AI helper version checks, explicit official AI helper
+  setup/authentication, and optional AI or connector calls.
 - Recording starts only on an explicit user action.
 - Keep user notes separate from generated text. Re-transcription replaces
   the transcript section; it must preserve notes and metadata.

@@ -1,8 +1,7 @@
 //! System audio capture via a Core Audio process tap, resampled to 16 kHz
 //! mono. macOS-only (see `#[cfg]` on the module declaration in `lib.rs`).
 //!
-//! Sequence (mirrors the anarlog reference implementation, which ships this
-//! exact flow against cidre 0.15 in production): create a mono global tap
+//! Sequence (mirrors the anarlog reference implementation): create a mono global tap
 //! excluding no processes, wrap it in a private aggregate device, attach an
 //! IOProc to that aggregate device, and start it. Unlike anarlog we don't
 //! need a lock-free ring buffer + waker: chunks go straight over an

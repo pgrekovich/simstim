@@ -27,10 +27,11 @@ tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-toml = "0.9"
+semver = "1"
+toml = "1.1"
 anyhow = { workspace = true }
 chrono = "0.4"
-dirs = "6"
+dirs = "7"
 simstim-capture = { path = "../../../crates/capture" }
 simstim-engine = { path = "../../../crates/engine" }
 simstim-transcript = { path = "../../../crates/transcript" }
@@ -60,7 +61,7 @@ libc = "0.2"
 # `std::env::temp_dir()` + manual removal would not.
 tempfile = "3"
 [target.'cfg(target_os = "macos")'.dependencies]
-cidre = { version = "0.15", default-features = false, features = ["app", "at", "blocks", "core_audio"] }
+cidre = { version = "0.29", default-features = false, features = ["app", "at", "blocks", "core_audio", "dispatch", "macos_14_2"] }
 # AppKit must receive the titlebar frame as one atomic setFrame call. Updating
 # its size and origin separately lets the autoresizing mask cancel the
 # vertical traffic-light inset.

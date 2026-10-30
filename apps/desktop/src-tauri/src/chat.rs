@@ -340,14 +340,10 @@ pub(crate) fn build_this_call_prompt(
 /// failure (`is_error: true`).
 fn parse_claude_json(raw: &str) -> Option<Result<(String, Option<String>), String>> {
     let value: serde_json::Value = serde_json::from_str(raw.trim()).ok()?;
-    let text = value.get("result")?.as_str()?.trim().to_string();
-    if value.get("is_error").and_then(|v| v.as_bool()) == Some(true) {
-        return Some(Err(if text.is_empty() {
-            "the provider reported an error".to_string()
-        } else {
-            text
-        }));
+    if let Some(message) = crate::enhance::claude_error(raw) {
+        return Some(Err(message));
     }
+    let text = value.get("result")?.as_str()?.trim().to_string();
     if text.is_empty() {
         return Some(Err("the provider returned an empty response".to_string()));
     }
@@ -720,6 +716,18 @@ fn run_chat(
     };
     let (out, err) = reader.join().unwrap_or_default();
     if !status.success() {
+        if codex_out.is_none() {
+            if let Some(message) = crate::enhance::claude_error(&out)
+                .or_else(|| crate::enhance::claude_error(&err)) {
+                return Err(message);
+            }
+        }
+        if codex_out.is_some() {
+            if let Some(message) = crate::enhance::model_access_error(&err)
+                .or_else(|| crate::enhance::model_access_error(&out)) {
+                return Err(message);
+            }
+        }
         let detail = if err.trim().is_empty() { out } else { err };
         let tail: String = detail
             .trim()
@@ -1277,6 +1285,14 @@ mod tests {
         }
 
         #[test]
+        fn execution_errors_without_a_result_are_not_presented_as_answers() {
+            let raw = r#"{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["Permission denied","Please sign in again"]}"#;
+            assert_eq!(parse_claude_json(raw).unwrap().unwrap_err(), "Permission denied; Please sign in again");
+            let raw = r#"{"type":"result","is_error":false,"result":"There's an issue with the selected model in the example discussed on this call."}"#;
+            assert!(parse_claude_json(raw).unwrap().is_ok());
+        }
+
+        #[test]
         fn non_json_output_degrades_to_raw_text() {
             assert!(parse_claude_json("plain text answer").is_none());
             assert!(parse_claude_json(r#"{"no_result_field":1}"#).is_none());
@@ -1444,6 +1460,31 @@ mod tests {
         }
 
         #[test]
+        fn codex_model_rejection_returns_recovery_guidance_instead_of_raw_json() {
+            let raw = r#"warning: Model metadata for `gpt-6.1-terra` not found.
+ERROR: {"type":"error","status":400,"error":{"type":"invalid_request_error","message":"The model is not supported when using Codex with a ChatGPT account.","code":"model_not_found"}}
+ERROR: {"error":{"code":"model_not_found"}}"#;
+            let mut cmd = Command::new("/bin/sh");
+            cmd.args(["-c", "cat >/dev/null; printf '%s' \"$1\" >&2; exit 1", "fixture", raw]);
+            let error = run_chat(cmd, Some(Path::new("/unused/answer")), "synthetic question",
+                &AtomicBool::new(false), &mut |_| {}).unwrap_err();
+            assert!(error.contains("Settings > Summaries"), "{error}");
+            assert!(error.contains("update Codex or choose Default"), "{error}");
+            assert!(!error.contains("{\""), "{error}");
+            assert!(!error.contains("warning:"), "{error}");
+        }
+
+        #[test]
+        fn claude_model_rejection_returns_recovery_guidance_instead_of_raw_json() {
+            let raw = r#"{"type":"result","is_error":true,"result":"API Error: 404 {\"type\":\"error\",\"error\":{\"type\":\"not_found_error\",\"message\":\"model: unavailable-model\"}}"}"#;
+            let mut cmd = Command::new("/bin/sh");
+            cmd.args(["-c", "cat >/dev/null; printf '%s' \"$1\"; exit 1", "fixture", raw]);
+            let error = run_chat(cmd, None, "synthetic question", &AtomicBool::new(false), &mut |_| {}).unwrap_err();
+            assert!(error.contains("update Claude Code or choose Default"), "{error}");
+            assert!(!error.contains("{\""), "{error}");
+        }
+
+        #[test]
         fn chat_label_matches_the_enhance_shape() {
             assert_eq!(chat_label("claude", None), "claude");
             assert_eq!(chat_label("claude", Some("opus")), "claude/opus");
@@ -1466,14 +1507,15 @@ mod tests {
         )
         .unwrap();
         let workdir = tempfile::tempdir().unwrap();
-        let binary = crate::enhance::resolve_binary("claude").expect("claude installed");
+        let binary = std::env::var_os("SIMSTIM_CLAUDE_SMOKE_BINARY").map(PathBuf::from)
+            .or_else(|| crate::enhance::resolve_binary("claude")).expect("claude installed");
         let prompt = build_all_notes_prompt(
             &notes.path().display().to_string(),
             &[],
             "who owns the DPA rewrite?",
         );
         let (cmd, out) =
-            build_command("claude", &binary, None, notes.path(), workdir.path(), None).unwrap();
+            build_command("claude", &binary, Some("haiku"), notes.path(), workdir.path(), None).unwrap();
         let raw = run_chat(cmd, out.as_deref(), &prompt, &AtomicBool::new(false), &mut |_| {}).unwrap();
         let (reply, model) = parse_claude_json(&raw)
             .expect("the CLI must answer in its JSON envelope")

@@ -14,6 +14,9 @@ candidate and test it on an Apple Silicon Mac:
 - Continue a note and verify earlier audio and timestamps are intact.
 - Edit notes during the accurate pass; start another call during saving.
 - Check playback, search, summaries and questions.
+- Enable Launch at login in the installed app, sign out and back in, and
+  verify Simstim opens without recording. Disable it and verify it stays off
+  at the next login. Check that changes in macOS Login Items appear in Settings.
 - On a clean setup, check permissions, model downloads, optional AI helper
   installation, browser login, cancellation and operation without AI.
 

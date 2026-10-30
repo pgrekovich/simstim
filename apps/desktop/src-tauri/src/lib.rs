@@ -7,6 +7,7 @@ pub mod config;
 pub mod detect;
 pub mod enhance;
 pub mod models;
+mod launch_at_login;
 pub mod menu_bar;
 pub mod onboarding;
 pub mod prompts;
@@ -597,6 +598,8 @@ pub fn run() {
             set_retranscribe_model,
             config::set_theme,
             config::set_show_in_dock,
+            launch_at_login::get_launch_at_login,
+            launch_at_login::set_launch_at_login,
             config::set_keep_audio,
             config::set_audio_format,
             config::set_auto_retranscribe,
@@ -611,6 +614,8 @@ pub fn run() {
             ai_setup::setup_ai,
             ai_setup::ai_setup_status,
             ai_setup::cancel_ai_setup,
+            ai_setup::check_ai_updates,
+            ai_setup::ai_provider_status,
             enhance::enhance_session,
             prompts::get_prompts,
             prompts::save_prompts,

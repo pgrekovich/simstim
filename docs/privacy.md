@@ -64,14 +64,24 @@ credentials are stored separately by the provider's own tool.
 
 - Initial and explicitly requested speech-model downloads use the upstream
   Hugging Face/GitHub URLs in the model registry.
-- Explicit AI setup downloads official helpers from Anthropic or OpenAI
+- Provider update checks read public release metadata from Anthropic and
+  OpenAI GitHub releases for installed helpers. Checks run on launch and
+  focus, at most once per day during an app run, without sending notes or
+  account credentials. **Check for updates** in Settings explicitly requests
+  fresh metadata regardless of the automatic daily interval. Offline
+  automatic checks are silent.
+- Explicit AI setup and helper updates download official helpers from Anthropic or OpenAI
   GitHub releases. The helper opens provider-owned browser authentication.
   simstim does not read or store passwords or authentication tokens.
 - Assistant discovery runs the helper's version and authentication-status
-  commands. The provider controls any network activity of those commands.
+  commands. Model discovery reads the official helpers' model catalogs
+  without starting an AI turn or sending notes. The provider controls any
+  network activity of these commands.
 - Optional AI and connector calls use the CLI's configured providers.
 - Opening external links uses your normal browser.
-- The beta has no automatic update check; updates are downloaded manually.
+- The application itself has no automatic update check; new app versions
+  are downloaded manually. Helper binaries download only after an explicit
+  Update providers or Settings action.
 
 Your assistant, connectors, sync provider and operating system have their
 own data policies. simstim does not access their credentials directly.

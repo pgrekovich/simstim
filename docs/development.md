@@ -1,7 +1,9 @@
 # Development
 
 Requires Apple Silicon macOS 14.2+, Xcode Command Line Tools, a stable Rust
-toolchain, Node 22.16+ and pnpm 11. CI uses Node 22. Install dependencies:
+toolchain, Node 26 LTS and pnpm 12.16.1. CI uses Node 26; Node 22.16+
+and Node 24 LTS are also supported. The frontend package pins pnpm through
+`packageManager`. Install dependencies:
 
 ```sh
 cd apps/desktop
@@ -34,7 +36,7 @@ synthetic audio and temporary files; never download a model for a test.
 Model-dependent tests are explicitly ignored or skip when files are absent.
 
 Vitest disables Node's experimental web storage in its workers so jsdom
-provides the browser storage API consistently on Node 22 and 24.
+provides the browser storage API consistently on supported Node versions.
 
 ### macOS permissions in dev builds
 
@@ -88,4 +90,5 @@ From `apps/desktop`, run `pnpm exec vite --config vite.demo.config.ts` and open
 `http://127.0.0.1:1422`. This renders the real frontend with fixed fictional
 fixtures. It cannot record, run AI, access notes, or change native settings.
 Use it for screenshots and visual review, not as a native end-to-end test.
-The production config never imports its mock bridge.
+The production config never imports its mock bridge. Add `?updates` to
+preview the provider update banner with fictional versions.

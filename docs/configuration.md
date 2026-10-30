@@ -1,6 +1,6 @@
 # Configuration
 
-Settings and `~/.config/simstim/config.toml` share one source of truth.
+Most settings and `~/.config/simstim/config.toml` share one source of truth.
 If `XDG_CONFIG_HOME` is set, use `$XDG_CONFIG_HOME/simstim/config.toml` instead.
 Restart after hand edits. Missing values inherit these defaults; malformed
 files are reported rather than overwritten by a Settings change.
@@ -25,6 +25,8 @@ auto_stop_after_call = false
 
 [enhance_models]
 # Leave empty to use the CLI's default model.
+# claude = "sonnet" # choose an ID or alias listed by your Claude Code helper
+# codex = "gpt-6.1-sol" # choose an ID listed by your Codex helper
 ```
 
 The onboarding screen shows the automatic-summary choice before the first
@@ -36,8 +38,34 @@ see [AI setup](your-ai.md). The old `local` provider migrates to `claude`.
 wins. `enhance_use_calendar` enables a supported Claude Code calendar lookup
 for the meeting time; it does not add an OAuth login to simstim.
 
+Summaries and questions share the selected model. **Default** follows the
+official helper's configuration and account availability. Claude's named
+aliases follow the provider's current version.
+
+Model menus come from the official helpers for the current setup and account:
+Codex uses `model/list`; Claude Code uses the Agent SDK initialize response. Discovery does not start an AI turn or send notes.
+If discovery fails, Default and the saved selection remain available.
+Explicitly saved model IDs are preserved and remain visible in Settings, including custom gateway IDs;
+choose a replacement yourself if your provider retires one. A saved model
+absent from the current catalog is marked as not listed. Settings offers an
+explicit **Update Codex** and **Update Claude Code** actions to install the
+current official helpers.
+GPT-5.3 Codex Spark is retired, and GPT-5.5 is retired for Codex with ChatGPT
+sign-in. GPT-6.1 Terra requires Codex CLI 0.159.0 or later. Model access still
+depends on the provider, plan and installed helper version. See the official
+[Codex model guide](https://learn.chatgpt.com/docs/models) and
+[Claude model configuration](https://code.claude.com/docs/en/model-config).
+
 `onboarding_complete` is set by the first-run screen. Manually bypassing it
 does not grant macOS audio permissions or download models.
+
+## Launch at login
+
+Enable **Launch at login** in Settings to open Simstim when you sign in to
+macOS. It is off until you enable it and never starts recording automatically.
+This setting is managed by macOS, not `config.toml`, and reflects changes made
+in System Settings > General > Login Items. If macOS requires approval, Settings
+shows a reminder to allow Simstim there. Use the installed `.app` to enable it.
 
 ## Speech models
 

@@ -16,11 +16,18 @@ import { ask } from "@tauri-apps/plugin-dialog";
  */
 vi.mock("@/lib/ipc", () => ({
   aiSetupStatus: vi.fn().mockResolvedValue(null),
+  getAiProviderStatus: vi.fn().mockResolvedValue([
+    { id: "claude", name: "Claude Code", installed_version: "2.1.236", latest_version: "2.1.314", update_available: true },
+    { id: "codex", name: "Codex", installed_version: "0.152.0", latest_version: "0.166.0", update_available: true },
+  ]),
+  checkAiUpdates: vi.fn().mockResolvedValue([]),
   setupAi: vi.fn().mockResolvedValue(undefined),
   cancelAiSetup: vi.fn().mockResolvedValue(undefined),
   getPrompts: vi.fn().mockResolvedValue({ summary_instructions: "", summary_styles: [], quick_questions: [] }),
   savePrompts: vi.fn().mockResolvedValue({ summary_instructions: "", summary_styles: [], quick_questions: [] }),
   restoreDefaultPrompts: vi.fn().mockResolvedValue({ summary_instructions: "", summary_styles: [], quick_questions: [] }),
+  getLaunchAtLogin: vi.fn().mockResolvedValue("disabled"),
+  setLaunchAtLogin: vi.fn().mockResolvedValue("enabled"),
   getConfig: vi.fn().mockResolvedValue({
     output_dir: "/tmp",
     active_model: "m1",
@@ -147,6 +154,7 @@ function findStartControl() {
 }
 
 beforeEach(() => {
+  vi.mocked(ipc.checkAiUpdates).mockReset().mockResolvedValue([]);
   vi.mocked(ipc.getConfig).mockReset().mockResolvedValue({
     output_dir: "/tmp",
     active_model: "m1",
@@ -1739,4 +1747,15 @@ describe("App: enhance progress", () => {
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("took longer than 5 minutes");
   });
+});
+
+it("shows provider updates in the main window while recording remains available", async () => {
+  vi.mocked(ipc.checkAiUpdates).mockResolvedValue([
+    { id: "claude", name: "Claude Code", installed_version: "2.1.236", latest_version: "2.1.314" },
+  ]);
+  render(<App />);
+  expect(await screen.findByRole("button", { name: "Update providers" })).toBeVisible();
+  expect(screen.getByRole("complementary", { name: "AI provider updates" })).toBeVisible();
+  expect(await findStartControl()).toBeEnabled();
+  expect(ipc.startRecording).not.toHaveBeenCalled();
 });

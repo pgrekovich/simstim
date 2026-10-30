@@ -39,9 +39,8 @@ pub fn request_permission() -> Result<bool> {
 /// Starts capturing from the default input device and sends resampled 16 kHz
 /// mono [`Chunk`]s (tagged [`Channel::Me`]) to `tx`.
 ///
-/// cpal streams are `!Send` on macOS, so the stream lives entirely on a
-/// dedicated thread; the returned [`CaptureHandle`] tears it down on drop by
-/// signalling that thread over an mpsc channel.
+/// The stream lives on a dedicated thread; the returned [`CaptureHandle`]
+/// tears it down on drop by signalling that thread over an mpsc channel.
 pub fn start_mic(tx: Sender<Chunk>) -> Result<CaptureHandle> {
     let (drop_tx, drop_rx) = channel::<()>();
     let (ready_tx, ready_rx) = channel::<Result<()>>();
@@ -63,7 +62,7 @@ pub fn start_mic(tx: Sender<Chunk>) -> Result<CaptureHandle> {
             let channels = config.channels() as usize;
             let mut carry = Vec::new();
             let stream = device.build_input_stream(
-                &config.into(),
+                config.into(),
                 move |data: &[f32], _: &cpal::InputCallbackInfo| {
                     let mono: Vec<f32> = data
                         .chunks(channels)

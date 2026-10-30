@@ -19,6 +19,24 @@ choose to connect. Installing a desktop chat app alone does not supply this
 helper. Provider authentication and credential storage remain with the
 unmodified official tool. Setup does not send notes or make model requests.
 
+When an installed helper has a newer official release, the main window
+shows an **AI provider updates available** banner. **Update providers**
+updates the listed helpers one at a time, with progress and cancellation.
+**Later** hides those versions for the current app session. Failed updates
+remain available to retry; completed updates are not repeated. Version checks
+use public release metadata on launch and focus, at most once per day during
+an app run. No binary is downloaded until you choose to update.
+
+Settings shows **Up to date** when a connected helper matches the current
+official release. **Update Codex** or **Update Claude Code** appears only for
+a verified newer release. **Check for updates** requests fresh metadata
+immediately. Unavailable checks are labeled explicitly rather than reported
+as current. Updates download and verify the current official helper into
+simstim's helpers folder, with atomic replacement and cancellation. Existing
+provider sign-in is reused where available. Other CLI installations are not
+modified. Updating a helper does not grant access to models excluded by your
+provider plan or workspace.
+
 If sign-in fails or expires, choose Connect again. Already authenticated
 assistants appear as available automatically. The provider's standard API
 and subscription authentication options remain available in its own tools.

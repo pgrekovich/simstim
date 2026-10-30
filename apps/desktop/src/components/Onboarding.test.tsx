@@ -8,6 +8,10 @@ import type { AppConfig, ModelInfo } from "@/lib/ipc";
 
 vi.mock("@/lib/ipc", () => ({
   aiSetupStatus: vi.fn().mockResolvedValue(null),
+  getAiProviderStatus: vi.fn().mockResolvedValue([
+    { id: "claude", name: "Claude Code", installed_version: "2.1.236", latest_version: "2.1.314", update_available: true },
+    { id: "codex", name: "Codex", installed_version: "0.152.0", latest_version: "0.166.0", update_available: true },
+  ]),
   setupAi: vi.fn().mockResolvedValue(undefined),
   cancelAiSetup: vi.fn().mockResolvedValue(undefined),
   getPrompts: vi.fn().mockResolvedValue({ summary_instructions: "", summary_styles: [], quick_questions: [] }),

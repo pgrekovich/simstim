@@ -202,6 +202,8 @@ export interface EnhanceProviderInfo {
   name: string;
   available: boolean;
   version: string | null;
+  /** Official helper model catalog, null when discovery is unavailable. */
+  models?: { value: string; label: string }[] | null;
 }
 
 /** Mirrors `models::ModelInfo` (apps/desktop/src-tauri/src/models.rs). */
@@ -743,7 +745,40 @@ export function retranscribeSession(path: string): Promise<void> {
 }
 
 /** Vendor-owned setup; no credentials are passed over these commands. */
-export interface AiSetupStatus { provider: string; phase: "installing" | "signing_in"; }
+export interface AiSetupStatus { provider: string; phase: "installing" | "signing_in"; updating?: boolean; }
 export function aiSetupStatus(): Promise<AiSetupStatus | null> { return invoke("ai_setup_status"); }
-export function setupAi(provider: string): Promise<void> { return invoke("setup_ai", { provider }); }
+export function setupAi(provider: string, update = false): Promise<void> { return invoke("setup_ai", { provider, update }); }
 export function cancelAiSetup(): Promise<void> { return invoke("cancel_ai_setup"); }
+
+export interface ProviderUpdate {
+  id: string;
+  name: string;
+  installed_version: string;
+  latest_version: string;
+}
+
+/** Checks official release metadata for installed helpers, at most once per day in memory. */
+export function checkAiUpdates(): Promise<ProviderUpdate[]> { return invoke("check_ai_updates"); }
+
+export interface ProviderStatus {
+  id: string;
+  name: string;
+  installed_version: string | null;
+  latest_version: string | null;
+  update_available: boolean;
+}
+
+/** Reads helper versions; explicit checks bypass the automatic daily cache. */
+export function getAiProviderStatus(force = false): Promise<ProviderStatus[]> {
+  return invoke("ai_provider_status", { force });
+}
+
+export type LoginStatus = "disabled" | "enabled" | "requires_approval" | "unavailable";
+
+export function getLaunchAtLogin(): Promise<LoginStatus> {
+  return invoke("get_launch_at_login");
+}
+
+export function setLaunchAtLogin(enabled: boolean): Promise<LoginStatus> {
+  return invoke("set_launch_at_login", { enabled });
+}

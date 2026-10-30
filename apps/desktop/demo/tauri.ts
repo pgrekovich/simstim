@@ -1,6 +1,7 @@
 // Fictional fixtures for screenshots of the real renderer. No native bridge,
 // recording, cloud AI, model download or filesystem mutation is available.
 const setupPreview = new URLSearchParams(location.search).has("setup");
+const updatesPreview = new URLSearchParams(location.search).has("updates");
 const date = "2026-09-09T10:00:00+02:00";
 const path = "/demo/2026-09-09 10-00-00 call.md";
 const note = {
@@ -26,6 +27,7 @@ const sessions = [
 export async function invoke(command: string, args?: Record<string, unknown>): Promise<unknown> {
   switch (command) {
     case "get_config": return config;
+    case "get_launch_at_login": return "unavailable";
     case "list_sessions": return sessions;
     case "read_session": return { ...note, title: sessions.find(s => s.path === args?.path)?.title ?? note.title };
     case "list_models": return [
@@ -33,11 +35,19 @@ export async function invoke(command: string, args?: Record<string, unknown>): P
       { id: config.retranscribe_model, name: "Whisper large-v3 turbo", size_mb: 874, downloaded: true, active: true, role: "retranscribe", technical_name: null, tagline: null, size_on_disk_bytes: 874000000, retired: false },
     ];
     case "list_enhance_providers": return [
-      { id: "claude", name: "Claude Code", available: !setupPreview, version: setupPreview ? null : "Preview" },
-      { id: "codex", name: "Codex", available: !setupPreview, version: setupPreview ? null : "Preview" },
+      { id: "claude", name: "Claude Code", available: !setupPreview, version: setupPreview ? null : "2.1.314 (Claude Code)", models: [{ value: "sonnet", label: "Sonnet" }, { value: "haiku", label: "Haiku" }] },
+      { id: "codex", name: "Codex", available: !setupPreview, version: setupPreview ? null : "codex-cli 0.166.0", models: [{ value: "gpt-6.1-sol", label: "GPT-6.1 Sol" }] },
     ];
     case "get_prompts": return { summary_instructions: "", summary_styles: [], quick_questions: [] };
     case "ai_setup_status": return null;
+    case "ai_provider_status": return setupPreview ? [] : [
+      { id: "claude", name: "Claude Code", installed_version: updatesPreview ? "2.1.236" : "2.1.314", latest_version: "2.1.314", update_available: updatesPreview },
+      { id: "codex", name: "Codex", installed_version: updatesPreview ? "0.152.0" : "0.166.0", latest_version: "0.166.0", update_available: updatesPreview },
+    ];
+    case "check_ai_updates": return updatesPreview ? [
+      { id: "claude", name: "Claude Code", installed_version: "2.1.236", latest_version: "2.1.314" },
+      { id: "codex", name: "Codex", installed_version: "0.152.0", latest_version: "0.166.0" },
+    ] : [];
     case "recording_activity": return null;
     case "chat_history": return { messages: [], running: false };
     case "storage_stats": return { note_count: 3, notes_bytes: 8192, audio_bytes: 0, audio_secs: 0 };

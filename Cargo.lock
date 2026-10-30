@@ -1111,6 +1111,7 @@ dependencies = [
  "libc",
  "objc",
  "reqwest",
+ "security-framework",
  "semver",
  "serde",
  "serde_json",

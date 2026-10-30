@@ -25,7 +25,7 @@ use crate::AppState;
 /// transcript is a big prompt, and subscription CLIs can queue.
 const ENHANCE_TIMEOUT: Duration = Duration::from_secs(300);
 
-/// A supported CLI provider using the user's existing authentication.
+/// A supported helper or direct text API provider.
 struct ProviderSpec {
     id: &'static str,
     name: &'static str,
@@ -33,6 +33,21 @@ struct ProviderSpec {
 }
 
 const PROVIDERS: &[ProviderSpec] = &[
+    ProviderSpec {
+        id: "openai",
+        name: "OpenAI API",
+        binary: "",
+    },
+    ProviderSpec {
+        id: "anthropic",
+        name: "Anthropic API",
+        binary: "",
+    },
+    ProviderSpec {
+        id: "openrouter",
+        name: "OpenRouter API",
+        binary: "",
+    },
     ProviderSpec {
         id: "claude",
         name: "Claude Code",
@@ -145,15 +160,28 @@ pub async fn list_enhance_providers() -> Vec<EnhanceProviderInfo> {
         PROVIDERS
             .iter()
             .map(|spec| {
+                if crate::api::is_api(spec.id) {
+                    let available = crate::api::configured(spec.id);
+                    return EnhanceProviderInfo {
+                        id: spec.id.into(),
+                        name: spec.name.into(),
+                        available,
+                        installed: available,
+                        version: Some("Your API key".into()),
+                        models: Some(Vec::new()),
+                    };
+                }
                 let binary = resolve_binary(spec.binary);
-                let (version, available) = binary.as_ref()
+                let (version, available) = binary
+                    .as_ref()
                     .map(|path| crate::ai_setup::probe(spec.id, path))
                     .unwrap_or((None, false));
                 let models = binary.as_ref().filter(|_| available).and_then(|path| {
                     match spec.id {
                         "claude" => crate::ai_setup::claude_models(path),
                         _ => crate::ai_setup::codex_models(path),
-                    }.ok()
+                    }
+                    .ok()
                 });
                 EnhanceProviderInfo {
                     id: spec.id.to_string(),
@@ -946,6 +974,16 @@ fn normalize_server_name(name: &str) -> String {
 /// never allowlisted here: calendar work happens in the dedicated
 /// `lookup_calendar_event` call, and the summarizer runs on text alone.
 fn run_provider(spec: &ProviderSpec, model: Option<&str>, prompt: &str) -> Result<String, String> {
+    if crate::api::is_api(spec.id) {
+        return crate::api::run(
+            spec.id,
+            model,
+            prompt,
+            None,
+            &std::sync::atomic::AtomicBool::new(false),
+            &mut |_| {},
+        );
+    }
     let binary = resolve_binary(spec.binary).ok_or_else(|| {
         format!(
             "{} isn't installed (no `{}` on this Mac)",
@@ -1221,8 +1259,8 @@ fn enhance_path_inner<R: tauri::Runtime>(
     // The calendar lookup always runs through the claude CLI (codex's
     // non-interactive sandbox cancels MCP tool calls, so it cannot do its
     // own lookup) -- but since the summarizer only receives the found event
-    // as text, either provider can use it.
-    let calendar_enabled = cfg.enhance_use_calendar;
+    // as text, both helpers can use it. Direct API providers skip this lookup.
+    let calendar_enabled = cfg.enhance_use_calendar && !crate::api::is_api(spec.id);
     let duration_secs = simstim_transcript::parse_meta(md_path)
         .ok()
         .and_then(|meta| meta.duration_secs);
@@ -1344,7 +1382,17 @@ pub(crate) fn maybe_auto_enhance<R: tauri::Runtime>(app: tauri::AppHandle<R>, pa
     let installed = PROVIDERS
         .iter()
         .find(|spec| spec.id == cfg.enhance_provider)
-        .is_some_and(|spec| resolve_binary(spec.binary).is_some());
+        .is_some_and(|spec| {
+            if crate::api::is_api(spec.id) {
+                crate::api::configured(spec.id)
+                    && cfg
+                        .enhance_models
+                        .get(spec.id)
+                        .is_some_and(|m| !m.trim().is_empty())
+            } else {
+                resolve_binary(spec.binary).is_some()
+            }
+        });
     if !installed {
         return;
     }
@@ -1356,7 +1404,8 @@ pub(crate) fn maybe_auto_enhance<R: tauri::Runtime>(app: tauri::AppHandle<R>, pa
     }
     tauri::async_runtime::spawn_blocking(move || {
         // A downloaded but signed-out helper is skipped without an error after each call.
-        if !resolve_binary(&cfg.enhance_provider)
+        if !crate::api::is_api(&cfg.enhance_provider)
+            && !resolve_binary(&cfg.enhance_provider)
             .is_some_and(|binary| crate::ai_setup::probe(&cfg.enhance_provider, &binary).1)
         {
             return;

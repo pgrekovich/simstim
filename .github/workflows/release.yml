@@ -126,6 +126,8 @@ jobs:
             printf 'bypass. ASR models download inside the app on first run\n'
             printf '(onboarding).\n\n'
             printf 'Optional AI: choose Connect Claude or Connect ChatGPT and finish browser sign-in.\n'
+            printf 'Or use your own OpenAI, Anthropic or OpenRouter API key in Settings, with searchable model selection.\n'
+            printf 'Keys stay in macOS Keychain; API usage is billed separately by your provider.\n'
             printf 'No terminal or Simstim account is required; AI setup can be skipped.\n\n'
             printf 'Requires macOS 14.2+ on Apple Silicon.\n\n'
             # shellcheck disable=SC2016 # literal markdown backticks, not expansion

@@ -427,7 +427,7 @@ describe("SettingsDialog: summaries", () => {
     ]);
     render(<SettingsDialog open onOpenChange={() => {}} />);
 
-    await screen.findByText("Connect an AI assistant");
+    await screen.findByText("Connect an AI assistant or add an API key");
     expect(screen.getByRole("checkbox", { name: /summarize after each call/i })).toBeDisabled();
     expect(screen.getByRole("checkbox", { name: /let summaries title notes/i })).toBeDisabled();
     expect(screen.getByRole("checkbox", { name: /use calendar for context/i })).toBeDisabled();

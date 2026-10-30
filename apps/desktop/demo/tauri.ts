@@ -1,5 +1,6 @@
 // Fictional fixtures for screenshots of the real renderer. No native bridge,
 // recording, cloud AI, model download or filesystem mutation is available.
+const apiPreview = new URLSearchParams(location.search).has("api");
 const setupPreview = new URLSearchParams(location.search).has("setup");
 const updatesPreview = new URLSearchParams(location.search).has("updates");
 const date = "2026-09-09T10:00:00+02:00";
@@ -15,7 +16,7 @@ const config = {
   output_dir: "/demo", active_model: "parakeet-tdt-0.6b-v3-int8", onboarding_complete: true,
   theme: "light", show_in_dock: true, keep_audio: true, audio_format: "aac",
   retranscribe_model: "whisper-large-v3-turbo-q8", auto_retranscribe: true,
-  delete_audio_after_retranscribe: false, enhance_provider: "claude", enhance_models: {},
+  delete_audio_after_retranscribe: false, enhance_provider: apiPreview ? "openrouter" : "claude", enhance_models: apiPreview ? { openrouter: "example/atlas" } : {},
   auto_enhance: true, enhance_rename_title: true, enhance_use_calendar: true,
   detect_calls: true, auto_stop_after_call: false,
 };
@@ -34,7 +35,13 @@ export async function invoke(command: string, args?: Record<string, unknown>): P
       { id: config.active_model, name: "Parakeet TDT v3", size_mb: 670, downloaded: true, active: true, role: "live", technical_name: null, tagline: null, size_on_disk_bytes: 671000000, retired: false },
       { id: config.retranscribe_model, name: "Whisper large-v3 turbo", size_mb: 874, downloaded: true, active: true, role: "retranscribe", technical_name: null, tagline: null, size_on_disk_bytes: 874000000, retired: false },
     ];
+    case "list_api_models": return [
+      { value: "example/atlas", label: "Example: Atlas" },
+      { value: "example/atlas-mini", label: "Example: Atlas Mini" },
+      { value: "example/orbit", label: "Example: Orbit" },
+    ];
     case "list_enhance_providers": return [
+      ...(apiPreview ? [{ id: "openrouter", name: "OpenRouter API", available: true, version: "Your API key", models: [] }] : []),
       { id: "claude", name: "Claude Code", available: !setupPreview, version: setupPreview ? null : "2.1.314 (Claude Code)", models: [{ value: "sonnet", label: "Sonnet" }, { value: "haiku", label: "Haiku" }] },
       { id: "codex", name: "Codex", available: !setupPreview, version: setupPreview ? null : "codex-cli 0.166.0", models: [{ value: "gpt-6.1-sol", label: "GPT-6.1 Sol" }] },
     ];

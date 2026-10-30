@@ -36,7 +36,7 @@ export function AiSetup({ providers, onConnected, allowUpdates = false }: {
     }
   }, []);
 
-  const connectedVersions = providers.filter((provider) => provider.available)
+  const connectedVersions = providers.filter((provider) => provider.available && ASSISTANTS.some((a) => a.id === provider.id))
     .map((provider) => `${provider.id}:${provider.version}`).join(",");
   useEffect(() => {
     if (!allowUpdates || !connectedVersions) return;

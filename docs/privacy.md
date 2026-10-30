@@ -19,10 +19,13 @@ advanced configuration option. If encoding fails, the WAV is retained.
 Local transcription, ordinary search and editing notes do not use an AI
 cloud service. Automatic summaries are optional and visible in onboarding.
 If enabled, the note's text and transcript are passed to your configured
-Claude Code or Codex CLI and processed under that provider's terms.
+Claude Code or Codex CLI, or directly to OpenAI, Anthropic or OpenRouter
+when you select an API provider. That provider's terms apply. OpenRouter
+routes text to the selected model's upstream provider.
 
 Ask this call and Ask your notes send your question, bounded conversation
-history and the note text the CLI reads to its provider. Ask this call can
+history and the note text read through the helper or restricted API tools to
+the selected provider. Ask this call can
 read other notes for context too. In-app chat is held in memory and does not
 become part of your Markdown unless you copy it yourself. The external CLI
 may retain its own session logs under its own settings and policies.
@@ -32,6 +35,14 @@ connector for the call's time window. The matched event name and attendees
 can be included in the note and summary prompt. A connector-enabled quick
 question can read supported external records. These calls use the services
 you configured, not simstim servers. See [AI setup](your-ai.md#connectors-inside-simstim).
+
+Direct API keys are optional and stored only in macOS Keychain, never in
+settings, call files or browser storage. Saved keys are not returned to the
+interface. Model discovery uses your entered or saved key to read provider metadata
+without sending notes or making an inference request. Saved-key catalogs
+load only when you open the API section; Refresh models reloads the list. API usage is billed separately
+by the provider. You can replace or remove keys in Settings. API requests have
+no automatic retries; removing a key does not stop a request already sent.
 
 To keep text local, turn off automatic summaries and do not use the in-app
 AI questions or manual Summarize action. Use your own local tools on the
@@ -58,7 +69,8 @@ An advanced `delete_audio_after_retranscribe` option is off by default;
 enabling it permanently deletes audio after a successful accurate pass.
 Removing the application does not delete your notes, models or AI helpers.
 Helpers live in `~/Library/Application Support/simstim/helpers/`; provider
-credentials are stored separately by the provider's own tool.
+subscription credentials are stored separately by the provider's own tool.
+User-supplied API keys remain in macOS Keychain until removed in Settings.
 
 ## Network activity
 
@@ -72,17 +84,24 @@ credentials are stored separately by the provider's own tool.
   automatic checks are silent.
 - Explicit AI setup and helper updates download official helpers from Anthropic or OpenAI
   GitHub releases. The helper opens provider-owned browser authentication.
-  simstim does not read or store passwords or authentication tokens.
+  simstim does not read helper passwords or authentication tokens.
 - Assistant discovery runs the helper's version and authentication-status
   commands. Model discovery reads the official helpers' model catalogs
   without starting an AI turn or sending notes. The provider controls any
   network activity of these commands.
-- Optional AI and connector calls use the CLI's configured providers.
+- Optional AI and connector calls use the CLI's configured providers, or
+  direct text requests to api.openai.com, api.anthropic.com or openrouter.ai
+  for the selected API provider. API keys are sent only to that service in
+  authentication headers. API model discovery reads authenticated model
+  catalogs from those same services when opening the API settings with a
+  saved key, or explicitly choosing Load models or Refresh models. It sends
+  no note text and stores no catalog on disk.
 - Opening external links uses your normal browser.
 - The application itself has no automatic update check; new app versions
   are downloaded manually. Helper binaries download only after an explicit
   Update providers or Settings action.
 
 Your assistant, connectors, sync provider and operating system have their
-own data policies. simstim does not access their credentials directly.
+own data policies. simstim does not access helper or connector credentials
+directly; it reads only its own user-supplied API keys from Keychain.
 For a security concern, see [SECURITY.md](../SECURITY.md).

@@ -12,13 +12,14 @@ transcribes them locally into Markdown files. Read
   beside it. Files must remain usable by other tools without an export step.
   Do not make a database, index or cache the source of truth.
 - Audio stays local. Optional cloud AI is text-only through the user's
-  Claude Code or Codex setup. Automatic summaries are an explicit,
-  reversible choice in onboarding.
+  Claude Code or Codex setup, or optional direct API keys. Automatic summaries
+  are an explicit, reversible choice in onboarding.
 - No Simstim accounts, telemetry, upsell or AI credits. Official helpers
-  own provider login and credentials; do not add an OAuth client or store
-  provider credentials in Simstim. Network activity is model downloads,
-  official AI helper version checks, explicit official AI helper
-  setup/authentication, and optional AI or connector calls.
+  own subscription login and credentials; do not add an OAuth client.
+  User-supplied OpenAI, Anthropic and OpenRouter API keys are optional and
+  stored only in macOS Keychain, never in settings or call files. Network
+  activity is model downloads, official AI helper version checks, explicit
+  official AI helper setup/authentication, and optional AI or connector calls.
 - Recording starts only on an explicit user action.
 - Keep user notes separate from generated text. Re-transcription replaces
   the transcript section; it must preserve notes and metadata.

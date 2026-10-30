@@ -16,6 +16,7 @@ The supported target is macOS 14.2+ on Apple Silicon.
 | `apps/desktop/src-tauri/src/retranscribe.rs` | Offline transcription queue |
 | `apps/desktop/src-tauri/src/enhance.rs` | Optional summaries and restricted connector reads |
 | `apps/desktop/src-tauri/src/chat.rs` | Questions over notes, citations and CLI process control |
+| `apps/desktop/src-tauri/src/api.rs` | Direct text APIs, Keychain credentials and restricted Markdown reads |
 | `apps/desktop/src-tauri/src/ai_setup.rs` | Official helper installation and provider-owned login |
 | `apps/desktop/src` | React UI and typed IPC wrappers |
 
@@ -78,10 +79,21 @@ runtime. Validate both channels independently. See [development](development.md)
 
 ## Optional AI
 
-Summaries and questions share the configured Claude Code or Codex provider.
+Summaries and questions share the configured Claude Code, Codex or direct API provider.
 Notes and questions are passed as text; audio is never sent. Chat searches
 files through restricted tools, with no separate index. Conversations live
 in memory; the external helper can retain its own logs.
+
+Direct OpenAI, Anthropic and OpenRouter APIs use explicit user keys in macOS
+Keychain and model IDs in configuration. API settings load searchable model
+catalogs through authenticated GET requests, including provider pagination.
+An entered key can be used for discovery before being saved. Catalogs stay
+in memory and requests send no notes or inference prompts. They send text to fixed HTTPS endpoints,
+with redirects disabled, bounded responses and deadlines, and no automatic retries.
+API chat cancellation aborts in-flight network work. Chat exposes only bounded
+list, literal search and paginated read operations over direct Markdown children
+of the notes folder; symlinks, traversal, audio and writes are rejected. API
+summaries use no tools. Calendar context and connectors remain helper-only.
 
 Ordinary Claude runs use `--strict-mcp-config` so configured MCP servers do
 not add startup work and tool schemas to requests that need no connectors.

@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
+import { ApiKeysSettings, isApiProvider } from "@/components/ApiKeysSettings";
 import { AiSetup } from "@/components/AiSetup";
 import { PromptsSettings } from "@/components/PromptsSettings";
 import { cn } from "@/lib/utils";
@@ -944,7 +945,7 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
             <section id="settings-summaries" className="flex flex-col gap-1.5">
               <GroupHeading>Summaries</GroupHeading>
               <p className="max-w-[62ch] text-[11.5px] leading-[1.55] text-muted-foreground">
-                Use Claude or ChatGPT with your existing account. Summaries and
+                Use Claude or ChatGPT with your existing account, or your own API key. Summaries and
                 questions send text to that provider, never audio. Your provider's usage
                 limits apply. Turn off automatic summaries to keep text local; your files
                 also work with any assistant you use separately.
@@ -956,7 +957,12 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                   await handleSetEnhanceProvider(provider);
                 }
               }} />}
-              {selectedProvider?.available && selectedProvider.models == null && (
+              {isOpen && config && <ApiKeysSettings config={config} providers={enhanceProviders} onChanged={async () => {
+                const [freshConfig, freshProviders] = await Promise.all([getConfig(), listEnhanceProviders()]);
+                setConfig(freshConfig);
+                setEnhanceProviders(freshProviders);
+              }} />}
+              {selectedProvider?.available && !isApiProvider(selectedProvider.id) && selectedProvider.models == null && (
                 <p role="status" className="text-[11.5px] text-muted-foreground">
                   Could not load {selectedProvider.name} models. Choose Default or update {selectedProvider.name} to refresh model support.
                 </p>
@@ -964,19 +970,19 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
               <Group>
                 {!summariesPossible ? (
                   <Row
-                    label="Connect an AI assistant"
+                    label="Connect an AI assistant or add an API key"
                     description="Recording and transcription also work without AI."
                   />
                 ) : availableProviders.length === 1 ? (
                   <Row
                     label={`Written by ${availableProviders[0].name}`}
-                    description={(availableProviders[0].version ?? "installed").replace(
+                    description={isApiProvider(availableProviders[0].id) ? config?.enhance_models[availableProviders[0].id] || "Choose a model above" : (availableProviders[0].version ?? "installed").replace(
                       ` (${availableProviders[0].name})`,
                       "",
                     )}
                     error={enhanceProviderError}
                   >
-                    <select
+                    {!isApiProvider(availableProviders[0].id) && <select
                       aria-label={`${availableProviders[0].name} model`}
                       value={config?.enhance_models?.[availableProviders[0].id] ?? ""}
                       onChange={(e) => handleSetEnhanceModel(availableProviders[0].id, e.target.value)}
@@ -989,17 +995,17 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                           </option>
                         )
                       )}
-                    </select>
+                    </select>}
                   </Row>
                 ) : (
                   availableProviders.map((provider) => (
                     <Row
                       key={provider.id}
                       label={provider.name}
-                      description={(provider.version ?? "installed").replace(` (${provider.name})`, "")}
+                      description={isApiProvider(provider.id) ? config?.enhance_models[provider.id] || "Choose a model above" : (provider.version ?? "installed").replace(` (${provider.name})`, "")}
                       error={config?.enhance_provider === provider.id ? enhanceProviderError : null}
                     >
-                      {config?.enhance_provider === provider.id && (
+                      {config?.enhance_provider === provider.id && !isApiProvider(provider.id) && (
                         <select
                           aria-label={`${provider.name} model`}
                           value={config?.enhance_models?.[provider.id] ?? ""}
@@ -1061,20 +1067,20 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                   htmlFor="enhance-use-calendar"
                   description="Names the meeting and its people from the overlapping calendar event, through your Claude connectors."
                   error={useCalendarError}
-                  dimmed={!summariesPossible}
+                  dimmed={!summariesPossible || isApiProvider(config?.enhance_provider ?? "")}
                 >
                   <Checkbox
                     variant="switch"
                     id="enhance-use-calendar"
                     checked={config?.enhance_use_calendar ?? false}
-                    disabled={!config || !summariesPossible}
+                    disabled={!config || !summariesPossible || isApiProvider(config.enhance_provider)}
                     onCheckedChange={(checked) => handleSetEnhanceUseCalendar(checked === true)}
                   />
                 </Row>
               </Group>
               {selectedProvider && !selectedProvider.available && summariesPossible && (
                 <span className="text-xs text-muted-foreground">
-                  {selectedProvider.name} is not installed anymore; pick the assistant above.
+                  {selectedProvider.name} is unavailable; connect it or choose another provider.
                 </span>
               )}
             </section>

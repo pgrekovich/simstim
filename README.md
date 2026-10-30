@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/pgrekovich/simstim/releases/tag/v0.11.0"><strong>Download for macOS</strong></a> ·
+  <a href="https://github.com/pgrekovich/simstim/releases/tag/v0.12.0"><strong>Download for macOS</strong></a> ·
   <a href="#getting-started">Get started</a> ·
   <a href="docs/privacy.md">Privacy</a> ·
   <a href="docs/development.md">Build from source</a>
@@ -64,7 +64,9 @@ rebuild them inside a call recorder.
 ## Optional AI
 
 Connect **Claude or ChatGPT** to get summaries and ask questions about your
-calls. Simstim sets up the official Claude Code or Codex helper and opens
+calls. You can also use your own OpenAI, Anthropic or OpenRouter API key
+from Settings, stored in macOS Keychain with separate API billing.
+Simstim sets up the official Claude Code or Codex helper and opens
 its browser sign-in. Setup does not require a terminal.
 
 AI requests send text to your provider, never audio. Your provider's plan
@@ -78,7 +80,7 @@ on the saved files.
 
 ## Getting started
 
-1. [Download for macOS](https://github.com/pgrekovich/simstim/releases/tag/v0.11.0),
+1. [Download for macOS](https://github.com/pgrekovich/simstim/releases/tag/v0.12.0),
    open the DMG and drag Simstim into Applications. The release is signed
    and notarized by Apple.
 2. Choose your notes folder and grant microphone and system-audio access.

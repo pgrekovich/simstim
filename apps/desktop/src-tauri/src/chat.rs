@@ -462,8 +462,11 @@ fn validate_ask(
                 .to_string(),
         );
     }
-    if !matches!(provider, "claude" | "codex") {
+    if !crate::config::VALID_ENHANCE_PROVIDERS.contains(&provider) {
         return Err(format!("unknown AI provider: {provider}"));
+    }
+    if !provider_available && crate::api::is_api(provider) {
+        return Err("Add an API key in Settings to ask questions".into());
     }
     if !provider_available {
         let name = if provider == "claude" { "Claude Code" } else { "Codex" };
@@ -792,7 +795,12 @@ fn ask_inner<R: tauri::Runtime>(
     // Use the same provider and model override as summaries.
     let cfg = Config::load();
     let provider = cfg.enhance_provider.clone();
-    let binary = crate::enhance::resolve_binary(&provider);
+    let api = crate::api::is_api(&provider);
+    let binary = if api {
+        None
+    } else {
+        crate::enhance::resolve_binary(&provider)
+    };
     let model = cfg
         .enhance_models
         .get(&provider)
@@ -807,7 +815,11 @@ fn ask_inner<R: tauri::Runtime>(
         let convo = convos.entry(scope_key.to_string()).or_default();
         validate_ask(
             &provider,
-            binary.is_some(),
+            if api {
+                crate::api::configured(&provider)
+            } else {
+                binary.is_some()
+            },
             question,
             convo.running.is_some(),
         )?;
@@ -829,14 +841,17 @@ fn ask_inner<R: tauri::Runtime>(
     emit_progress(app, scope_key, "running", None);
 
     let result = (|| {
-        let binary = binary.expect("validated above");
+        if api && connectors {
+            return Err("Connector questions require Claude Code. Select it in Settings or turn off connectors for this question.".into());
+        }
         let notes_dir = cfg.output_dir.clone();
         // A connector question (Jira, calendar, ...) runs with the user's
         // MCP servers allowlisted; claude only (codex has no connectors),
         // and only when the CLI actually lists some. The prompt gets one
         // extra line so the model knows the tools are meant to be used.
         let connector_rules = if connectors && provider == "claude" {
-            let servers = crate::enhance::discover_mcp_servers(&binary);
+            let servers =
+                crate::enhance::discover_mcp_servers(binary.as_deref().expect("validated above"));
             (!servers.is_empty()).then(|| crate::enhance::mcp_allowed_tools(&servers))
         } else {
             None
@@ -900,18 +915,32 @@ fn ask_inner<R: tauri::Runtime>(
                 )
             }
         };
-        let workdir = tempfile::tempdir().map_err(|e| e.to_string())?;
-        let (cmd, codex_out) = build_command(
-            &provider,
-            &binary,
-            model.as_deref(),
-            &notes_dir,
-            workdir.path(),
-            connector_rules.as_deref(),
-        )?;
-        let raw = run_chat(cmd, codex_out.as_deref(), &prompt, &cancel, &mut |step| {
-            emit_progress(app, scope_key, "step", Some(step));
-        })?;
+        let raw = if api {
+            let prompt = format!("{prompt}\n\nUse the notes tool to list, search and read Markdown files when needed. No other tools or connectors are available.");
+            crate::api::run(
+                &provider,
+                model.as_deref(),
+                &prompt,
+                Some(&notes_dir),
+                &cancel,
+                &mut |step| {
+                    emit_progress(app, scope_key, "step", Some(step));
+                },
+            )?
+        } else {
+            let workdir = tempfile::tempdir().map_err(|e| e.to_string())?;
+            let (cmd, codex_out) = build_command(
+                &provider,
+                binary.as_deref().expect("validated above"),
+                model.as_deref(),
+                &notes_dir,
+                workdir.path(),
+                connector_rules.as_deref(),
+            )?;
+            run_chat(cmd, codex_out.as_deref(), &prompt, &cancel, &mut |step| {
+                emit_progress(app, scope_key, "step", Some(step));
+            })?
+        };
         // claude answers in its JSON envelope, which names the exact model
         // that wrote the reply; an unexpected non-JSON output degrades to
         // the raw text with the configured label.

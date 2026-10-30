@@ -16,7 +16,7 @@ audio_format = "aac" # aac, flac; file-only
 retranscribe_model = "whisper-large-v3-turbo-q8"
 auto_retranscribe = true # file-only override
 delete_audio_after_retranscribe = false # file-only, irreversible when enabled
-enhance_provider = "claude" # claude, codex
+enhance_provider = "claude" # claude, codex, openai, anthropic, openrouter
 auto_enhance = true
 enhance_rename_title = true
 enhance_use_calendar = true
@@ -27,10 +27,13 @@ auto_stop_after_call = false
 # Leave empty to use the CLI's default model.
 # claude = "sonnet" # choose an ID or alias listed by your Claude Code helper
 # codex = "gpt-6.1-sol" # choose an ID listed by your Codex helper
+# openai = "your-model-id" # required for direct API providers
+# anthropic = "your-model-id"
+# openrouter = "provider/model-id"
 ```
 
 The onboarding screen shows the automatic-summary choice before the first
-recording. Automatic summaries require an installed, authenticated helper.
+recording. Automatic summaries require an installed, authenticated helper or a saved API key and model ID.
 Onboarding can install an official helper and open its browser sign-in;
 see [AI setup](your-ai.md). The old `local` provider migrates to `claude`.
 
@@ -38,11 +41,17 @@ see [AI setup](your-ai.md). The old `local` provider migrates to `claude`.
 wins. `enhance_use_calendar` enables a supported Claude Code calendar lookup
 for the meeting time; it does not add an OAuth login to simstim.
 
+API keys are set in Settings and stored only in macOS Keychain, never in
+this file. Direct API models are chosen from a searchable provider catalog;
+the selected ID is saved in `enhance_models`. They use
+text-only requests, with separate provider billing. Calendar context and
+connectors require Claude Code and are unavailable for direct API providers.
+
 Summaries and questions share the selected model. **Default** follows the
 official helper's configuration and account availability. Claude's named
 aliases follow the provider's current version.
 
-Model menus come from the official helpers for the current setup and account:
+For Claude Code and Codex, model menus come from the official helpers for the current setup and account:
 Codex uses `model/list`; Claude Code uses the Agent SDK initialize response. Discovery does not start an AI turn or send notes.
 If discovery fails, Default and the saved selection remain available.
 Explicitly saved model IDs are preserved and remain visible in Settings, including custom gateway IDs;

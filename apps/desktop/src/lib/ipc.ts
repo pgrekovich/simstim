@@ -49,8 +49,8 @@ export interface AppConfig {
  */
   delete_audio_after_retranscribe: boolean;
   /**
-   * Which AI CLI `enhance_session` runs: `"claude" | "codex"` (the user's
-   * own subscription, text only). The on-device provider was retired.
+   * AI provider for summaries and questions: claude, codex, openai, anthropic
+   * or openrouter. Direct APIs use a key in macOS Keychain, text only.
    */
   enhance_provider: string;
   /**
@@ -782,3 +782,19 @@ export function getLaunchAtLogin(): Promise<LoginStatus> {
 export function setLaunchAtLogin(enabled: boolean): Promise<LoginStatus> {
   return invoke("set_launch_at_login", { enabled });
 }
+
+/** Secrets are write-only through IPC and live only in macOS Keychain. */
+export function setApiKey(provider: string, apiKey: string): Promise<void> {
+  return invoke("set_api_key", { provider, apiKey });
+}
+
+export function deleteApiKey(provider: string): Promise<void> {
+  return invoke("delete_api_key", { provider });
+}
+
+/** Read provider metadata using a transient key or the saved Keychain entry. */
+export function listApiModels(provider: string, apiKey?: string): Promise<ApiModel[]> {
+  return invoke("list_api_models", { provider, apiKey: apiKey ?? null });
+}
+
+export interface ApiModel { value: string; label: string; }

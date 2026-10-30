@@ -56,6 +56,45 @@ turned off in Settings. An explicit question still sends text to the chosen
 provider. Without a connected assistant, recording, local transcription, playback, notes and
 ordinary search continue to work.
 
+## Use your own API key
+
+In **Settings > Summaries > Use your own API key**, choose OpenAI,
+Anthropic or OpenRouter, enter your key and choose **Load models**. Pick a
+model from the searchable menu, then choose **Save and use API**. The same
+provider and model handle summaries and questions. With a saved key, opening
+this section loads its catalog automatically. **Refresh models** fetches it
+again. You can search both model names and IDs without typing an ID yourself.
+
+Model discovery reads metadata only, with no inference request and no notes.
+An entered key can load models before you save it. OpenRouter's catalog
+respects your provider preferences and lists text models with tool support.
+OpenAI's catalog omits capability metadata, so known specialized model
+families are filtered by ID; the provider still decides access and tool
+support at request time. A failed refresh preserves the saved selection.
+Model catalogs stay in memory, and saving does not send a test prompt.
+
+Keys are stored in macOS Keychain. They are never written to `config.toml`,
+call files or browser storage, and saved keys cannot be revealed in the UI.
+Leave the key field blank to keep a saved key when choosing another model.
+**Remove key** deletes that provider's Keychain entry. Removing a key does
+not cancel requests already running; cancel an active question separately.
+
+API calls send only text directly from your Mac to the selected service.
+OpenRouter routes requests to the selected model's upstream provider.
+Usage is billed by your API provider separately from chat subscriptions.
+Automatic summaries follow the existing Settings switch; turn it off to
+send text only through explicit questions or manual summaries.
+
+API questions can list, search and read Markdown files in your notes folder,
+including other calls when relevant. File reads, context size, tool rounds
+and request duration are bounded. They cannot read audio, run shell commands
+or change files. API providers do not use Claude Code calendar context or
+connectors. Connector questions require selecting Claude Code.
+
+Request formats follow the official [OpenAI Chat Completions API](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create),
+[Anthropic Messages API](https://platform.claude.com/docs/en/api/messages/create) and
+[OpenRouter Chat Completions API](https://openrouter.ai/docs/api/api-reference/chat/create-a-chat-completion).
+
 ## Use a different assistant
 
 Turn off automatic summaries and open the notes folder in your own harness,

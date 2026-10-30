@@ -1,5 +1,6 @@
 pub mod aac;
 mod ai_setup;
+mod api;
 pub mod audio_sink;
 pub mod banner;
 pub mod chat;
@@ -611,6 +612,9 @@ pub fn run() {
             config::set_enhance_rename_title,
             config::set_enhance_use_calendar,
             enhance::list_enhance_providers,
+            api::list_api_models,
+            api::set_api_key,
+            api::delete_api_key,
             ai_setup::setup_ai,
             ai_setup::ai_setup_status,
             ai_setup::cancel_ai_setup,

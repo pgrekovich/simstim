@@ -60,8 +60,8 @@ fn default_delete_audio_after_retranscribe() -> bool {
     false
 }
 
-/// These are the enhance provider ids `enhance::PROVIDERS` knows how to run.
-pub const VALID_ENHANCE_PROVIDERS: &[&str] = &["claude", "codex"];
+/// Provider ids shared by summaries and questions.
+pub const VALID_ENHANCE_PROVIDERS: &[&str] = &["claude", "codex", "openai", "anthropic", "openrouter"];
 
 /// Migrate configurations naming the retired local summary provider to the default CLI
 /// provider.
@@ -106,7 +106,7 @@ pub struct Config {
     /// Delete retained audio only after a successful manual or automatic accurate pass.
     /// Disabled by default; deletion prevents another pass over that audio.
     pub delete_audio_after_retranscribe: bool,
-    /// Claude Code or Codex provider used for summaries and questions. The helper uses
+    /// Helper or direct API provider used for summaries and questions. The helper uses
     /// its configured subscription or API setup and receives text only.
     pub enhance_provider: String,
     /// Per-provider model override, keyed by provider id: e.g. `{"claude": "fable"}`

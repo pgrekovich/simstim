@@ -1,0 +1,13 @@
+{
+  "name": "simstim-site",
+  "private": true,
+  "type": "module",
+  "description": "Static landing page for simstim.tech",
+  "scripts": {
+    "build": "node build.mjs",
+    "preview": "node build.mjs && npx --yes wrangler pages dev dist"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

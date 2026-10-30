@@ -150,3 +150,12 @@ jobs:
             --title "$GITHUB_REF_NAME" \
             --notes-file release-notes.md \
             "target/release/bundle/dmg/Simstim_${GITHUB_REF_NAME#v}_aarch64.dmg"
+
+  # The landing page names the latest version and redirects /download to its
+  # DMG, so it is rebuilt after a stable release. Prereleases are never
+  # "latest" and leave the page alone.
+  site:
+    needs: release
+    if: ${{ !contains(github.ref_name, '-') }}
+    uses: ./.github/workflows/site.yml
+    secrets: inherit

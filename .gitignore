@@ -6,3 +6,5 @@ apps/desktop/src-tauri/binaries/
 *.onnx
 *.bin
 models/
+.claude/launch.json
+.wrangler/

@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/pgrekovich/simstim/releases/tag/v0.12.0"><strong>Download for macOS</strong></a> ·
+  <a href="https://simstim.tech/download"><strong>Download for macOS</strong></a> ·
   <a href="#getting-started">Get started</a> ·
   <a href="docs/privacy.md">Privacy</a> ·
   <a href="docs/development.md">Build from source</a>
@@ -80,7 +80,7 @@ on the saved files.
 
 ## Getting started
 
-1. [Download for macOS](https://github.com/pgrekovich/simstim/releases/tag/v0.12.0),
+1. [Download for macOS](https://simstim.tech/download),
    open the DMG and drag Simstim into Applications. The release is signed
    and notarized by Apple.
 2. Choose your notes folder and grant microphone and system-audio access.

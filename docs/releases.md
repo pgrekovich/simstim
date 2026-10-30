@@ -53,7 +53,16 @@ entitlement and Gatekeeper acceptance before publishing the DMG.
 Create and push an annotated version tag on the tested commit. Wait for the
 Release workflow to finish. Verify the release's prerelease status, download
 the DMG, compare its SHA-256 with the release notes and check installation
-on a second Mac. Update the README download link for the new version.
+on a second Mac. The README links to `https://simstim.tech/download`, which
+always points at the latest stable release.
+
+## Landing page
+
+`site/` holds simstim.tech, a static page deployed to Cloudflare Pages by
+`.github/workflows/site.yml`. A stable release calls that workflow after
+publishing, so the page names the new version and `/download` redirects to
+its DMG without a manual step. Prereleases do not change the page. See
+[site/README.md](../site/README.md) for the one-time Cloudflare setup.
 
 Updates are manual: users replace the app with the newer release. Their
 notes, models and configuration remain outside the application bundle.

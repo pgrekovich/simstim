@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Simstim: record calls on your Mac, keep them as Markdown</title>
+  <meta name="description" content="Simstim records your microphone and system audio, transcribes the call on your Mac and saves it as a Markdown file. Free, no accounts, no telemetry. Optional summaries with the Claude or ChatGPT you already have.">
+  <link rel="canonical" href="{{site}}/">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#1e1e1e" media="(prefers-color-scheme: dark)">
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="icon" href="/favicon-32.png" type="image/png" sizes="32x32">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <link rel="stylesheet" href="{{asset:styles.css}}">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Simstim">
+  <meta property="og:title" content="Simstim: your calls, your files, your AI">
+  <meta property="og:description" content="Record and transcribe calls on your Mac. Each call becomes a Markdown file you own. Free, no accounts, no telemetry.">
+  <meta property="og:url" content="{{site}}/">
+  <meta property="og:image" content="{{site}}/og.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="The Simstim window showing a call summary with decisions and next steps.">
+  <meta name="twitter:card" content="summary_large_image">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+
+  <header class="top">
+    <a class="brand" href="/">
+      <img src="/icon.svg" alt="" width="28" height="28">
+      <span>simstim</span>
+    </a>
+    <nav aria-label="Sections">
+      <a href="#how">How it works</a>
+      <a href="#files">Files</a>
+      <a href="#ai">AI</a>
+      <a href="#privacy">Privacy</a>
+      <a href="https://github.com/pgrekovich/simstim">GitHub</a>
+    </nav>
+  </header>
+
+  <main id="main">
+    <section class="hero">
+      <h1>Your calls. Your files. Your&nbsp;AI.</h1>
+      <p class="lede">
+        Simstim records calls on your Mac, transcribes them on the same Mac and saves each one as a
+        Markdown file you own. Audio never leaves your computer.
+      </p>
+      <div class="cta">
+        <a class="button" href="/download">Download for macOS</a>
+        <p class="meta">
+          Version {{version}} · {{size}} · macOS 14.2 or later on Apple&nbsp;Silicon<br>
+          Free, MIT license. Windows and Linux coming soon.
+        </p>
+      </div>
+      <figure class="shot">
+        <picture>
+          <source type="image/webp" srcset="{{asset:app-summary.webp}} 1165w, {{asset:app-summary@2x.webp}} 2330w" sizes="(min-width: 1312px) 1216px, calc(100vw - 2rem)">
+          <img src="{{asset:app-summary.png}}" width="1165" height="793" fetchpriority="high" decoding="async"
+            alt="The Simstim window. On the left, a list of recent calls grouped by day. On the right, the summary of a design review: a short paragraph, a list of decisions, next steps with owners and one open question.">
+        </picture>
+      </figure>
+    </section>
+
+    <section id="how" class="section">
+      <h2>How it works</h2>
+      <ol class="steps">
+        <li>
+          <h3>Record</h3>
+          <p>
+            Press Record. Simstim captures your microphone and the other side of the call as two separate
+            channels. It can suggest recording when it notices a call, but it never starts on its own.
+            Let the other people know before you record.
+          </p>
+        </li>
+        <li>
+          <h3>Transcribe on your Mac</h3>
+          <p>
+            A live transcript appears while you talk. After you stop, a second pass with a larger model
+            improves accuracy. Both models run locally. You can take notes during the call, and they stay
+            in their own section.
+          </p>
+        </li>
+        <li>
+          <h3>Keep plain files</h3>
+          <p>
+            Each call becomes a Markdown file with the recording beside it, in a folder you choose. Search
+            across past calls, click a timestamp to hear that moment, or continue a recording into the
+            same note later.
+          </p>
+        </li>
+      </ol>
+    </section>
+
+    <section id="files" class="section files">
+      <div class="files-text">
+        <h2>Files are the database</h2>
+        <p>
+          There is no export step because there is nothing to export from. Open the folder in Obsidian,
+          keep it in git, sync it with the service you already use. Every other tool on your Mac can read
+          these files today and in twenty years.
+        </p>
+        <p>
+          Your notes, the summary and the transcript live in separate sections. Re-transcribing a call
+          replaces only the transcript, never what you wrote.
+        </p>
+        <pre class="tree"><code>Your notes/
+├── 2026-09-09 15-30-00 call.md
+├── 2026-09-09 15-30-00 call.m4a
+└── 2026-09-09 11-00-00 call.md</code></pre>
+      </div>
+      <figure class="note">
+        <figcaption>2026-09-09 10-00-00 call.md</figcaption>
+<pre><code>---
+date: 2026-09-09T10:00:00+02:00
+title: Beta planning
+duration: 12m
+people: Alex, Sam
+---
+
+## Notes
+
+Keep the first release focused on recording and readable files.
+
+## Summary
+
+### Decisions
+
+- Start with five testers using different Apple Silicon Macs.
+- Keep PDF creation and sharing in the AI tools people already use.
+
+### Next steps
+
+- Sam: prepare a short sample call for the testers.
+- Alex: send the installation checklist after the candidate passes review.
+
+## Transcript
+
+[00:00:04] Me: Let's start with five testers on different Macs.
+[00:00:09] Them: I'll prepare a short sample call for them.
+[00:00:24] Them: Should we add a PDF export before the beta?
+[00:00:30] Me: The note is already a file. People can give it to the AI tools they use.</code></pre>
+      </figure>
+    </section>
+
+    <section id="ai" class="section">
+      <h2>Optional AI. Yours, not ours.</h2>
+      <div class="columns">
+        <div>
+          <p>
+            Connect Claude or ChatGPT to get a summary after each call and to ask questions across your
+            notes. Simstim installs the official helper and opens the provider's own sign-in. If you
+            prefer, use your own OpenAI, Anthropic or OpenRouter API key, stored in macOS Keychain.
+          </p>
+          <p>
+            Simstim sells no credits and adds no fee. Your plan, your limits, your bill.
+          </p>
+        </div>
+        <ul class="facts">
+          <li><strong>Text only.</strong> Summaries and questions send the note's text to your provider, never audio.</li>
+          <li><strong>Off means off.</strong> Without AI, recording, transcription, notes, playback and search keep working.</li>
+          <li><strong>Nothing to rebuild.</strong> For a PDF, a deck or a follow-up email, hand the file to your assistant. It already has those tools.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section id="privacy" class="section">
+      <h2>Plain answers</h2>
+      <div class="columns">
+        <div>
+          <h3>Privacy</h3>
+          <ul class="facts">
+            <li>No Simstim account, no hosted notes, no analytics.</li>
+            <li>Audio is recorded and transcribed on your Mac and stays there.</li>
+            <li>Network use is model downloads, the optional AI setup and the AI requests you make.</li>
+            <li>Deleting a note moves it to the Trash. Removing the app leaves your notes alone.</li>
+          </ul>
+        </div>
+        <div>
+          <h3>Limitations</h3>
+          <ul class="facts">
+            <li>Apple Silicon Macs on macOS 14.2 or later today. Windows and Linux versions are coming soon.</li>
+            <li>"Me" and "Them" are your microphone and system audio, not individual speakers.</li>
+            <li>Names and numbers can be misheard. Check important details against the recording.</li>
+            <li>Updates are manual: download a new version and replace the app.</li>
+          </ul>
+        </div>
+      </div>
+      <p class="more">
+        The details are in the <a href="https://github.com/pgrekovich/simstim/blob/main/docs/privacy.md">privacy document</a>.
+      </p>
+    </section>
+
+    <section id="download" class="section download">
+      <h2>Download Simstim {{version}}</h2>
+      <p>
+        Released <time datetime="{{published_iso}}">{{published}}</time>. Signed with a Developer ID and
+        notarized by Apple, so macOS opens it without workarounds.
+      </p>
+      <div class="cta">
+        <a class="button" href="/download">Download for macOS</a>
+        <p class="meta">{{asset_name}} · {{size}}</p>
+      </div>
+      <ol class="install">
+        <li>Open the disk image and drag Simstim into Applications.</li>
+        <li>Choose a folder for your notes and allow microphone and system audio. Speech models, about 1.55 GB, download on first launch.</li>
+        <li>Connect an AI assistant if you want summaries, or skip it. Then press Record.</li>
+      </ol>
+      <details>
+        <summary>Verify the download</summary>
+        <p>In Terminal, compare the checksum with the one published in the release:</p>
+        <pre><code>shasum -a 256 ~/Downloads/{{asset_name}}
+{{sha256}}</code></pre>
+      </details>
+      <p class="more">
+        <a href="{{release_url}}">Release notes</a> ·
+        <a href="https://github.com/pgrekovich/simstim/releases">All versions</a> ·
+        <a href="https://github.com/pgrekovich/simstim/blob/main/docs/development.md">Build from source</a>
+      </p>
+      <p class="fine">
+        Updating from an earlier version: quit Simstim and replace the app. Your notes, models and settings
+        stay where they are.
+      </p>
+    </section>
+  </main>
+
+  <footer class="bottom">
+    <nav aria-label="Project links">
+      <a href="https://github.com/pgrekovich/simstim">GitHub</a>
+      <a href="https://github.com/pgrekovich/simstim/blob/main/CONTRIBUTING.md#reporting-a-bug">Report a bug</a>
+      <a href="https://github.com/pgrekovich/simstim/blob/main/docs/privacy.md">Privacy</a>
+      <a href="https://github.com/pgrekovich/simstim/blob/main/docs/configuration.md">Configuration</a>
+      <a href="https://github.com/pgrekovich/simstim/blob/main/LICENSE">MIT license</a>
+    </nav>
+    <p>
+      Built with Rust, Tauri, React, Parakeet and Whisper by Pavel Hrakovich and contributors.
+      Named after simstim in William Gibson's <em>Neuromancer</em>: replaying someone else's recorded experience.
+    </p>
+  </footer>
+</body>
+</html>

@@ -34,16 +34,19 @@ use crate::models::{self, ModelLayout};
 use crate::sessions;
 use crate::AppState;
 
-/// `retranscribe-progress` event payload. `channel` and `message` serialize as explicit
-/// JSON `null` when absent (not omitted, per the IPC contract), unlike
-/// `models::ProgressPayload`'s `message` which skips instead -- this event's TS side
-/// declares both as `| null`, not optional.
+/// `retranscribe-progress` event payload. `channel`, `message` and `percent`
+/// serialize as explicit JSON `null` when absent (not omitted, per the IPC
+/// contract), unlike `models::ProgressPayload`'s `message` which skips instead --
+/// this event's TS side declares them as `| null`, not optional. `percent` is
+/// the whole job's progress in 0..=100 during "transcribing", across both
+/// channels, so the UI can show one number for the pass.
 #[derive(Clone, Serialize)]
 struct RetranscribeProgressPayload {
     path: String,
     phase: &'static str,
     channel: Option<&'static str>,
     message: Option<String>,
+    percent: Option<f32>,
 }
 
 /// Emit job progress. The generic runtime allows queue and worker tests to use a mock
@@ -54,6 +57,7 @@ fn emit_progress<R: tauri::Runtime>(
     phase: &'static str,
     channel: Option<&'static str>,
     message: Option<String>,
+    percent: Option<f32>,
 ) {
     let _ = app.emit(
         "retranscribe-progress",
@@ -62,8 +66,30 @@ fn emit_progress<R: tauri::Runtime>(
             phase,
             channel,
             message,
+            percent,
         },
     );
+}
+
+/// Progress callback shared by the pipeline and its tests: phase, channel,
+/// detail message and whole-job percent (0..=100).
+type ProgressFn = dyn Fn(&'static str, Option<&'static str>, Option<String>, Option<f32>);
+
+/// Whole-job progress while one channel decodes: the speech seconds already
+/// finished in earlier channels plus this channel's own fraction, over the
+/// speech seconds of the whole pass. A pass with no speech reports complete,
+/// not a division by zero.
+fn overall_percent(
+    done_before_secs: f64,
+    channel_secs: f64,
+    channel_fraction: f32,
+    total_secs: f64,
+) -> f32 {
+    if total_secs <= 0.0 {
+        return 100.0;
+    }
+    let done = done_before_secs + channel_secs * f64::from(channel_fraction.clamp(0.0, 1.0));
+    ((done / total_secs) * 100.0).clamp(0.0, 100.0) as f32
 }
 
 /// Outcome of asking [`RetranscribeQueue::enqueue`] to admit a path (the old single-job
@@ -358,7 +384,7 @@ pub(crate) fn maybe_auto_retranscribe<R: tauri::Runtime>(app: AppHandle<R>, path
     match decision {
         AutoTriggerDecision::Skip => {}
         AutoTriggerDecision::ReportAndDrop(message) => {
-            emit_progress(&app, &path, "error", None, Some(message));
+            emit_progress(&app, &path, "error", None, Some(message), None);
         }
         AutoTriggerDecision::Enqueue => {
             // Do not carry resolved paths into the queue. Execution resolves and
@@ -712,7 +738,7 @@ fn finalize_transcript(
     merged: &[TaggedSegment],
     asr_id: &str,
     before_write: impl FnOnce() -> Result<()>,
-    on_progress: &impl Fn(&'static str, Option<&'static str>, Option<String>),
+    on_progress: &ProgressFn,
 ) -> Result<()> {
     if merged.is_empty() {
         return Err(anyhow!(
@@ -721,7 +747,7 @@ fn finalize_transcript(
     }
     let body = render_transcript_body(merged);
 
-    on_progress("writing", None, None);
+    on_progress("writing", None, None, None);
     before_write()?;
     sessions::rewrite_transcript_at(md_path, &body, asr_id)
 }
@@ -736,9 +762,12 @@ fn run_retranscribe_pipeline(
     model_path: &Path,
     asr_id: &str,
     before_write: impl FnOnce() -> Result<()>,
-    on_progress: impl Fn(&'static str, Option<&'static str>, Option<String>) + Clone + Send + 'static,
+    on_progress: impl Fn(&'static str, Option<&'static str>, Option<String>, Option<f32>)
+        + Clone
+        + Send
+        + 'static,
 ) -> Result<()> {
-    on_progress("loading-model", None, None);
+    on_progress("loading-model", None, None, None);
     let mut engine = WhisperEngine::new(model_path)
         .with_context(|| format!("loading whisper model at {}", model_path.display()))?;
 
@@ -749,28 +778,52 @@ fn run_retranscribe_pipeline(
     // channel handed to whisper whole has its language decided by whatever
     // its first 30 seconds hold -- silence, for any mic on a call the other
     // side started -- and hallucinates filler over every quiet stretch after
-    // that. Detection runs inside the channel's own "transcribing" phase
-    // rather than announcing itself: it is fast next to the decode, and the
-    // progress contract has no phase of its own for it.
+    // that. Detection runs inside the first "transcribing" phase rather than
+    // announcing itself: it is fast next to the decode, and the progress
+    // contract has no phase of its own for it. Both channels are detected
+    // before either decodes so the reported percent covers the whole pass,
+    // weighted by each channel's speech seconds, instead of restarting at
+    // zero for Them.
     let models_dir = simstim_engine::models_dir();
 
-    on_progress("transcribing", Some("me"), None);
+    on_progress("transcribing", Some("me"), None, Some(0.0));
     let me_timeline = simstim_engine::detect_speech(&models_dir, &me_samples)
         .context("detecting speech in the Me channel")?;
+    let them_timeline = simstim_engine::detect_speech(&models_dir, &them_samples)
+        .context("detecting speech in the Them channel")?;
+    let me_secs = me_timeline.speech_secs();
+    let them_secs = them_timeline.speech_secs();
+    let total_secs = me_secs + them_secs;
+
     let cb = on_progress.clone();
     let me_segments = engine
         .transcribe_speech(&me_samples, &me_timeline, move |pct| {
-            cb("transcribing", Some("me"), Some(format!("{:.0}%", pct * 100.0)));
+            let overall = overall_percent(0.0, me_secs, pct, total_secs);
+            cb(
+                "transcribing",
+                Some("me"),
+                Some(format!("{overall:.0}%")),
+                Some(overall),
+            );
         })
         .context("transcribing the Me channel")?;
 
-    on_progress("transcribing", Some("them"), None);
-    let them_timeline = simstim_engine::detect_speech(&models_dir, &them_samples)
-        .context("detecting speech in the Them channel")?;
+    on_progress(
+        "transcribing",
+        Some("them"),
+        None,
+        Some(overall_percent(me_secs, them_secs, 0.0, total_secs)),
+    );
     let cb = on_progress.clone();
     let them_segments = engine
         .transcribe_speech(&them_samples, &them_timeline, move |pct| {
-            cb("transcribing", Some("them"), Some(format!("{:.0}%", pct * 100.0)));
+            let overall = overall_percent(me_secs, them_secs, pct, total_secs);
+            cb(
+                "transcribing",
+                Some("them"),
+                Some(format!("{overall:.0}%")),
+                Some(overall),
+            );
         })
         .context("transcribing the Them channel")?;
 
@@ -797,12 +850,22 @@ async fn run_job<R: tauri::Runtime>(
     // failure here reports through the usual "error" phase and drops the job -- the
     // pipeline is never reached, so nothing is ever written or deleted for a job that
     // fails this check.
+    // The file gate refuses only while the note is recording (again): the
+    // user continued it after this job was queued, or pressed Record on it
+    // in the moment between Stop finishing and this job starting. That is
+    // not a failure to show them. Stopping that recording queues a fresh
+    // accurate pass of its own when auto-retranscribe is on, so this stale
+    // job is dropped with a "skipped" phase that clears the UI's job
+    // indicator without raising the error notice.
     let file_job = crate::session_files::process(&md_path);
     let _file_job = match file_job {
         Ok(lease) => lease,
         Err(error) => {
-            let message = error.to_string();
-            emit_progress(&app, &path, "error", None, Some(message.clone()));
+            let message = format!(
+                "this note is recording again; the accurate pass runs after it stops ({error})"
+            );
+            eprintln!("retranscribe skipped {path}: {message}");
+            emit_progress(&app, &path, "skipped", None, Some(message.clone()), None);
             advance_queue(app.clone());
             return Err(message);
         }
@@ -818,7 +881,7 @@ async fn run_job<R: tauri::Runtime>(
     let (audio_path, model_path) = match revalidated {
         Ok(paths) => paths,
         Err(message) => {
-            emit_progress(&app, &path, "error", None, Some(message.clone()));
+            emit_progress(&app, &path, "error", None, Some(message.clone()), None);
             advance_queue(app.clone());
             return Err(message);
         }
@@ -839,8 +902,8 @@ async fn run_job<R: tauri::Runtime>(
         let _worker_file_job = worker_file_job;
         let progress_app = app_for_job.clone();
         let progress_path = path_for_job.clone();
-        let on_progress = move |phase, channel, message| {
-            emit_progress(&progress_app, &progress_path, phase, channel, message);
+        let on_progress = move |phase, channel, message, percent| {
+            emit_progress(&progress_app, &progress_path, phase, channel, message, percent);
         };
 
         // Re-check the single-writer rule right before the final write
@@ -883,7 +946,7 @@ async fn run_job<R: tauri::Runtime>(
         Ok(result) => result,
         Err(join_err) => {
             let message = join_err.to_string();
-            emit_progress(&app, &path, "error", None, Some(message.clone()));
+            emit_progress(&app, &path, "error", None, Some(message.clone()), None);
             // Always advance the queue, even on a panic -- otherwise a
             // panicking job would leave every job queued behind it stuck
             // forever (mirrors the pre-queue code's "always release the job
@@ -898,17 +961,17 @@ async fn run_job<R: tauri::Runtime>(
     let final_result: Result<(), String> = match result {
         Ok(()) => match maybe_delete_audio(&audio_path_for_delete, delete_audio_after, true) {
             Some(delete_error) => {
-                emit_progress(&app, &path, "error", None, Some(delete_error.clone()));
+                emit_progress(&app, &path, "error", None, Some(delete_error.clone()), None);
                 Err(delete_error)
             }
             None => {
-                emit_progress(&app, &path, "done", None, None);
+                emit_progress(&app, &path, "done", None, None, None);
                 Ok(())
             }
         },
         Err(e) => {
             let message = e.to_string();
-            emit_progress(&app, &path, "error", None, Some(message.clone()));
+            emit_progress(&app, &path, "error", None, Some(message.clone()), None);
             Err(message)
         }
     };
@@ -1006,6 +1069,27 @@ mod tests {
             start_secs: start,
             end_secs: start + 1.0,
             text: text.to_string(),
+        }
+    }
+
+    mod progress {
+        use super::*;
+
+        #[test]
+        fn whole_pass_percent_is_weighted_by_each_channels_speech() {
+            // Me holds 30 s of speech, Them 90 s: Me finishing is a quarter of the pass.
+            assert_eq!(overall_percent(0.0, 30.0, 0.0, 120.0), 0.0);
+            assert_eq!(overall_percent(0.0, 30.0, 1.0, 120.0), 25.0);
+            assert_eq!(overall_percent(30.0, 90.0, 0.0, 120.0), 25.0);
+            assert_eq!(overall_percent(30.0, 90.0, 0.5, 120.0), 62.5);
+            assert_eq!(overall_percent(30.0, 90.0, 1.0, 120.0), 100.0);
+        }
+
+        #[test]
+        fn whole_pass_percent_stays_in_range_and_handles_silence() {
+            assert_eq!(overall_percent(0.0, 0.0, 0.0, 0.0), 100.0);
+            assert_eq!(overall_percent(0.0, 10.0, 1.5, 10.0), 100.0);
+            assert_eq!(overall_percent(0.0, 10.0, -0.5, 10.0), 0.0);
         }
     }
 
@@ -1593,6 +1677,49 @@ mod tests {
         use crate::config::DEFAULT_RETRANSCRIBE_MODEL;
 
         const FIXTURE: &str = "---\ndate: 2026-06-01T09:00:00+02:00\ntitle: Keep me\nasr: parakeet-tdt-0.6b-v3\n---\n\n## Transcript\n\n[00:00:01] Me: original text\n";
+
+        /// The note started recording again before its queued pass began (the user
+        /// continued it, or pressed Record on it right after Stop). The job is
+        /// dropped as "skipped", not reported as an error: the recording's own Stop
+        /// queues a fresh pass. The file and the queue must still be left clean.
+        #[test]
+        fn skips_a_job_whose_note_is_recording_again_and_still_drains_the_queue() {
+            let app = tauri::test::mock_app();
+            app.manage(AppState::default());
+            app.manage(RetranscribeState::default());
+            let handle = app.handle().clone();
+
+            let dir = tempfile::tempdir().unwrap();
+            let md_path = dir.path().join("call.md");
+            std::fs::write(&md_path, FIXTURE).unwrap();
+            std::fs::write(dir.path().join("call.flac"), b"x").unwrap();
+
+            {
+                let jobs = handle.state::<RetranscribeState>();
+                jobs.0.lock().unwrap().queue.running = Some(md_path.display().to_string());
+            }
+            // A live recording worker owns the file for as long as this lease lives.
+            let _recording = crate::session_files::record(&md_path).unwrap();
+
+            let result = tauri::async_runtime::block_on(run_job(
+                handle.clone(),
+                md_path.display().to_string(),
+                md_path.clone(),
+                DEFAULT_RETRANSCRIBE_MODEL.to_string(),
+                false,
+            ));
+            let err = result.unwrap_err();
+            assert!(err.contains("recording again"), "{err}");
+
+            let after = std::fs::read_to_string(&md_path).unwrap();
+            assert_eq!(after, FIXTURE, "the file must be left byte-exact -- the pipeline must never run");
+
+            assert_eq!(
+                handle.state::<RetranscribeState>().0.lock().unwrap().queue.running,
+                None,
+                "the queue must still advance even though the job was skipped"
+            );
+        }
 
         /// Missing audio must leave the transcript untouched and release the running
         /// slot.
@@ -2202,7 +2329,7 @@ mod tests {
                 &[],
                 "whisper-large-v3-turbo-q8",
                 || Ok(()),
-                &|_, _, _| {},
+                &|_, _, _, _| {},
             )
             .unwrap_err();
             assert!(
@@ -2233,7 +2360,7 @@ mod tests {
                 &merged,
                 "whisper-large-v3-turbo-q8",
                 || Ok(()),
-                &|_, _, _| {},
+                &|_, _, _, _| {},
             )
             .unwrap();
 
@@ -2263,7 +2390,7 @@ mod tests {
                 &merged,
                 "whisper-large-v3-turbo-q8",
                 || Err(anyhow!("recording started on this session")),
-                &|_, _, _| {},
+                &|_, _, _, _| {},
             )
             .unwrap_err();
             assert!(format!("{err:#}").contains("recording started"));
@@ -2351,8 +2478,8 @@ mod tests {
             &model_path,
             DEFAULT_RETRANSCRIBE_MODEL,
             || Ok(()),
-            |phase, channel, message| {
-                println!("[retranscribe] phase={phase} channel={channel:?} message={message:?}");
+            |phase, channel, message, percent| {
+                println!("[retranscribe] phase={phase} channel={channel:?} message={message:?} percent={percent:?}");
             },
         )
         .unwrap();
@@ -2438,8 +2565,8 @@ mod tests {
             &model_path,
             DEFAULT_RETRANSCRIBE_MODEL,
             || Ok(()),
-            |phase, channel, message| {
-                println!("[retranscribe] phase={phase} channel={channel:?} message={message:?}");
+            |phase, channel, message, percent| {
+                println!("[retranscribe] phase={phase} channel={channel:?} message={message:?} percent={percent:?}");
             },
         )
         .unwrap();

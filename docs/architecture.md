@@ -47,7 +47,11 @@ silence and runs Whisper. Timestamps are mapped back to the original audio
 timeline before the channels are merged. Passing leading silence to Whisper
 can produce a wrong language choice or hallucinated text; do not bypass the
 speech-region extraction. An empty result must not erase an existing transcript.
-Jobs run in FIFO order with one Whisper worker at a time.
+Jobs run in FIFO order with one Whisper worker at a time. Progress events
+carry one whole-pass percent, weighted by each channel's speech seconds, so
+the sidebar row and the header can show "finishing 43%". A queued job whose
+note is recording again when it starts is dropped with a "skipped" phase, not
+an error; that recording's own Stop queues a fresh pass.
 
 ## Files and ownership
 

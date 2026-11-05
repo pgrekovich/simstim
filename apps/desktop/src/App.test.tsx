@@ -1648,6 +1648,50 @@ describe("App: enhance progress", () => {
     expect(document.body.textContent).toContain("by claude");
   });
 
+  it("shows the accurate pass percent in the sidebar row and the header of the open note", async () => {
+    vi.mocked(ipc.listSessions).mockResolvedValue(one);
+    vi.mocked(ipc.readSession).mockResolvedValue({
+      title: "Weekly sync", date: "", notes: "", transcript: "[00:00:01] Me: hi",
+      audio_path: "/tmp/sync.flac", summary: "", summary_model: null, summary_style: null, people: [],
+    });
+    render(<App />);
+    const row = await screen.findByRole("button", { name: /weekly sync/i });
+    fireEvent.click(row);
+    await waitFor(() => expect(document.body.textContent).toContain("hi"));
+
+    emit("retranscribe-progress", {
+      path: "/tmp/sync.md", phase: "transcribing", channel: "them", message: "43%", percent: 43.4,
+    });
+    // Once in the sidebar row, once in the header: a minutes-long pass must
+    // never read as "saved" and then nothing.
+    await waitFor(() => expect(screen.getAllByText("finishing 43%")).toHaveLength(2));
+    expect(within(row).getByTestId("working-dot")).toBeInTheDocument();
+
+    emit("retranscribe-progress", { path: "/tmp/sync.md", phase: "done", channel: null, message: null, percent: null });
+    await waitFor(() => expect(screen.queryByText(/finishing/)).not.toBeInTheDocument());
+  });
+
+  it("clears a skipped accurate pass quietly, without the error notice", async () => {
+    vi.mocked(ipc.listSessions).mockResolvedValue(one);
+    render(<App />);
+    const row = await screen.findByRole("button", { name: /weekly sync/i });
+
+    emit("retranscribe-progress", {
+      path: "/tmp/sync.md", phase: "loading-model", channel: null, message: null, percent: null,
+    });
+    await waitFor(() => expect(row.textContent).toContain("finishing"));
+
+    // The note started recording again before its queued pass began; the
+    // backend drops the pass rather than racing the recording.
+    emit("retranscribe-progress", {
+      path: "/tmp/sync.md", phase: "skipped", channel: null,
+      message: "this note is recording again; the accurate pass runs after it stops", percent: null,
+    });
+    await waitFor(() => expect(row.textContent).not.toContain("finishing"));
+    expect(screen.queryByText("Something went wrong")).not.toBeInTheDocument();
+    expect(screen.queryByText(/recording again/)).not.toBeInTheDocument();
+  });
+
   it("shows a finishing row in the sidebar while an enhance runs, for any session", async () => {
     vi.mocked(ipc.listSessions).mockResolvedValue(one);
     render(<App />);

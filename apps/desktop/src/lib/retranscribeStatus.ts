@@ -5,7 +5,16 @@ import type { RetranscribeProgress } from "@/lib/ipc";
  * remounts.
  *
  */
-export type RetranscribeJob = { path: string; text: string } | null;
+export type RetranscribeJob = { path: string; text: string; percent: number | null } | null;
+
+/**
+ * The one-word status for a note whose accurate pass is running, with the
+ * whole-pass percent when the backend has one: "finishing 43%". Shown in the
+ * sidebar row and the header so a multi-minute pass never reads as a hang.
+ */
+export function describeFinishing(percent: number | null): string {
+  return percent === null ? "finishing" : `finishing ${Math.round(percent)}%`;
+}
 
 /**
  * Renders a `retranscribe-progress` event's phase into the short status text
@@ -29,6 +38,8 @@ export function describeRetranscribeProgress(payload: RetranscribeProgress): str
       return "done";
     case "error":
       return payload.message ?? "re-transcribe failed";
+    case "skipped":
+      return payload.message ?? "skipped: the note is recording again";
   }
 }
 

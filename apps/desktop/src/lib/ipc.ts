@@ -261,20 +261,27 @@ export interface TranscriptInterimPayload {
 
 export type DownloadPhase = "download" | "done" | "error";
 
-export type RetranscribePhase = "loading-model" | "transcribing" | "writing" | "done" | "error";
+/**
+ * "skipped" is terminal like "done" and "error": the note started recording
+ * again before its queued accurate pass began, so the pass was dropped; the
+ * next Stop queues a fresh one. It is not a failure to show.
+ */
+export type RetranscribePhase = "loading-model" | "transcribing" | "writing" | "done" | "error" | "skipped";
 
 /**
  * Mirrors `retranscribe::RetranscribeProgressPayload`
  * (apps/desktop/src-tauri/src/retranscribe.rs), the `retranscribe-progress`
- * event payload. Unlike `DownloadProgress.message`, `channel` and `message`
- * are always present (as explicit `null`, not a missing key) since the Rust
- * side never uses `skip_serializing_if` for this payload.
+ * event payload. Unlike `DownloadProgress.message`, `channel`, `message` and
+ * `percent` are always present (as explicit `null`, not a missing key) since
+ * the Rust side never uses `skip_serializing_if` for this payload. `percent`
+ * is the whole pass's progress (0..100, both channels) during "transcribing".
  */
 export interface RetranscribeProgress {
   path: string;
   phase: RetranscribePhase;
   channel: "me" | "them" | null;
   message: string | null;
+  percent: number | null;
 }
 
 /**

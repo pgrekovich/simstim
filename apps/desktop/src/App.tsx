@@ -70,6 +70,7 @@ import {
   type TranscriptInterimPayload,
 } from "@/lib/ipc";
 import {
+  describeFinishing,
   describeRetranscribeProgress,
   isTranscriptUpdatedButAudioDeleteFailed,
   type RetranscribeJob,
@@ -602,12 +603,13 @@ function App() {
   // practice there's only ever one job, so a mismatch shouldn't happen).
   useEffect(() => {
     const unlisten = listen<RetranscribeProgress>("retranscribe-progress", (event) => {
-      const { path, phase, message } = event.payload;
-      if (phase === "done" || phase === "error") {
+      const { path, phase, message, percent } = event.payload;
+      if (phase === "done" || phase === "error" || phase === "skipped") {
         setRetranscribingJob((prev) => (prev?.path === path ? null : prev));
         // Surface automatic job errors in the header. Manual failures already have
         // inline handling; track how the job started rather than comparing its path with
-        // the current selection.
+        // the current selection. A "skipped" pass (the note is recording again) is
+        // neither: it only clears the indicator, and the next Stop queues a new pass.
         const wasManual = manualRetranscribePathsRef.current.delete(path);
         // Also skip while the header is showing a live recording: an auto job only ever
         // starts once ITS OWN recording has already stopped, so in practice this can't
@@ -643,7 +645,7 @@ function App() {
         }
         return;
       }
-      setRetranscribingJob({ path, text: describeRetranscribeProgress(event.payload) });
+      setRetranscribingJob({ path, text: describeRetranscribeProgress(event.payload), percent });
     });
     return () => {
       unlisten.then((f) => f());
@@ -1159,16 +1161,23 @@ function App() {
   // Use one processing label for sidebar rows with work in flight.
   const busyPaths: Record<string, string> = {};
   if (enhancingPath !== null) busyPaths[enhancingPath] = "finishing";
-  if (retranscribingJob) busyPaths[retranscribingJob.path] = "finishing";
+  if (retranscribingJob) busyPaths[retranscribingJob.path] = describeFinishing(retranscribingJob.percent);
   // The "recording" state has no word of its own: the hearing indicator
-  // and the red Stop button carry it.
+  // and the red Stop button carry it. While the open note's accurate pass
+  // runs, the header carries its percent instead of a bare "saved": the
+  // pass can take minutes on a long call, and "saved" next to a transcript
+  // that is still changing read as the app hanging.
+  const openNoteFinishing =
+    retranscribingJob !== null && retranscribingJob.path === selectedPath && selectedPath !== activePath;
   const statusText = status.kind === "loading-model"
     ? "starting"
     : status.kind === "saving"
       ? "finishing"
-      : status.kind === "saved"
-        ? "saved"
-        : "";
+      : openNoteFinishing
+        ? describeFinishing(retranscribingJob.percent)
+        : status.kind === "saved"
+          ? "saved"
+          : "";
 
   if (appConfig === null) {
     return (

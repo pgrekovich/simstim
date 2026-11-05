@@ -314,7 +314,7 @@ describe("SessionView: audio playback and re-transcribe", () => {
         liveLines={[]}
         interimMe=""
         interimThem=""
-        retranscribingJob={{ path: "/tmp/call.md", text: "transcribing (me)..." }}
+        retranscribingJob={{ path: "/tmp/call.md", text: "transcribing (me)...", percent: null }}
       />
     );
 
@@ -331,7 +331,7 @@ describe("SessionView: audio playback and re-transcribe", () => {
         liveLines={[]}
         interimMe=""
         interimThem=""
-        retranscribingJob={{ path: "/tmp/other-call.md", text: "writing..." }}
+        retranscribingJob={{ path: "/tmp/other-call.md", text: "writing...", percent: null }}
       />
     );
 
@@ -357,7 +357,7 @@ describe("SessionView: audio playback and re-transcribe", () => {
         liveLines={[]}
         interimMe=""
         interimThem=""
-        retranscribingJob={{ path: "/tmp/call.md", text: "transcribing (them)..." }}
+        retranscribingJob={{ path: "/tmp/call.md", text: "transcribing (them)...", percent: null }}
       />
     );
     unmount();
@@ -370,7 +370,7 @@ describe("SessionView: audio playback and re-transcribe", () => {
         liveLines={[]}
         interimMe=""
         interimThem=""
-        retranscribingJob={{ path: "/tmp/call.md", text: "transcribing (them)..." }}
+        retranscribingJob={{ path: "/tmp/call.md", text: "transcribing (them)...", percent: null }}
       />
     );
 

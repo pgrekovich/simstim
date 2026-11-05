@@ -8,11 +8,12 @@ import type { HearingStatus } from "@/lib/ipc";
  */
 export const HEARD_WITHIN_MS = 6000;
 
-function describe(label: string, silentMs: number): string {
-  if (silentMs <= HEARD_WITHIN_MS) return `Hearing ${label}`;
+function describe(label: string, silentMs: number, source: string | null): string {
+  const via = source ? ` via ${source}` : "";
+  if (silentMs <= HEARD_WITHIN_MS) return `Hearing ${label}${via}`;
   const secs = Math.round(silentMs / 1000);
-  if (secs < 60) return `Nothing from ${label} for ${secs}s`;
-  return `Nothing from ${label} for ${Math.round(secs / 60)} min`;
+  if (secs < 60) return `Nothing from ${label} for ${secs}s${via}`;
+  return `Nothing from ${label} for ${Math.round(secs / 60)} min${via}`;
 }
 
 /**
@@ -20,21 +21,23 @@ function describe(label: string, silentMs: number): string {
  * its channel has produced speech recently. The two ways a call records as
  * silence (a mic blocked by the hardened runtime, a system-audio tap without
  * its permission) used to look identical to a working recording until the
- * call was over; now they look like a dot that never lights.
+ * call was over; now they look like a dot that never lights. The "you" dot
+ * also names the microphone in its tooltip, so a dot that stays dark can
+ * be read against the device the call app is really using.
  */
 export function HearingIndicator({ status }: { status: HearingStatus | null }) {
-  const channels: [string, number | null][] = [
-    ["you", status?.me_silent_ms ?? null],
-    ["them", status?.them_silent_ms ?? null],
+  const channels: [string, number | null, string | null][] = [
+    ["you", status?.me_silent_ms ?? null, status?.mic ?? null],
+    ["them", status?.them_silent_ms ?? null, null],
   ];
   return (
     <div className="flex items-center gap-2.5" aria-label="Who is being heard" role="status">
-      {channels.map(([label, silentMs]) => {
+      {channels.map(([label, silentMs, source]) => {
         const heard = silentMs !== null && silentMs <= HEARD_WITHIN_MS;
         return (
           <span
             key={label}
-            title={silentMs === null ? "Listening..." : describe(label, silentMs)}
+            title={silentMs === null ? "Listening..." : describe(label, silentMs, source)}
             className="flex items-center gap-1.5 text-[11px] tabular-nums text-muted-foreground"
           >
             <span

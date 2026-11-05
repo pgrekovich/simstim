@@ -3,7 +3,7 @@
 //! The detector policy and Tauri contract are platform-neutral. A future
 //! PipeWire implementation only needs to replace this adapter on Linux.
 
-use super::{ActiveApp, WorkerMsg};
+use super::{ActiveApp, AppInput, WorkerMsg};
 use std::sync::mpsc::Sender;
 
 #[derive(Default)]
@@ -33,5 +33,9 @@ impl ActivityMonitor {
 }
 
 pub(super) fn scan_app_activity(_own_pid: i32) -> Result<Vec<ActiveApp>, String> {
+    Ok(Vec::new())
+}
+
+pub(super) fn scan_app_inputs(_own_pid: i32) -> Result<Vec<AppInput>, String> {
     Ok(Vec::new())
 }

@@ -123,11 +123,13 @@ export function showMainWindow(): Promise<void> {
 
 /**
  * Mirrors `HearingStatus` (lib.rs): milliseconds since speech was last
- * heard on each channel, since the recording started if never.
+ * heard on each channel, since the recording started if never, and the
+ * name of the microphone the "you" channel is recorded from.
  */
 export interface HearingStatus {
   me_silent_ms: number;
   them_silent_ms: number;
+  mic: string;
 }
 
 /**

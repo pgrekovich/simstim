@@ -60,6 +60,59 @@ struct ActiveApp {
     output_active: bool,
 }
 
+/// An input device a whitelisted call app is capturing from, as reported by
+/// Core Audio's per-process device list.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AppInput {
+    app: ActiveApp,
+    /// Core Audio device UID, which is also cpal's device id on macOS.
+    device_uid: String,
+    device_name: String,
+}
+
+/// The microphone a recording opens to hear the user on a call.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CallMic {
+    pub device_uid: String,
+    pub device_name: String,
+    pub app_name: String,
+}
+
+/// Chooses the input device to record from among the devices whitelisted
+/// call apps are capturing with right now. Call apps pick their microphone
+/// independently of the macOS default input, and recording the default
+/// while the call uses another device yields a silent Me channel. Prefers
+/// the app the user accepted the banner for; otherwise any call app's live
+/// input, in bundle order so the choice is stable across scans. The app's
+/// own system-audio tap is an input device too and is never a candidate.
+fn choose_call_mic(mut inputs: Vec<AppInput>, bundle_id: Option<&str>) -> Option<CallMic> {
+    inputs.retain(|input| !simstim_capture::is_own_tap(&input.device_name));
+    inputs.sort_by(|a, b| a.app.bundle_id.cmp(&b.app.bundle_id));
+    let chosen = bundle_id
+        .and_then(|id| inputs.iter().find(|input| input.app.bundle_id == id))
+        .or_else(|| inputs.first())?;
+    Some(CallMic {
+        device_uid: chosen.device_uid.clone(),
+        device_name: chosen.device_name.clone(),
+        app_name: chosen.app.app_name.clone(),
+    })
+}
+
+/// The microphone of the call in progress, looked up once at recording
+/// start. Scans Core Audio directly instead of asking the detector worker so
+/// the answer reflects this instant, and works with call detection off. The
+/// device stays fixed for the recording; a microphone switch inside the call
+/// app mid-call is not followed.
+pub fn call_mic(bundle_id: Option<&str>) -> Option<CallMic> {
+    match platform::scan_app_inputs(std::process::id() as i32) {
+        Ok(inputs) => choose_call_mic(inputs, bundle_id),
+        Err(error) => {
+            eprintln!("call microphone lookup failed: {error}");
+            None
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Action {
     Detected(ActiveApp),
@@ -633,6 +686,60 @@ mod tests {
             id: id.to_string(),
             remote_silent_for,
         })
+    }
+
+    fn input(bundle: &str, uid: &str, name: &str) -> AppInput {
+        AppInput {
+            app: ActiveApp {
+                bundle_id: bundle.to_string(),
+                app_name: whitelist_name(bundle).unwrap_or("Test").to_string(),
+                input_active: true,
+                output_active: false,
+            },
+            device_uid: uid.to_string(),
+            device_name: name.to_string(),
+        }
+    }
+
+    #[test]
+    fn call_mic_prefers_the_accepted_apps_input_over_other_call_apps() {
+        let inputs = vec![
+            input(
+                "com.google.Chrome",
+                "BuiltInMicrophoneDevice",
+                "MacBook Pro Microphone",
+            ),
+            input("com.microsoft.teams2", "BT-WH-1000XM5", "WH-1000XM5"),
+        ];
+        let mic = choose_call_mic(inputs, Some("com.microsoft.teams2")).unwrap();
+        assert_eq!(mic.device_uid, "BT-WH-1000XM5");
+        assert_eq!(mic.device_name, "WH-1000XM5");
+        assert_eq!(mic.app_name, "Teams");
+    }
+
+    #[test]
+    fn call_mic_falls_back_to_any_call_app_in_stable_order() {
+        let inputs = vec![
+            input("us.zoom.xos", "USB-Brio", "Brio 500"),
+            input(
+                "com.google.Chrome",
+                "BuiltInMicrophoneDevice",
+                "MacBook Pro Microphone",
+            ),
+        ];
+        // The accepted app is no longer on the mic: still record the call that is.
+        let mic = choose_call_mic(inputs.clone(), Some("com.microsoft.teams2")).unwrap();
+        assert_eq!(mic.device_uid, "BuiltInMicrophoneDevice");
+        // A manual Record with no banner picks the same device.
+        let mic = choose_call_mic(inputs, None).unwrap();
+        assert_eq!(mic.device_uid, "BuiltInMicrophoneDevice");
+    }
+
+    #[test]
+    fn call_mic_never_picks_the_apps_own_tap_and_is_none_without_calls() {
+        let inputs = vec![input("us.zoom.xos", "simstim-tap-uid", "simstim-tap")];
+        assert_eq!(choose_call_mic(inputs, Some("us.zoom.xos")), None);
+        assert_eq!(choose_call_mic(Vec::new(), None), None);
     }
 
     #[test]

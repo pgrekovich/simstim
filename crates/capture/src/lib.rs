@@ -27,12 +27,32 @@ pub struct Chunk {
 /// can express).
 pub struct CaptureHandle {
     drop_tx: std::sync::mpsc::Sender<()>,
+    device_name: String,
 }
 
 impl CaptureHandle {
-    pub(crate) fn new(drop_tx: std::sync::mpsc::Sender<()>) -> Self {
-        Self { drop_tx }
+    pub(crate) fn new(drop_tx: std::sync::mpsc::Sender<()>, device_name: String) -> Self {
+        Self {
+            drop_tx,
+            device_name,
+        }
     }
+
+    /// Human-readable name of the input device this stream was opened on.
+    pub fn device_name(&self) -> &str {
+        &self.device_name
+    }
+}
+
+/// Name of the private aggregate device `speaker` creates for the system
+/// audio tap. It is an input device from Core Audio's point of view, so
+/// microphone selection must never pick it, whether it became the system
+/// default or a call app is capturing from it.
+pub const TAP_DEVICE_NAME: &str = "simstim-tap";
+
+/// Whether an input device name belongs to the app's own system-audio tap.
+pub fn is_own_tap(device_name: &str) -> bool {
+    device_name.contains(TAP_DEVICE_NAME)
 }
 
 impl Drop for CaptureHandle {

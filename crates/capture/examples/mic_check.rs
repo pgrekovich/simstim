@@ -1,14 +1,19 @@
 //! Manual verification for `start_mic`: records 3s from the default input
-//! device and reports sample count + peak amplitude. Requires a human to
-//! speak into the mic, and triggers the macOS TCC microphone permission
-//! prompt on first run.
+//! device, or from the device whose Core Audio UID is given as the first
+//! argument, and reports the opened device, sample count and peak amplitude.
+//! Requires a human to speak into the mic, and triggers the macOS TCC
+//! microphone permission prompt on first run.
 
 use std::sync::mpsc::channel;
 
 fn main() {
     let (tx, rx) = channel();
-    let _h = simstim_capture::mic::start_mic(tx).expect("mic start");
-    println!("recording 3s from mic, say something...");
+    let uid = std::env::args().nth(1);
+    let handle = simstim_capture::mic::start_mic(tx, uid.as_deref()).expect("mic start");
+    println!(
+        "recording 3s from {}, say something...",
+        handle.device_name()
+    );
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
     let (mut n, mut peak) = (0usize, 0f32);
     while std::time::Instant::now() < deadline {

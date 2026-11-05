@@ -26,7 +26,16 @@ Microphone and system audio are separate channels: Me and Them. This is
 channel labeling, not identification of individual remote participants.
 Core Audio's tap uses a private aggregate device. `tap_auto_start` is false
 so starting a recording does not block while the system channel is silent.
-The microphone selector excludes the app's own aggregate device.
+
+Call apps choose their microphone independently of the macOS default input,
+so recording the default can leave the Me channel silent. At recording start
+`detect::call_mic` reads the input-scoped `kAudioProcessPropertyDevices` of
+whitelisted apps that are capturing, preferring the app whose banner was
+accepted, and the microphone stream opens that device by UID. Without a call
+app on the microphone, or when the device has since disappeared, the system
+default is used. The app's own aggregate device is never selected. The device
+is fixed for the recording; a microphone switch inside the call app is not
+followed. The toolbar's "you" dot names the device in its tooltip.
 
 Silero VAD groups speech into chunks for Parakeet. Interim decoding provides
 live text; finalized segments are appended to disk. The worker also forces

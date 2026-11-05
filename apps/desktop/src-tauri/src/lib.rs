@@ -90,12 +90,14 @@ pub(crate) struct RecordingStatus {
 }
 
 /// `recording_activity`'s reply: milliseconds since speech was last heard on
-/// each channel (since the recording started, if never). Mirrors
-/// `HearingStatus` in `ipc.ts`.
+/// each channel (since the recording started, if never) and the name of the
+/// microphone the Me channel is recorded from. Mirrors `HearingStatus` in
+/// `ipc.ts`.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct HearingStatus {
     pub me_silent_ms: u64,
     pub them_silent_ms: u64,
+    pub mic: String,
 }
 
 /// The live "hearing you / hearing them" readout for the toolbar, polled
@@ -103,13 +105,18 @@ pub struct HearingStatus {
 /// worker's existing per-channel VAD clock; no audio is analyzed twice.
 #[tauri::command]
 fn recording_activity(state: tauri::State<'_, AppState>) -> Option<HearingStatus> {
-    let activity = {
+    let (activity, mic) = {
         let guard = state.recording.lock().unwrap();
-        guard.as_ref()?.activity.clone()
+        let recording = guard.as_ref()?;
+        (
+            recording.activity.clone(),
+            recording.mic.device_name().to_string(),
+        )
     };
     Some(HearingStatus {
         me_silent_ms: activity.silent_for(simstim_capture::Channel::Me).as_millis() as u64,
         them_silent_ms: activity.silent_for(simstim_capture::Channel::Them).as_millis() as u64,
+        mic,
     })
 }
 
@@ -248,7 +255,22 @@ fn start_recording(
         None
     };
     let (tx, rx) = std::sync::mpsc::channel();
-    let mic = simstim_capture::mic::start_mic(tx.clone()).map_err(|e| e.to_string())?;
+    // Call apps pick their microphone independently of the macOS default
+    // input, so record from the device the call app is capturing with and
+    // only fall back to the system default when no call app is on the mic.
+    let call_mic = detect::call_mic(detected_bundle_id.as_deref());
+    let mic = simstim_capture::mic::start_mic(
+        tx.clone(),
+        call_mic.as_ref().map(|mic| mic.device_uid.as_str()),
+    )
+    .map_err(|e| e.to_string())?;
+    eprintln!(
+        "recording microphone: {}{}",
+        mic.device_name(),
+        call_mic
+            .map(|mic| format!(" (in use by {})", mic.app_name))
+            .unwrap_or_default()
+    );
     let speaker = simstim_capture::speaker::start_speaker(tx).map_err(|e| e.to_string())?;
     let pending_edits = Arc::new(Mutex::new(PendingEdits::default()));
     let line_emitter = app.clone();

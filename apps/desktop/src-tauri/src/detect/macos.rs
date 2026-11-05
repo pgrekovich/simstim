@@ -3,8 +3,8 @@
 //! Core Audio callbacks do no work beyond enqueueing a message. Listener
 //! mutation and process scans stay on the detector worker thread.
 
-use super::{canonical_whitelisted_bundle, whitelist_name, ActiveApp, WorkerMsg};
-use cidre::core_audio::{PropSelector, System};
+use super::{canonical_whitelisted_bundle, whitelist_name, ActiveApp, AppInput, WorkerMsg};
+use cidre::core_audio::{Device, PropAddr, PropElement, PropScope, PropSelector, System};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -251,6 +251,44 @@ pub(super) fn scan_app_activity(own_pid: i32) -> Result<Vec<ActiveApp>, String> 
             .or_insert(app);
     }
     Ok(by_bundle.into_values().collect())
+}
+
+/// Input devices every whitelisted call app is capturing from right now.
+/// `kAudioProcessPropertyDevices` is scoped: the input scope lists only the
+/// devices the process reads from, so an app that merely plays audio
+/// through a headset does not claim its microphone.
+pub(super) fn scan_app_inputs(own_pid: i32) -> Result<Vec<AppInput>, String> {
+    let _pool = cidre::objc::AutoreleasePoolPage::push();
+    let address = PropAddr {
+        selector: PropSelector::PROCESS_DEVICES,
+        scope: PropScope::INPUT,
+        element: PropElement::MAIN,
+    };
+    let mut inputs = Vec::new();
+    for process in System::processes().map_err(|error| format!("{error:?}"))? {
+        if process.pid().ok() == Some(own_pid) {
+            continue;
+        }
+        if !process.is_running_input().unwrap_or(false) {
+            continue;
+        }
+        let Some(mut app) = resolve_process_app(&process) else {
+            continue;
+        };
+        app.input_active = true;
+        let devices: Vec<Device> = process.prop_vec(&address).unwrap_or_default();
+        for device in devices {
+            let (Ok(uid), Ok(name)) = (device.uid(), device.name()) else {
+                continue;
+            };
+            inputs.push(AppInput {
+                app: app.clone(),
+                device_uid: uid.to_string(),
+                device_name: name.to_string(),
+            });
+        }
+    }
+    Ok(inputs)
 }
 
 fn resolve_process_app(process: &cidre::core_audio::Process) -> Option<ActiveApp> {

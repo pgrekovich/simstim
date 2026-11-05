@@ -1,4 +1,4 @@
-//! Microphone capture: default input device, resampled to 16 kHz mono.
+//! Microphone capture: the call app's input device or the system default, resampled to 16 kHz mono.
 
 use crate::{CaptureHandle, Channel, Chunk, resample_to_16k};
 use anyhow::{Result, anyhow};
@@ -36,26 +36,50 @@ pub fn request_permission() -> Result<bool> {
     Ok(true)
 }
 
-/// Starts capturing from the default input device and sends resampled 16 kHz
-/// mono [`Chunk`]s (tagged [`Channel::Me`]) to `tx`.
+/// Picks the input device to record from.
+///
+/// `preferred_uid` is a Core Audio device UID (cpal's device id on macOS),
+/// normally the input the active call app is capturing with. Call apps choose
+/// their microphone independently of the macOS default input, and recording
+/// the wrong one yields a silent Me channel. When no UID is given, or the
+/// device has gone away since it was looked up, the system default input is
+/// used instead so a stale UID can never block a recording.
+fn pick_input_device(host: &cpal::Host, preferred_uid: Option<&str>) -> Result<cpal::Device> {
+    if let Some(uid) = preferred_uid {
+        let preferred = host
+            .input_devices()?
+            .find(|device| device.id().is_ok_and(|id| id.id() == uid));
+        match preferred {
+            Some(device) => return Ok(device),
+            None => eprintln!("mic: preferred input {uid} is not available; using system default"),
+        }
+    }
+    host.default_input_device()
+        .ok_or_else(|| anyhow!("no input device"))
+}
+
+/// Starts capturing from an input device and sends resampled 16 kHz mono
+/// [`Chunk`]s (tagged [`Channel::Me`]) to `tx`. See [`pick_input_device`]
+/// for how `preferred_uid` is used.
 ///
 /// The stream lives on a dedicated thread; the returned [`CaptureHandle`]
 /// tears it down on drop by signalling that thread over an mpsc channel.
-pub fn start_mic(tx: Sender<Chunk>) -> Result<CaptureHandle> {
+pub fn start_mic(tx: Sender<Chunk>, preferred_uid: Option<&str>) -> Result<CaptureHandle> {
     let (drop_tx, drop_rx) = channel::<()>();
-    let (ready_tx, ready_rx) = channel::<Result<()>>();
+    let (ready_tx, ready_rx) = channel::<Result<String>>();
+    let preferred_uid = preferred_uid.map(str::to_owned);
 
     std::thread::spawn(move || {
-        let build = || -> Result<cpal::Stream> {
+        let build = || -> Result<(cpal::Stream, String)> {
             let host = cpal::default_host();
-            let device = host
-                .default_input_device()
-                .ok_or_else(|| anyhow!("no input device"))?;
+            let device = pick_input_device(&host, preferred_uid.as_deref())?;
+            let name = device
+                .description()
+                .map(|desc| desc.name().to_string())
+                .unwrap_or_else(|_| "unknown input".to_string());
             // Exclude the system-audio tap's aggregate device from microphone selection.
-            if let Ok(desc) = device.description()
-                && desc.name().contains("simstim")
-            {
-                return Err(anyhow!("default input is our tap"));
+            if crate::is_own_tap(&name) {
+                return Err(anyhow!("selected input is our tap"));
             }
             let config = device.default_input_config()?;
             let rate = config.sample_rate();
@@ -78,12 +102,12 @@ pub fn start_mic(tx: Sender<Chunk>) -> Result<CaptureHandle> {
                 None,
             )?;
             stream.play()?;
-            Ok(stream)
+            Ok((stream, name))
         };
 
         match build() {
-            Ok(stream) => {
-                let _ = ready_tx.send(Ok(()));
+            Ok((stream, name)) => {
+                let _ = ready_tx.send(Ok(name));
                 let _ = drop_rx.recv(); // park until the handle is dropped
                 drop(stream);
             }
@@ -93,8 +117,8 @@ pub fn start_mic(tx: Sender<Chunk>) -> Result<CaptureHandle> {
         }
     });
 
-    ready_rx
+    let device_name = ready_rx
         .recv_timeout(std::time::Duration::from_secs(5))
         .map_err(|_| anyhow!("mic init timeout"))??;
-    Ok(CaptureHandle::new(drop_tx))
+    Ok(CaptureHandle::new(drop_tx, device_name))
 }

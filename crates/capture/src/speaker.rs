@@ -18,9 +18,7 @@ use cidre::{av, cat, cf, core_audio as ca, ns, os};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 
-/// Name of the private aggregate device we create. `mic.rs` checks for this
-/// substring to avoid ever binding to our own tap as a "default input".
-const TAP_DEVICE_NAME: &str = "simstim-tap";
+use crate::TAP_DEVICE_NAME;
 
 /// State the IOProc callback needs. Lives in a `Box` so it has a stable
 /// address across calls; the callback receives a raw pointer to it via

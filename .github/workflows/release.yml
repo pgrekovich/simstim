@@ -81,13 +81,18 @@ jobs:
 
       # Tauri signs with SIGN_IDENTITY (overriding the adhoc "-" used for
       # local builds) and, because APPLE_ID/APPLE_PASSWORD/APPLE_TEAM_ID are
-      # set, notarizes and staples the bundle itself.
+      # set, notarizes and staples the bundle itself. The release config also
+      # asks for the in-app updater archive, which the bundler signs with the
+      # minisign key in TAURI_SIGNING_PRIVATE_KEY; the matching public key is
+      # compiled into the app from tauri.conf.json.
       - name: Build the signed, notarized disk image
         working-directory: apps/desktop
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           set -euo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
@@ -112,6 +117,17 @@ jobs:
           # The end-to-end Gatekeeper verdict a user's Mac will reach.
           spctl --assess --type execute --verbose=2 "$APP" 2>&1 \
             | grep -q "source=Notarized Developer ID"
+          # The in-app updater swaps in this archive, so it must hold the same
+          # signed, stapled bundle as the disk image, and its minisign
+          # signature must name the version it was built for (the app refuses
+          # an archive signed for another version).
+          ARCHIVE=target/release/bundle/macos/Simstim.app.tar.gz
+          test -s "$ARCHIVE" && test -s "$ARCHIVE.sig"
+          SCRATCH="$(mktemp -d)"
+          tar -xzf "$ARCHIVE" -C "$SCRATCH"
+          codesign --verify --deep --strict "$SCRATCH/Simstim.app"
+          xcrun stapler validate "$SCRATCH/Simstim.app"
+          base64 --decode < "$ARCHIVE.sig" | grep -q "version:${GITHUB_REF_NAME#v}"
 
       - name: Assemble release notes
         run: |
@@ -136,6 +152,36 @@ jobs:
           } > release-notes.md
           cat release-notes.md
 
+      # The app checks releases/latest/download/latest.json, which GitHub
+      # resolves to the latest stable release only, so prereleases never
+      # reach anyone through the updater even though they publish a manifest.
+      - name: Assemble the updater manifest
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          ARCHIVE="Simstim_${VERSION}_aarch64.app.tar.gz"
+          cp target/release/bundle/macos/Simstim.app.tar.gz "$ARCHIVE"
+          cp target/release/bundle/macos/Simstim.app.tar.gz.sig "$ARCHIVE.sig"
+          python3 - "$VERSION" "$ARCHIVE" > latest.json <<'EOF'
+          import datetime, json, sys
+          version, archive = sys.argv[1], sys.argv[2]
+          repo = "pgrekovich/simstim"
+          with open(f"{archive}.sig") as sig:
+              signature = sig.read().strip()
+          print(json.dumps({
+              "version": version,
+              "notes": f"https://github.com/{repo}/releases/tag/v{version}",
+              "pub_date": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+              "platforms": {
+                  "darwin-aarch64": {
+                      "signature": signature,
+                      "url": f"https://github.com/{repo}/releases/download/v{version}/{archive}",
+                  }
+              },
+          }, indent=2))
+          EOF
+          cat latest.json
+
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
@@ -146,10 +192,14 @@ jobs:
           if [[ "${GITHUB_REF_NAME#v}" == *-* ]]; then
             set -- --prerelease --latest=false
           fi
+          VERSION="${GITHUB_REF_NAME#v}"
           gh release create "$GITHUB_REF_NAME" "$@" \
             --title "$GITHUB_REF_NAME" \
             --notes-file release-notes.md \
-            "target/release/bundle/dmg/Simstim_${GITHUB_REF_NAME#v}_aarch64.dmg"
+            "target/release/bundle/dmg/Simstim_${VERSION}_aarch64.dmg" \
+            "Simstim_${VERSION}_aarch64.app.tar.gz" \
+            "Simstim_${VERSION}_aarch64.app.tar.gz.sig" \
+            latest.json
 
   # The landing page names the latest version and redirects /download to its
   # DMG, so it is rebuilt after a stable release. Prereleases are never

@@ -30,7 +30,13 @@ plist_path = output.with_suffix(".plist")
 with plist_path.open("wb") as file:
     plistlib.dump(info, file)
 macos = {"infoPlist": str(plist_path)}
+bundle = {"macOS": macos}
 if args.signing_identity:
     macos["signingIdentity"] = args.signing_identity
-output.write_text(json.dumps({"version": version, "bundle": {"macOS": macos}}, indent=2) + "\n")
+    # The signed distribution build also produces the in-app updater archive
+    # and its minisign signature (TAURI_SIGNING_PRIVATE_KEY in the workflow).
+    # Local ad-hoc candidates skip it: the bundler refuses to create updater
+    # artifacts without the private key.
+    bundle["createUpdaterArtifacts"] = True
+output.write_text(json.dumps({"version": version, "bundle": bundle}, indent=2) + "\n")
 print(output)

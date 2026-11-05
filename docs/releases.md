@@ -44,11 +44,19 @@ The workflow requires these GitHub Actions secrets:
 
 - `MACOS_CERT_P12_BASE64` and `MACOS_CERT_PASSWORD`
 - `APPLE_ID`, `APPLE_APP_PASSWORD` and `APPLE_TEAM_ID`
+- `TAURI_SIGNING_PRIVATE_KEY`, the minisign private key that signs the
+  in-app updater archive, and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` (empty
+  when the key has none)
 
 The Developer ID identity is configured in the workflow. The certificate is
 imported into an ephemeral runner keychain. CI tests, builds, signs,
 notarizes and staples the app, then checks signature integrity, microphone
 entitlement and Gatekeeper acceptance before publishing the DMG.
+
+The updater key pair comes from `pnpm tauri signer generate`. Its public
+half is `plugins.updater.pubkey` in `tauri.conf.json`; installed apps accept
+only archives signed by the matching private key, so losing that key means
+no existing install can update in-app again. Keep it outside the repository.
 
 Create and push an annotated version tag on the tested commit. Wait for the
 Release workflow to finish. Verify the release's prerelease status, download
@@ -64,5 +72,16 @@ publishing, so the page names the new version and `/download` redirects to
 its DMG without a manual step. Prereleases do not change the page. See
 [site/README.md](../site/README.md) for the one-time Cloudflare setup.
 
-Updates are manual: users replace the app with the newer release. Their
-notes, models and configuration remain outside the application bundle.
+## In-app updates
+
+Each release also publishes `Simstim_<version>_aarch64.app.tar.gz`, its
+`.sig` and `latest.json`. Installed apps read
+`releases/latest/download/latest.json` on launch and focus, at most once a
+day, and offer the newer version in a banner and in Settings. GitHub
+resolves that URL to the latest stable release only, so prereleases are
+never offered. Installing is an explicit click: the archive is downloaded,
+its minisign signature verified against the compiled-in public key, the
+bundle replaced in place and the app restarted. CI refuses to publish an
+archive that is not signed, stapled and signed for the tagged version.
+Notes, models and configuration remain outside the application bundle.
+Users can still replace the app by hand with the DMG.

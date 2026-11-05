@@ -18,8 +18,9 @@ transcribes them locally into Markdown files. Read
   own subscription login and credentials; do not add an OAuth client.
   User-supplied OpenAI, Anthropic and OpenRouter API keys are optional and
   stored only in macOS Keychain, never in settings or call files. Network
-  activity is model downloads, official AI helper version checks, explicit
-  official AI helper setup/authentication, and optional AI or connector calls.
+  activity is model downloads, Simstim and official AI helper version checks
+  against their GitHub releases, explicit Simstim updates and official AI
+  helper setup/authentication, and optional AI or connector calls.
 - Recording starts only on an explicit user action.
 - Keep user notes separate from generated text. Re-transcription replaces
   the transcript section; it must preserve notes and metadata.

@@ -18,6 +18,7 @@ The supported target is macOS 14.2+ on Apple Silicon.
 | `apps/desktop/src-tauri/src/chat.rs` | Questions over notes, citations and CLI process control |
 | `apps/desktop/src-tauri/src/api.rs` | Direct text APIs, Keychain credentials and restricted Markdown reads |
 | `apps/desktop/src-tauri/src/ai_setup.rs` | Official helper installation and provider-owned login |
+| `apps/desktop/src-tauri/src/app_update.rs` | Daily release check and explicit, signature-verified in-app update |
 | `apps/desktop/src` | React UI and typed IPC wrappers |
 
 ## Recording and transcription

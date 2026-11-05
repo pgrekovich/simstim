@@ -45,6 +45,7 @@ import { Sidebar } from "@/components/Sidebar";
 import { SettingsDialog } from "@/components/SettingsDialog";
 import { Onboarding } from "@/components/Onboarding";
 import { ProviderUpdateBanner } from "@/components/ProviderUpdateBanner";
+import { AppUpdateBanner } from "@/components/AppUpdateBanner";
 import {
   createSession,
   deleteSession,
@@ -1456,6 +1457,7 @@ function App() {
         </header>
         )}
 
+        <AppUpdateBanner />
         <ProviderUpdateBanner />
 
         {status.kind === "error" && (

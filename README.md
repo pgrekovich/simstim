@@ -106,8 +106,10 @@ folder, its files will sync through that service. [Privacy details](docs/privacy
 - Wait for transcription and summaries to finish before continuing a note.
   Edit files in other apps only after Simstim has finished processing them;
   improving a transcript replaces its transcript section.
-- Updates are manual: download a newer DMG and replace the app. Notes and
-  models live separately.
+- Simstim checks GitHub for a newer release once a day and offers it in a
+  banner and in Settings. Updating is always your click; notes, models and
+  settings stay where they are. Replacing the app with a newer DMG by hand
+  works too.
 
 </details>
 

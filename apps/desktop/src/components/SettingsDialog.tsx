@@ -12,10 +12,13 @@ import { AiSetup } from "@/components/AiSetup";
 import { PromptsSettings } from "@/components/PromptsSettings";
 import { cn } from "@/lib/utils";
 import {
+  checkAppUpdate,
   deleteModel,
   downloadModel,
   getConfig,
   getLaunchAtLogin,
+  installAppUpdate,
+  type AppUpdateStatus,
   setLaunchAtLogin,
   type LoginStatus,
   listEnhanceProviders,
@@ -323,6 +326,13 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
   const [choosingDir, setChoosingDir] = useState(false);
   const [themeError, setThemeError] = useState<string | null>(null);
   const [showInDockError, setShowInDockError] = useState<string | null>(null);
+  // The app's own version and whether a newer release is known. A passive
+  // read on open mostly answers from the backend's daily cache; the button
+  // forces a fresh check and reports its failure here, where it was asked.
+  const [appUpdate, setAppUpdate] = useState<AppUpdateStatus | null>(null);
+  const [appUpdateChecked, setAppUpdateChecked] = useState(false);
+  const [appUpdateBusy, setAppUpdateBusy] = useState<"checking" | "installing" | null>(null);
+  const [appUpdateError, setAppUpdateError] = useState<string | null>(null);
   const [folderError, setFolderError] = useState<string | null>(null);
   const [keepAudioError, setKeepAudioError] = useState<string | null>(null);
   const [detectCallsError, setDetectCallsError] = useState<string | null>(null);
@@ -374,6 +384,45 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
       .then(setStorage)
       .catch(() => {});
   }, [isOpen, refresh]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    let active = true;
+    checkAppUpdate().then((status) => {
+      if (active) setAppUpdate(status);
+    }).catch(() => {
+      // A passive read stays quiet; the explicit button reports failures.
+    });
+    return () => { active = false; };
+  }, [isOpen]);
+
+  async function handleCheckAppUpdate() {
+    if (appUpdateBusy) return;
+    setAppUpdateBusy("checking");
+    setAppUpdateError(null);
+    try {
+      setAppUpdate(await checkAppUpdate(true));
+      setAppUpdateChecked(true);
+    } catch (err) {
+      setAppUpdateError(String(err));
+    } finally {
+      setAppUpdateBusy(null);
+    }
+  }
+
+  async function handleInstallAppUpdate() {
+    if (appUpdateBusy) return;
+    setAppUpdateBusy("installing");
+    setAppUpdateError(null);
+    try {
+      // Resolves only when the install failed before restart.
+      await installAppUpdate();
+    } catch (err) {
+      setAppUpdateError(String(err));
+    } finally {
+      setAppUpdateBusy(null);
+    }
+  }
 
   useEffect(() => {
     if (!isOpen) return;
@@ -789,6 +838,27 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                     disabled={!config}
                     onCheckedChange={(checked) => handleSetShowInDock(checked === true)}
                   />
+                </Row>
+                <Row
+                  label={appUpdate ? `Simstim ${appUpdate.current_version}` : "Simstim"}
+                  description={appUpdateBusy === "installing"
+                    ? "Downloading and installing. Simstim restarts when it is done."
+                    : appUpdate?.update
+                      ? `Version ${appUpdate.update.latest_version} is available. Your notes, models and settings stay where they are.`
+                      : appUpdateChecked
+                        ? "You have the latest version."
+                        : "Looks for new releases on GitHub once a day. Installing is always your choice."}
+                  error={appUpdateError}
+                >
+                  {appUpdate?.update ? (
+                    <Button size="sm" disabled={appUpdateBusy !== null} onClick={() => void handleInstallAppUpdate()}>
+                      {appUpdateBusy === "installing" ? "Updating..." : "Update and restart"}
+                    </Button>
+                  ) : (
+                    <Button variant="outline" size="sm" disabled={appUpdateBusy !== null} onClick={() => void handleCheckAppUpdate()}>
+                      {appUpdateBusy === "checking" ? "Checking..." : "Check for new version"}
+                    </Button>
+                  )}
                 </Row>
                 <Row
                   label="Notes folder"

@@ -60,6 +60,7 @@ libc = "0.2"
 # cleans it up even on an early return/panic, which a hand-rolled
 # `std::env::temp_dir()` + manual removal would not.
 tempfile = "3"
+tauri-plugin-updater = "2"
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = "3.7"
 cidre = { version = "0.29", default-features = false, features = ["app", "at", "blocks", "core_audio", "dispatch", "macos_14_2"] }

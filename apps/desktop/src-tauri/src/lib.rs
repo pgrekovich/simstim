@@ -1,6 +1,7 @@
 pub mod aac;
 mod ai_setup;
 mod api;
+pub mod app_update;
 pub mod audio_sink;
 pub mod banner;
 pub mod chat;
@@ -558,11 +559,13 @@ fn position_main_traffic_lights(window: &tauri::WebviewWindow) -> tauri::Result<
 pub fn run() {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_dialog::init());
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build());
     #[cfg(target_os = "macos")]
     let builder = builder.plugin(tauri_nspanel::init());
     builder
         .manage(AppState::default())
+        .manage(app_update::AppUpdateState::default())
         .manage(onboarding::OnboardingState::default())
         .manage(DownloadState::default())
         .manage(retranscribe::RetranscribeState::default())
@@ -642,6 +645,8 @@ pub fn run() {
             ai_setup::cancel_ai_setup,
             ai_setup::check_ai_updates,
             ai_setup::ai_provider_status,
+            app_update::check_app_update,
+            app_update::install_app_update,
             enhance::enhance_session,
             prompts::get_prompts,
             prompts::save_prompts,

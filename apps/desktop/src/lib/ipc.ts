@@ -769,6 +769,44 @@ export interface ProviderUpdate {
 /** Checks official release metadata for installed helpers, at most once per day in memory. */
 export function checkAiUpdates(): Promise<ProviderUpdate[]> { return invoke("check_ai_updates"); }
 
+/** Mirrors `app_update::AppUpdate`: a newer stable Simstim release than the running one. */
+export interface AppUpdate {
+  current_version: string;
+  latest_version: string;
+  notes: string | null;
+  published: string | null;
+}
+
+/** Mirrors `app_update::AppUpdateStatus`, `check_app_update`'s reply. */
+export interface AppUpdateStatus {
+  current_version: string;
+  update: AppUpdate | null;
+}
+
+/**
+ * Looks for a newer Simstim release in the project's GitHub releases, at most
+ * once per day in memory unless `force`. Development builds never check.
+ * Rejects when the check itself fails (offline, bad metadata).
+ */
+export function checkAppUpdate(force = false): Promise<AppUpdateStatus> {
+  return invoke("check_app_update", { force });
+}
+
+/**
+ * Downloads, verifies and installs the update the last check found, then
+ * restarts the app. Resolves only on failure paths that leave the running
+ * app as it was; progress arrives as `app-update-progress` events.
+ */
+export function installAppUpdate(): Promise<void> { return invoke("install_app_update"); }
+
+/** Mirrors `app_update::ProgressPayload`, the `app-update-progress` event payload. */
+export interface AppUpdateProgress {
+  phase: "downloading" | "installing" | "restarting" | "error";
+  received: number;
+  total: number | null;
+  message: string | null;
+}
+
 export interface ProviderStatus {
   id: string;
   name: string;

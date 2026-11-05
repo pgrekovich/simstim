@@ -56,5 +56,14 @@
       "../src/assets/fonts/SourceSerif4-OFL.txt": "licenses/SourceSerif4-OFL.txt",
       "../src/assets/fonts/SplineSansMono-OFL.txt": "licenses/SplineSansMono-OFL.txt"
     }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDA3QzZCNThCRkNEMjFFRDIKUldUU0h0TDhpN1hHQnp3aHEvNDlSaklZMTV0bk9Mc3V2N3FnRDNSRE1YUmxGR0hud3dGWU53a00K",
+      "endpoints": [
+        "https://github.com/pgrekovich/simstim/releases/latest/download/latest.json"
+      ],
+      "requireSignedVersion": true
+    }
   }
 }

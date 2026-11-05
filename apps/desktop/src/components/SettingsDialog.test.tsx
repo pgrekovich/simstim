@@ -12,6 +12,8 @@ vi.mock("@/lib/ipc", () => ({
   ]),
   setupAi: vi.fn().mockResolvedValue(undefined),
   cancelAiSetup: vi.fn().mockResolvedValue(undefined),
+  checkAppUpdate: vi.fn().mockResolvedValue({ current_version: "0.12.0", update: null }),
+  installAppUpdate: vi.fn().mockResolvedValue(undefined),
   getPrompts: vi.fn().mockResolvedValue({ summary_instructions: "", summary_styles: [], quick_questions: [] }),
   savePrompts: vi.fn().mockResolvedValue({ summary_instructions: "", summary_styles: [], quick_questions: [] }),
   restoreDefaultPrompts: vi.fn().mockResolvedValue({ summary_instructions: "", summary_styles: [], quick_questions: [] }),
@@ -577,5 +579,37 @@ describe("SettingsDialog: launch at login", () => {
     finish("enabled");
     await waitFor(() => expect(toggle).toBeEnabled());
     expect(toggle).toBeChecked();
+  });
+});
+
+describe("SettingsDialog: app updates", () => {
+  it("names the running version, checks on request and offers the newer release", async () => {
+    render(<SettingsDialog open onOpenChange={() => {}} />);
+    await screen.findByText("Simstim 0.12.0");
+    expect(screen.getByText(/once a day/)).toBeInTheDocument();
+    expect(ipc.checkAppUpdate).toHaveBeenLastCalledWith();
+
+    vi.mocked(ipc.checkAppUpdate).mockResolvedValueOnce({
+      current_version: "0.12.0",
+      update: { current_version: "0.12.0", latest_version: "0.13.0", notes: null, published: null },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Check for new version" }));
+    await waitFor(() => expect(ipc.checkAppUpdate).toHaveBeenLastCalledWith(true));
+    expect(await screen.findByText(/Version 0.13.0 is available/)).toBeInTheDocument();
+    expect(ipc.installAppUpdate).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Update and restart" }));
+    await waitFor(() => expect(ipc.installAppUpdate).toHaveBeenCalledOnce());
+  });
+
+  it("reports an explicit check that fails and says when the app is current", async () => {
+    render(<SettingsDialog open onOpenChange={() => {}} />);
+    await screen.findByText("Simstim 0.12.0");
+    vi.mocked(ipc.checkAppUpdate).mockRejectedValueOnce("could not check for updates: offline");
+    fireEvent.click(screen.getByRole("button", { name: "Check for new version" }));
+    expect(await screen.findByText(/offline/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Check for new version" }));
+    expect(await screen.findByText("You have the latest version.")).toBeInTheDocument();
   });
 });

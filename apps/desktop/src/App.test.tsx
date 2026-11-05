@@ -21,6 +21,8 @@ vi.mock("@/lib/ipc", () => ({
     { id: "codex", name: "Codex", installed_version: "0.152.0", latest_version: "0.166.0", update_available: true },
   ]),
   checkAiUpdates: vi.fn().mockResolvedValue([]),
+  checkAppUpdate: vi.fn().mockResolvedValue({ current_version: "0.12.0", update: null }),
+  installAppUpdate: vi.fn().mockResolvedValue(undefined),
   setupAi: vi.fn().mockResolvedValue(undefined),
   cancelAiSetup: vi.fn().mockResolvedValue(undefined),
   getPrompts: vi.fn().mockResolvedValue({ summary_instructions: "", summary_styles: [], quick_questions: [] }),

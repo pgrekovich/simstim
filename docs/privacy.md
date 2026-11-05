@@ -76,6 +76,11 @@ User-supplied API keys remain in macOS Keychain until removed in Settings.
 
 - Initial and explicitly requested speech-model downloads use the upstream
   Hugging Face/GitHub URLs in the model registry.
+- Simstim's own update check reads `latest.json` from the project's GitHub
+  releases on launch and focus, at most once per day during an app run,
+  sending nothing but the request. **Check for new version** in Settings
+  requests it explicitly. Installing an update is always a click; the
+  signed archive is verified before it replaces the app.
 - Provider update checks read public release metadata from Anthropic and
   OpenAI GitHub releases for installed helpers. Checks run on launch and
   focus, at most once per day during an app run, without sending notes or

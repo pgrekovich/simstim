@@ -50,8 +50,31 @@ fn key(_provider: &str) -> Result<Option<String>, String> {
     Err("API keys require macOS Keychain".into())
 }
 
+/// Whether a key is saved for `provider`, without decrypting it. Settings,
+/// onboarding, chat and auto-summary only need to know that a key exists.
+/// Reading the secret here would make macOS ask for the login keychain
+/// password whenever the item's access list does not trust this exact app,
+/// for example a key saved by a differently signed build: once per provider,
+/// every time Settings opens. Attributes are readable without that check, so
+/// the password dialog, when there is one, appears only when the key is used.
+#[cfg(target_os = "macos")]
 pub(crate) fn configured(provider: &str) -> bool {
-    key(provider).ok().flatten().is_some()
+    use security_framework::item::{ItemClass, ItemSearchOptions};
+
+    validate_provider(provider).is_ok()
+        && ItemSearchOptions::new()
+            .class(ItemClass::generic_password())
+            .service(KEYCHAIN_SERVICE)
+            .account(provider)
+            .load_attributes(true)
+            .limit(1)
+            .search()
+            .is_ok_and(|found| !found.is_empty())
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn configured(_provider: &str) -> bool {
+    false
 }
 
 #[tauri::command]
@@ -1087,5 +1110,7 @@ mod tests {
                 .is_err()
         );
         assert!(tauri::async_runtime::block_on(delete_api_key("unknown".into())).is_err());
+        assert!(!configured("codex"), "a CLI provider never has a Keychain key");
+        assert!(!configured("../openai"), "only known provider accounts are searched");
     }
 }

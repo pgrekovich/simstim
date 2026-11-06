@@ -99,7 +99,13 @@ files through restricted tools, with no separate index. Conversations live
 in memory; the external helper can retain its own logs.
 
 Direct OpenAI, Anthropic and OpenRouter APIs use explicit user keys in macOS
-Keychain and model IDs in configuration. API settings load searchable model
+Keychain and model IDs in configuration. Checking whether a key is saved
+reads only the item's attributes; the secret is decrypted only for a request
+that sends it, so a Keychain password dialog can never appear just from
+opening Settings. Items saved by a Developer ID release are trusted by team
+and bundle identifier, so later releases and in-app updates read them
+without a dialog; a key saved by an ad-hoc local build is tied to that
+build's code hash. API settings load searchable model
 catalogs through authenticated GET requests, including provider pagination.
 An entered key can be used for discovery before being saved. Catalogs stay
 in memory and requests send no notes or inference prompts. They send text to fixed HTTPS endpoints,

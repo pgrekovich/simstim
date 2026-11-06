@@ -48,3 +48,6 @@ jobs:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: site
           command: deploy
+          # site/ has a pnpm lockfile for the screenshot script's sharp, but
+          # the runner has no pnpm; wrangler itself needs no dependencies.
+          packageManager: npm

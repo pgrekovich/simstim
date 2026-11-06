@@ -63,6 +63,9 @@ pub fn list_sessions_in(dir: &Path) -> Vec<SessionMeta> {
         if path.extension().and_then(|e| e.to_str()) != Some("md") {
             continue;
         }
+        if crate::loops::is_open_loops_file(&path) {
+            continue;
+        }
         if let Ok(meta) = parse_meta(&path) {
             out.push(SessionMeta {
                 path: path.display().to_string(),
@@ -344,6 +347,44 @@ fn tail_is_clock_time(tail: &str) -> bool {
 /// is the id of the user's summary style that wrote this summary (`summary_style:`
 /// frontmatter), `None` for the built-in prompt. Written outright, like the model label:
 /// it describes THIS summary.
+/// Rewrites only the Summary text through `change`, which receives the
+/// current summary and returns the new one, or `None` to leave the file as
+/// it is. Title, people, provenance and style stay untouched; the read and
+/// the write happen under one gate, so a summary landing meanwhile wins.
+pub(crate) fn update_summary_at(
+    path: &Path,
+    change: impl FnOnce(&str) -> Option<String>,
+) -> Result<bool> {
+    crate::session_files::edit(path, || {
+        let existing = parse_session(path)?;
+        let Some(summary) = change(&existing.summary) else {
+            return Ok(false);
+        };
+        let meta = parse_meta(path)?;
+        let started_at = DateTime::parse_from_rfc3339(&existing.date)
+            .map(|dt| dt.with_timezone(&Local))
+            .unwrap_or_else(|_| Local::now());
+        let mut transcript = Transcript::new(started_at);
+        transcript.set_raw_date(existing.date.clone());
+        transcript.set_title(existing.title.clone());
+        transcript.set_title_by(existing.title_by.clone());
+        transcript.set_notes(existing.notes.clone());
+        transcript.set_asr(meta.asr.clone());
+        if let Some(duration_secs) = meta.duration_secs {
+            transcript.set_duration_secs(duration_secs);
+        }
+        if let Some(audio_from_secs) = meta.audio_from_secs {
+            transcript.set_audio_from_secs(audio_from_secs);
+        }
+        transcript.set_summary(summary, existing.summary_model.clone());
+        transcript.set_summary_style(existing.summary_style.clone());
+        transcript.set_people(existing.people.clone());
+        transcript.set_raw_transcript(existing.transcript.clone());
+        transcript.save(path)?;
+        Ok(true)
+    })
+}
+
 pub fn set_summary_at(
     path: &Path,
     summary: &str,

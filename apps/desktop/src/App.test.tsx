@@ -48,6 +48,7 @@ vi.mock("@/lib/ipc", () => ({
     enhance_use_calendar: false,
     detect_calls: true,
     auto_stop_after_call: false,
+    track_open_loops: true,
   }),
   listSessions: vi.fn().mockResolvedValue([]),
   readSession: vi
@@ -100,6 +101,20 @@ vi.mock("@/lib/ipc", () => ({
   chatHistory: vi.fn().mockResolvedValue({ messages: [], running: false }),
   showMainWindow: vi.fn().mockResolvedValue(undefined),
   recordingActivity: vi.fn().mockResolvedValue(null),
+  openLoopsRead: vi.fn().mockResolvedValue({
+    exists: true,
+    body:
+      "\n## Mine\n\n- [ ] Send the deck · Sep 1 · [Weekly sync](weekly.md#t=00:00:42)\n\n## Waiting for\n\n## Open questions\n\n## Done\n",
+    body_line: 4,
+    updated: "2026-09-01T10:00:00+02:00",
+    open_count: 1,
+    running: false,
+    unread: 0,
+  }),
+  openLoopsToggle: vi.fn(),
+  openLoopsSave: vi.fn(),
+  openLoopsUpdate: vi.fn().mockResolvedValue(undefined),
+  setTrackOpenLoops: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("@tauri-apps/api/event", () => ({
@@ -175,6 +190,7 @@ beforeEach(() => {
     enhance_use_calendar: false,
     detect_calls: true,
     auto_stop_after_call: false,
+    track_open_loops: true,
   });
   vi.mocked(ipc.startRecording).mockReset().mockResolvedValue("/tmp/active.md");
   vi.mocked(ipc.stopRecording).mockReset().mockResolvedValue("/tmp/active.md");
@@ -326,6 +342,7 @@ describe("App: call detection via the banner window", () => {
     enhance_use_calendar: false,
       detect_calls: true,
       auto_stop_after_call: true,
+      track_open_loops: true,
     });
     render(<App />);
     await emitBannerStart();
@@ -359,6 +376,7 @@ describe("App: call detection via the banner window", () => {
     enhance_use_calendar: false,
       detect_calls: true,
       auto_stop_after_call: true,
+      track_open_loops: true,
     });
     render(<App />);
     fireEvent.click(await findStartControl());
@@ -1804,4 +1822,57 @@ it("shows provider updates in the main window while recording remains available"
   expect(screen.getByRole("complementary", { name: "AI provider updates" })).toBeVisible();
   expect(await findStartControl()).toBeEnabled();
   expect(ipc.startRecording).not.toHaveBeenCalled();
+});
+
+describe("App: open loops", () => {
+  it("opens from the sidebar with its count, jumps to a cited call and toggles with ⌘T", async () => {
+    vi.mocked(ipc.listSessions).mockResolvedValue([
+      { path: "/tmp/weekly.md", title: "Weekly sync", date: new Date().toISOString(), duration_secs: 60 },
+    ]);
+    vi.mocked(ipc.readSession).mockResolvedValue({
+      title: "Weekly sync",
+      date: "",
+      notes: "",
+      transcript: "[00:00:42] Me: I'll send the deck.",
+      audio_path: null,
+      summary: "",
+      summary_model: null,
+      summary_style: null,
+      people: [],
+    });
+    render(<App />);
+
+    const row = await screen.findByRole("button", { name: /open loops/i });
+    await waitFor(() => expect(within(row).getByText("1")).toBeVisible());
+    fireEvent.click(row);
+    expect(row).toHaveAttribute("data-selected", "true");
+    expect(await screen.findByRole("heading", { name: "Open loops" })).toBeVisible();
+    expect(await screen.findByRole("checkbox", { name: "Send the deck" })).toBeVisible();
+
+    // ⌘T closes it and opens it again.
+    fireEvent.keyDown(window, { key: "t", metaKey: true });
+    await waitFor(() => expect(screen.queryByRole("heading", { name: "Open loops" })).toBeNull());
+    fireEvent.keyDown(window, { key: "t", metaKey: true });
+    fireEvent.click(await screen.findByRole("link", { name: "Weekly sync" }));
+
+    // The link leaves the pane for the call it cites.
+    await waitFor(() => expect(ipc.readSession).toHaveBeenCalledWith("/tmp/weekly.md"));
+    expect(screen.queryByRole("heading", { name: "Open loops" })).toBeNull();
+  });
+
+  it("reflects update progress and refreshes when an update finishes", async () => {
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /open loops/i }));
+    await screen.findByRole("checkbox", { name: "Send the deck" });
+    vi.mocked(ipc.openLoopsRead).mockClear();
+
+    emit("open-loops-progress", { phase: "running", message: null });
+    expect(await screen.findByText("Updating...")).toBeVisible();
+    emit("open-loops-progress", { phase: "error", message: "Claude Code isn't installed" });
+    expect(await screen.findByText(/Couldn't update: Claude Code isn't installed/)).toBeVisible();
+    expect(ipc.openLoopsRead).toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(ipc.openLoopsUpdate).toHaveBeenCalled();
+  });
 });

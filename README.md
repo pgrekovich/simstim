@@ -49,7 +49,13 @@ Simstim reads and writes these files directly. You can open the same folder
 in Obsidian, keep it in git or sync it with your usual backup service.
 There is no export step.
 
-[Example note](docs/examples/2026-09-09%2010-00-00%20call.md)
+Each summary ends with the call's open loops: what you promised, what others
+promised you and questions left open. `Open loops.md` sits beside the calls
+and gathers them, each linked to its call. Simstim keeps it current after
+each summary, and you check items off in the app or any editor.
+
+[Example note](docs/examples/2026-09-09%2010-00-00%20call.md) ·
+[Example open loops](docs/examples/Open%20loops.md)
 
 ## No feature bloat
 

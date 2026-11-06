@@ -8,6 +8,7 @@ pub mod chat;
 pub mod config;
 pub mod detect;
 pub mod enhance;
+pub mod loops;
 pub mod models;
 mod launch_at_login;
 pub mod menu_bar;
@@ -571,6 +572,7 @@ pub fn run() {
         .manage(retranscribe::RetranscribeState::default())
         .manage(enhance::EnhanceState::default())
         .manage(chat::ChatState::default())
+        .manage(loops::LoopsState::default())
         .setup(|app| {
             // Grant asset access only to the configured notes folder at startup. Folder
             // changes add their own explicit grant; the static asset scope remains
@@ -634,6 +636,7 @@ pub fn run() {
             config::set_enhance_provider,
             config::set_enhance_model,
             config::set_auto_enhance,
+            config::set_track_open_loops,
             config::set_enhance_rename_title,
             config::set_enhance_use_calendar,
             enhance::list_enhance_providers,
@@ -655,6 +658,10 @@ pub fn run() {
             chat::chat_history,
             chat::chat_clear,
             chat::chat_cancel,
+            loops::open_loops_read,
+            loops::open_loops_toggle,
+            loops::open_loops_save,
+            loops::open_loops_update,
             detect::set_detect_calls,
             banner::banner_dismiss,
             banner::banner_current_state,

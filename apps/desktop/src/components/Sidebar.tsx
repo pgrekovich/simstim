@@ -1,4 +1,4 @@
-import { FileText, Folder, MessageCircleQuestion, PanelLeftClose, Search, SquarePen, Trash2 } from "lucide-react";
+import { FileText, Folder, ListChecks, MessageCircleQuestion, PanelLeftClose, Search, SquarePen, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   ContextMenu,
@@ -42,6 +42,12 @@ interface SidebarProps {
   onOpenAsk?: () => void;
   /** Whether that conversation currently owns the main pane (the row is selected). */
   askActive?: boolean;
+  /** Open the Open loops file in the main pane. */
+  onOpenLoops?: () => void;
+  /** Whether Open loops currently owns the main pane (the row is selected). */
+  loopsActive?: boolean;
+  /** Unchecked items in Mine and Waiting for; hidden at zero or while unknown. */
+  loopsCount?: number | null;
   /** Row context menu's "Move to Trash"; App owns the confirm dialog and the IPC call. */
   onDelete: (path: string) => void;
   /** Row context menu's "Open file": the note in the system editor. */
@@ -54,6 +60,12 @@ interface SessionGroup {
   label: string;
   sessions: SessionMeta[];
 }
+
+/** The pinned rows above the note list share one shape. */
+const PINNED_ROW =
+  "flex h-[34px] w-full items-center gap-2 rounded-[7px] px-2.5 text-left text-[13px] font-semibold text-foreground";
+const PINNED_ROW_SELECTED = "hover:bg-primary/[0.18]";
+const PINNED_ROW_IDLE = "hover:bg-foreground/[0.05] active:bg-foreground/[0.10]";
 
 function startOfDay(date: Date): Date {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate());
@@ -110,6 +122,9 @@ export function Sidebar({
   onOpenSearch = () => {},
   onOpenAsk,
   askActive = false,
+  onOpenLoops,
+  loopsActive = false,
+  loopsCount = null,
   onDelete,
   onOpenFile,
   onRevealInFinder,
@@ -163,24 +178,44 @@ export function Sidebar({
  * selection state.
  *
  */}
-      {onOpenAsk && (
-        <div className="shrink-0 px-3 pt-1">
-          <button
-            type="button"
-            onClick={onOpenAsk}
-            data-selected={askActive ? "true" : undefined}
-            aria-current={askActive ? "page" : undefined}
-            className={cn(
-              "flex h-[34px] w-full items-center gap-2 rounded-[7px] px-2.5 text-left text-[13px] font-semibold text-foreground",
-              askActive ? "hover:bg-primary/[0.18]" : "hover:bg-foreground/[0.05] active:bg-foreground/[0.10]"
-            )}
-          >
-            <MessageCircleQuestion aria-hidden="true" className="size-[15px] shrink-0 text-primary" />
-            <span className="min-w-0 flex-1 truncate">Ask your notes</span>
-            {width >= 205 && (
-              <span className="shrink-0 text-[11px] font-normal text-muted-foreground">⌘L</span>
-            )}
-          </button>
+      {(onOpenAsk || onOpenLoops) && (
+        <div className="flex shrink-0 flex-col px-3 pt-1">
+          {onOpenAsk && (
+            <button
+              type="button"
+              onClick={onOpenAsk}
+              data-selected={askActive ? "true" : undefined}
+              aria-current={askActive ? "page" : undefined}
+              className={cn(PINNED_ROW, askActive ? PINNED_ROW_SELECTED : PINNED_ROW_IDLE)}
+            >
+              <MessageCircleQuestion aria-hidden="true" className="size-[15px] shrink-0 text-primary" />
+              <span className="min-w-0 flex-1 truncate">Ask your notes</span>
+              {width >= 205 && (
+                <span className="shrink-0 text-[11px] font-normal text-muted-foreground">⌘L</span>
+              )}
+            </button>
+          )}
+          {onOpenLoops && (
+            <button
+              type="button"
+              onClick={onOpenLoops}
+              title="Open loops (⌘T)"
+              data-selected={loopsActive ? "true" : undefined}
+              aria-current={loopsActive ? "page" : undefined}
+              className={cn(PINNED_ROW, loopsActive ? PINNED_ROW_SELECTED : PINNED_ROW_IDLE)}
+            >
+              <ListChecks aria-hidden="true" className="size-[15px] shrink-0 text-primary" />
+              <span className="min-w-0 flex-1 truncate">Open loops</span>
+              {loopsCount !== null && loopsCount > 0 && (
+                <span
+                  aria-label={`${loopsCount} open`}
+                  className="shrink-0 text-[11px] font-normal tabular-nums text-muted-foreground"
+                >
+                  {loopsCount}
+                </span>
+              )}
+            </button>
+          )}
         </div>
       )}
 

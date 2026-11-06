@@ -9,7 +9,7 @@ const note = {
   path, date, title: "Beta planning", title_by: null, audio_path: null,
   notes: "Keep the first release focused on recording and readable files.\nCheck the two audio channels separately before inviting testers.",
   transcript: "[00:00:04] Me: Let's start with five testers on different Macs.\n[00:00:09] Them: I'll prepare a short sample call for them.\n[00:00:16] Me: Great. I'll send the installation checklist once the candidate passes review.\n[00:00:24] Them: Should we add a PDF export before the beta?\n[00:00:30] Me: The note is already a file. People can give it to the AI tools they use.\n[00:00:38] Them: Right. Let's focus on reliable recording and readable transcripts.",
-  summary: "### Decisions\n\n- Start with five testers using different Apple Silicon Macs.\n- Keep PDF creation and sharing in the AI tools people already use.\n- Collect installation and transcription feedback before a wider launch.\n\n### Next steps\n\n- **Sam:** prepare a short sample call for the testers.\n- **Alex:** send the installation checklist after the candidate passes review.",
+  summary: "### Decisions\n\n- Start with five testers using different Apple Silicon Macs.\n- Keep PDF creation and sharing in the AI tools people already use.\n- Collect installation and transcription feedback before a wider launch.\n\n### Open loops\n\n**Mine**\n\n- Send Alex the installation checklist once the candidate passes review · 00:00:16\n\n**Waiting for**\n\n- Sam: prepare a short sample call for the testers · 00:00:09",
   summary_model: "example", summary_style: null, people: ["Alex", "Sam"],
 };
 const config = {
@@ -18,13 +18,45 @@ const config = {
   retranscribe_model: "whisper-large-v3-turbo-q8", auto_retranscribe: true,
   delete_audio_after_retranscribe: false, enhance_provider: apiPreview ? "openrouter" : "claude", enhance_models: apiPreview ? { openrouter: "example/atlas" } : {},
   auto_enhance: true, enhance_rename_title: true, enhance_use_calendar: true,
-  detect_calls: true, auto_stop_after_call: false,
+  detect_calls: true, auto_stop_after_call: false, track_open_loops: true,
 };
 const sessions = [
   { path, date, title: note.title, duration: "12m", duration_secs: 720, people: note.people },
   { path: "/demo/design.md", date: "2026-09-08T14:00:00+02:00", title: "Design review", duration: "24m", duration_secs: 1440, people: [] },
   { path: "/demo/weekly.md", date: "2026-09-07T09:30:00+02:00", title: "Weekly catch-up", duration: "18m", duration_secs: 1080, people: [] },
 ];
+// Open loops lives in memory here; `?loops=empty` previews the first build.
+const loopsPreview = new URLSearchParams(location.search).get("loops");
+const link = (title: string, file: string, at: string) => `[${title}](${encodeURIComponent(file)}#t=${at})`;
+let loopsLines = [
+  "---", "simstim: open-loops", "updated: 2026-09-09T11:02:00+02:00", "---", "",
+  "## Mine", "",
+  `- [ ] Send Alex the installation checklist once the candidate passes review · Sep 9 · ${link("Beta planning", "2026-09-09 10-00-00 call.md", "00:00:16")}`,
+  `- [ ] Share the color proofs with the print shop by Fri Sep 12 · Sep 8 · ${link("Design review", "design.md", "00:14:03")}`,
+  "",
+  "## Waiting for", "",
+  `- [ ] Sam: prepare a short sample call for the testers · Sep 9 · ${link("Beta planning", "2026-09-09 10-00-00 call.md", "00:00:09")}`,
+  `- [ ] Maya: send the packaging quote from the second supplier · Sep 7 · ${link("Weekly catch-up", "weekly.md", "00:06:41")}`,
+  "",
+  "## Open questions", "",
+  `- [ ] Should the beta ship with a PDF export? · Sep 9 · ${link("Beta planning", "2026-09-09 10-00-00 call.md", "00:00:24")}`,
+  "",
+  "## Done", "",
+  `- [x] Book the user interviews for next week · Sep 7 · ${link("Weekly catch-up", "weekly.md", "00:02:10")} · done Sep 8 per ${link("Design review", "design.md", "00:01:12")}`,
+];
+function loopsOut() {
+  if (loopsPreview === "empty") {
+    return { exists: false, body: "", body_line: 1, updated: null, open_count: 0, running: false, unread: 0 };
+  }
+  let section = "";
+  let open = 0;
+  for (const line of loopsLines) {
+    if (line.startsWith("## ")) section = line.slice(3);
+    if ((section === "Mine" || section === "Waiting for") && line.startsWith("- [ ] ")) open += 1;
+  }
+  return { exists: true, body: loopsLines.slice(4).join("\n"), body_line: 5, updated: "2026-09-09T11:02:00+02:00", open_count: open, running: false, unread: 0 };
+}
+
 export async function invoke(command: string, args?: Record<string, unknown>): Promise<unknown> {
   switch (command) {
     case "get_config": return config;
@@ -59,6 +91,30 @@ export async function invoke(command: string, args?: Record<string, unknown>): P
     case "chat_history": return { messages: [], running: false };
     case "storage_stats": return { note_count: 3, notes_bytes: 8192, audio_bytes: 0, audio_secs: 0 };
     case "search_sessions": return sessions.filter(s => s.title.toLowerCase().includes(String(args?.query ?? "").toLowerCase())).map(s => ({ ...s, snippets: [], total_matches: 1 }));
+    case "open_loops_read": return loopsOut();
+    case "open_loops_toggle": {
+      // Mirrors loops.rs: a checked item moves to the end of Done (the last
+      // section here), an unchecked one back to its kind of section.
+      const index = Number(args?.line) - 1;
+      if (loopsLines[index] !== args?.expected) throw new Error("Open loops changed on disk; showing the current file");
+      const line = loopsLines[index];
+      loopsLines.splice(index, 1);
+      if (args?.done) {
+        loopsLines.push(`${line.replace("- [ ] ", "- [x] ")} · done Sep 9`);
+      } else {
+        const restored = line.replace("- [x] ", "- [ ] ").replace(/ · done .*$/, "");
+        const action = restored.slice(6).split(" · ")[0];
+        const heading = action.endsWith("?") ? "## Open questions" : /^[^:]{1,30}: /.test(action) ? "## Waiting for" : "## Mine";
+        const start = loopsLines.indexOf(heading);
+        const next = loopsLines.findIndex((l, i) => i > start && l.startsWith("## "));
+        const items = loopsLines.slice(start + 1, next).filter((l) => l.startsWith("- ["));
+        loopsLines.splice(items.length ? next - 1 : start + 2, 0, restored);
+      }
+      return loopsOut();
+    }
+    case "open_loops_save":
+      loopsLines = [...loopsLines.slice(0, 4), ...String(args?.body).split("\n")];
+      return loopsOut();
     default: throw new Error("This is a fictional preview. Use the native app for this action.");
   }
 }

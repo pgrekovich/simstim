@@ -85,6 +85,11 @@ export interface AppConfig {
   detect_calls: boolean;
   /** Whether an associated recording stops after app I/O release and remote-channel silence. */
   auto_stop_after_call: boolean;
+  /**
+   * Whether `Open loops.md` follows each automatic summary. Only runs while
+   * `auto_enhance` is on. Defaults to `true`.
+   */
+  track_open_loops: boolean;
 }
 
 /**
@@ -503,6 +508,70 @@ export interface EnhanceProgress {
 /** Sets and persists whether a finished recording auto-enhances. Mirrors `config::set_auto_enhance`. */
 export function setAutoEnhance(autoEnhance: boolean): Promise<void> {
   return invoke("set_auto_enhance", { autoEnhance });
+}
+
+/** Sets and persists whether open loops follow each automatic summary. Mirrors `config::set_track_open_loops`. */
+export function setTrackOpenLoops(trackOpenLoops: boolean): Promise<void> {
+  return invoke("set_track_open_loops", { trackOpenLoops });
+}
+
+/**
+ * Mirrors `loops::OpenLoopsOut`: the `Open loops.md` file in the notes
+ * folder as the pane shows it. `body` is the file after its frontmatter and
+ * `body_line` the 1-based file line of its first line, so a rendered task
+ * maps back to the exact line it came from.
+ */
+export interface OpenLoops {
+  exists: boolean;
+  body: string;
+  body_line: number;
+  /** RFC 3339 time of the last AI update, `null` before the first. */
+  updated: string | null;
+  /** Unchecked items in Mine and Waiting for. */
+  open_count: number;
+  /** An update is running or waiting its turn. */
+  running: boolean;
+  /** Recent calls Update now would still read with the provider. */
+  unread: number;
+}
+
+export type OpenLoopsPhase = "running" | "done" | "error";
+
+/**
+ * Mirrors `loops::ProgressPayload`, the `open-loops-progress` event payload.
+ * A `running` event may carry a step ("Reading call 3 of 12").
+ */
+export interface OpenLoopsProgress {
+  phase: OpenLoopsPhase;
+  message: string | null;
+}
+
+export function openLoopsRead(): Promise<OpenLoops> {
+  return invoke("open_loops_read");
+}
+
+/**
+ * Flips one checkbox. `expected` is the line as last read; the backend
+ * refuses when the file has changed under it.
+ */
+export function openLoopsToggle(line: number, expected: string, done: boolean): Promise<OpenLoops> {
+  return invoke("open_loops_toggle", { line, expected, done });
+}
+
+/**
+ * Saves a hand edit of the body. `base` is the body the edit started from;
+ * pass `null` to overwrite whatever is on disk.
+ */
+export function openLoopsSave(body: string, base: string | null): Promise<OpenLoops> {
+  return invoke("open_loops_save", { body, base });
+}
+
+/**
+ * Merges the last four weeks of calls into the file, creating it if needed.
+ * Calls whose summary has no Open loops section are read with the provider.
+ */
+export function openLoopsUpdate(): Promise<void> {
+  return invoke("open_loops_update");
 }
 
 /**

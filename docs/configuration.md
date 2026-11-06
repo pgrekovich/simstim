@@ -22,6 +22,7 @@ enhance_rename_title = true
 enhance_use_calendar = true
 detect_calls = true
 auto_stop_after_call = false
+track_open_loops = true # runs only while auto_enhance is on
 
 [enhance_models]
 # Leave empty to use the CLI's default model.
@@ -46,6 +47,31 @@ this file. Direct API models are chosen from a searchable provider catalog;
 the selected ID is saved in `enhance_models`. They use
 text-only requests, with separate provider billing. Calendar context and
 connectors require Claude Code and are unavailable for direct API providers.
+
+## Open loops
+
+Every summary ends with an **Open loops** section: what you promised, what
+others promised you and questions the call left open, chosen by importance
+rather than count, each with the second it was said. This replaces the old
+Next steps list and is added to your own summary styles too.
+
+`Open loops.md` in the notes folder collects these sections across calls.
+With **Keep open loops** on, each automatic summary merges its section into
+the file and closes open items the call reports as done; the summary request
+carries the open items for that, so there is no second request. **Update
+now** in the Open loops pane merges the last four weeks of calls again. Calls
+summarized before this section existed are read with the provider once, one
+request per call, and the result is added to their summary so later updates
+need no request. Without the file, the first run builds it the same way.
+
+The file is plain Markdown with four sections: Mine, Waiting for, Open
+questions and Done. Each item links to its call and the second it was agreed.
+Edit it in Simstim or any editor. Checking an item in Simstim moves it to
+Done at once; unchecking it there puts it back. Items checked in another
+editor move on the next update. Simstim adds items and checks them off, but
+never rewrites or deletes your lines, and removes Done items after four weeks.
+To dismiss an item, check it off: a line deleted by hand can come back if its
+call is read again while it is recent.
 
 Summaries and questions share the selected model. **Default** follows the
 official helper's configuration and account availability. Claude's named

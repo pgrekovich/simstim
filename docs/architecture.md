@@ -15,6 +15,7 @@ The supported target is macOS 14.2+ on Apple Silicon.
 | `apps/desktop/src-tauri/src/audio_sink.rs` | Incremental audio storage, encoding and recovery |
 | `apps/desktop/src-tauri/src/retranscribe.rs` | Offline transcription queue |
 | `apps/desktop/src-tauri/src/enhance.rs` | Optional summaries and restricted connector reads |
+| `apps/desktop/src-tauri/src/loops.rs` | Open loops file: parsing, provider deltas and safe merges |
 | `apps/desktop/src-tauri/src/chat.rs` | Questions over notes, citations and CLI process control |
 | `apps/desktop/src-tauri/src/api.rs` | Direct text APIs, Keychain credentials and restricted Markdown reads |
 | `apps/desktop/src-tauri/src/ai_setup.rs` | Official helper installation and provider-owned login |
@@ -65,6 +66,18 @@ through that worker. Finished-session updates are serialized and saved with
 a temporary file plus rename. Reservations cover finalization, transcription,
 summaries and cleanup, preventing overlapping operations on the same file.
 External editors do not participate in these locks.
+
+`Open loops.md` is the one file Simstim, the user and external editors all
+write. The provider never returns the file. A summary reply ends with `LOOP`
+lines, which code peels off and draws as the summary's Open loops section,
+and `LOOP_DONE` lines naming open items by the line numbers the prompt showed.
+Older calls are read once with a JSON delta of the same shape, stored back as
+their section. The write re-reads the file under the same per-path gate,
+closes only lines still identical to what the provider saw, skips additions
+already present in any section and replaces the file atomically. A call the
+file already links to is not merged again, so reworded items do not return. Unknown sections and text survive
+byte for byte. A toggle carries the line it expects, and a hand edit carries
+the body it started from, so a concurrent change is refused instead of lost.
 
 Audio is flushed periodically to WAV during capture, then encoded to AAC
 by default or FLAC when configured. Failed encoding retains recoverable WAV

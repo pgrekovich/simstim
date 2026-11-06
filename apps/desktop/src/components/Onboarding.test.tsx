@@ -54,6 +54,7 @@ const config: AppConfig = {
   enhance_use_calendar: true,
   detect_calls: true,
   auto_stop_after_call: false,
+  track_open_loops: true,
 };
 
 function liveModel(downloaded: boolean): ModelInfo {

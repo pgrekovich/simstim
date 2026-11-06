@@ -24,6 +24,10 @@ transcribes them locally into Markdown files. Read
 - Recording starts only on an explicit user action.
 - Keep user notes separate from generated text. Re-transcription replaces
   the transcript section; it must preserve notes and metadata.
+- `Open loops.md` is shared with the user and other editors. AI output is
+  a delta applied to lines that have not changed; Simstim never rewrites or
+  deletes the user's lines there, except moving checked items to Done and
+  pruning Done after four weeks.
 - One writer per session file. Live edits go through the recording worker;
   updates to finished files use atomic replacement and shared file guards.
   Keep finalized transcript segments on disk and flush audio periodically.

@@ -30,6 +30,13 @@ read other notes for context too. In-app chat is held in memory and does not
 become part of your Markdown unless you copy it yourself. The external CLI
 may retain its own session logs under its own settings and policies.
 
+Keep open loops, if enabled, adds the open items of `Open loops.md` to each
+automatic summary request, so the summary can report which of them the call
+finished. Update now sends nothing for calls whose summary already has an
+Open loops section. For older calls it sends each call's notes, summary and
+transcript text with the file's open and recently finished items, one
+request per call.
+
 Calendar context, if enabled, queries your supported Claude Code calendar
 connector for the call's time window. The matched event name and attendees
 can be included in the note and summary prompt. A connector-enabled quick

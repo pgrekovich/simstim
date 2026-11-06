@@ -131,6 +131,9 @@ pub struct Config {
     /// Whether a recording associated with a known call app stops after the
     /// app releases audio input and output and the remote channel is silent.
     pub auto_stop_after_call: bool,
+    /// Keep `Open loops.md` current after each automatic summary. Follows
+    /// `auto_enhance`: without automatic summaries nothing runs on its own.
+    pub track_open_loops: bool,
 }
 
 impl Default for Config {
@@ -156,6 +159,7 @@ impl Default for Config {
             enhance_use_calendar: true,
             detect_calls: default_detect_calls(),
             auto_stop_after_call: default_auto_stop_after_call(),
+            track_open_loops: true,
         }
     }
 }
@@ -324,6 +328,14 @@ pub fn set_delete_audio_after_retranscribe(
     cfg.save().map_err(|e| e.to_string())
 }
 
+/// Persist whether open loops follow each automatic summary.
+#[tauri::command]
+pub fn set_track_open_loops(track_open_loops: bool) -> Result<(), String> {
+    let mut cfg = Config::load_for_update().map_err(|e| e.to_string())?;
+    cfg.track_open_loops = track_open_loops;
+    cfg.save().map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub fn set_auto_stop_after_call(auto_stop_after_call: bool) -> Result<(), String> {
     let mut cfg = Config::load_for_update().map_err(|e| e.to_string())?;
@@ -489,6 +501,7 @@ mod tests {
             enhance_use_calendar: true,
             detect_calls: false,
             auto_stop_after_call: true,
+            track_open_loops: false,
         };
         cfg.save_to(&path).unwrap();
         let loaded = Config::load_from(&path);
@@ -736,6 +749,7 @@ mod tests {
             "enhance_use_calendar",
             "detect_calls",
             "auto_stop_after_call",
+            "track_open_loops",
         ] {
             assert!(source.contains(key), "missing {key} from config:\n{source}");
         }

@@ -59,7 +59,8 @@ identical in the UI, so verify a recorded call per channel
 See [release instructions](releases.md). Tagging builds and publishes a
 release, so push a tag only after the maintainer has tested the candidate.
 The release workflow signs, notarizes, staples and verifies the bundle.
-There is no in-app updater currently; install a newer DMG over the old app.
+Installed apps update in place from a signed release; see
+[in-app updates](releases.md#in-app-updates).
 
 ## Architecture
 

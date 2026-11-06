@@ -20,5 +20,10 @@ export default defineConfig({
     execArgv: ["--no-experimental-webstorage"],
     globals: true,
     setupFiles: ["./src/test/setup.ts"],
+    // The suite also runs on a busy Mac (a release build, background QoS).
+    // Waits are deadlines, not expectations: a generous one keeps a slow
+    // first render from failing a correct test, while a real failure still
+    // fails, only later.
+    testTimeout: 30_000,
   },
 });

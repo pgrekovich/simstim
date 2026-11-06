@@ -8,10 +8,23 @@ const markdownComponents: Components = {
   },
 };
 
-/** Heavy parser kept in its own lazy chunk so it does not delay app startup. */
-export default function MarkdownRenderer({ source }: { source: string }) {
+/**
+ * Heavy parser kept in its own lazy chunk so it does not delay app startup.
+ * `components` overrides individual elements (Open loops makes its task
+ * items interactive); everything else renders as in notes and summaries.
+ */
+export default function MarkdownRenderer({
+  source,
+  components,
+}: {
+  source: string;
+  components?: Components;
+}) {
   return (
-    <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      components={components ? { ...markdownComponents, ...components } : markdownComponents}
+    >
       {source}
     </ReactMarkdown>
   );

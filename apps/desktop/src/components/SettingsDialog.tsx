@@ -29,6 +29,7 @@ import {
   setEnhanceModel,
   setEnhanceProvider,
   setEnhanceRenameTitle,
+  setTrackOpenLoops,
   setEnhanceUseCalendar,
   setKeepAudio,
   setOutputDir,
@@ -322,6 +323,7 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
   const [enhanceProviderError, setEnhanceProviderError] = useState<string | null>(null);
   const [autoEnhanceError, setAutoEnhanceError] = useState<string | null>(null);
   const [renameTitleError, setRenameTitleError] = useState<string | null>(null);
+  const [trackLoopsError, setTrackLoopsError] = useState<string | null>(null);
   const [useCalendarError, setUseCalendarError] = useState<string | null>(null);
   const [choosingDir, setChoosingDir] = useState(false);
   const [themeError, setThemeError] = useState<string | null>(null);
@@ -473,6 +475,19 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
     } catch (err) {
       setConfig((prev) => (prev ? { ...prev, auto_enhance: previous } : prev));
       setAutoEnhanceError(String(err));
+    }
+  }
+
+  async function handleSetTrackOpenLoops(enabled: boolean) {
+    const previous = config?.track_open_loops;
+    if (previous === undefined || enabled === previous) return;
+    setTrackLoopsError(null);
+    setConfig((prev) => (prev ? { ...prev, track_open_loops: enabled } : prev));
+    try {
+      await setTrackOpenLoops(enabled);
+    } catch (err) {
+      setConfig((prev) => (prev ? { ...prev, track_open_loops: previous } : prev));
+      setTrackLoopsError(String(err));
     }
   }
 
@@ -1115,6 +1130,21 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                     checked={config?.auto_enhance ?? false}
                     disabled={!config || !summariesPossible}
                     onCheckedChange={(checked) => handleSetAutoEnhance(checked === true)}
+                  />
+                </Row>
+                <Row
+                  label="Keep open loops"
+                  htmlFor="track-open-loops"
+                  description="After each summary, promises and open questions go into Open loops.md beside your notes."
+                  error={trackLoopsError}
+                  dimmed={!summariesPossible || !config?.auto_enhance}
+                >
+                  <Checkbox
+                    variant="switch"
+                    id="track-open-loops"
+                    checked={(config?.track_open_loops ?? false) && (config?.auto_enhance ?? false)}
+                    disabled={!config || !summariesPossible || !config.auto_enhance}
+                    onCheckedChange={(checked) => handleSetTrackOpenLoops(checked === true)}
                   />
                 </Row>
                 <Row

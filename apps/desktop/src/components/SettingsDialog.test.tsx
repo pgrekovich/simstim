@@ -33,6 +33,7 @@ vi.mock("@/lib/ipc", () => ({
   setEnhanceModel: vi.fn().mockResolvedValue(undefined),
   setAutoEnhance: vi.fn().mockResolvedValue(undefined),
   setEnhanceRenameTitle: vi.fn().mockResolvedValue(undefined),
+  setTrackOpenLoops: vi.fn().mockResolvedValue(undefined),
   setEnhanceUseCalendar: vi.fn().mockResolvedValue(undefined),
   listEnhanceProviders: vi.fn(),
   setAutoStopAfterCall: vi.fn().mockResolvedValue(undefined),
@@ -65,6 +66,7 @@ const baseConfig: AppConfig = {
   enhance_use_calendar: true,
   detect_calls: true,
   auto_stop_after_call: false,
+  track_open_loops: true,
 };
 
 const parakeet: ModelInfo = {
@@ -433,6 +435,22 @@ describe("SettingsDialog: summaries", () => {
     expect(screen.getByRole("checkbox", { name: /summarize after each call/i })).toBeDisabled();
     expect(screen.getByRole("checkbox", { name: /let summaries title notes/i })).toBeDisabled();
     expect(screen.getByRole("checkbox", { name: /use calendar for context/i })).toBeDisabled();
+  });
+
+  it("keeps open loops behind automatic summaries", async () => {
+    render(<SettingsDialog open onOpenChange={() => {}} />);
+
+    const loops = await screen.findByRole("checkbox", { name: /keep open loops/i });
+    expect(loops).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(loops);
+    await waitFor(() => expect(ipc.setTrackOpenLoops).toHaveBeenCalledWith(false));
+    fireEvent.click(loops);
+    await waitFor(() => expect(ipc.setTrackOpenLoops).toHaveBeenLastCalledWith(true));
+
+    // Without automatic summaries nothing runs on its own, and the switch says so.
+    fireEvent.click(screen.getByRole("checkbox", { name: /summarize after each call/i }));
+    await waitFor(() => expect(loops).toBeDisabled());
+    expect(loops).toHaveAttribute("aria-checked", "false");
   });
 
   it("persists the three behavior toggles", async () => {

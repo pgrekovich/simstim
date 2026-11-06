@@ -34,6 +34,7 @@ import { EmptyState } from "@/components/EmptyState";
 import { HearingIndicator } from "@/components/HearingIndicator";
 import { AskCallDrawer } from "@/components/AskCallDrawer";
 import { AskNotesView } from "@/components/AskNotesView";
+import { OpenLoopsView } from "@/components/OpenLoopsView";
 import { type ChatAskRequest } from "@/components/Chat";
 import { GlobalSearch, type SpokenSearchTarget } from "@/components/GlobalSearch";
 import {
@@ -52,6 +53,8 @@ import {
   enhanceSession,
   getConfig,
   listSessions,
+  openLoopsRead,
+  openLoopsUpdate,
   readSession,
   recordingActivity,
   showMainWindow,
@@ -62,6 +65,8 @@ import {
   type CallEndedPayload,
   type ChatSource,
   type EnhanceProgress,
+  type OpenLoops,
+  type OpenLoopsProgress,
   type HearingStatus,
   type ModelInfo,
   type RetranscribeProgress,
@@ -222,9 +227,21 @@ function App() {
   const [busy, setBusy] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
-  // Ask your notes: when open, the folder-wide chat owns the main pane (the selection
-  // stays put underneath and comes back on close).
-  const [askNotesOpen, setAskNotesOpen] = useState(false);
+  // A folder-wide surface that owns the main pane instead of a note: Ask your
+  // notes or Open loops. One at a time; the note selection stays put
+  // underneath and comes back on close.
+  const [surface, setSurface] = useState<"ask" | "loops" | null>(null);
+  const askNotesOpen = surface === "ask";
+  const loopsOpen = surface === "loops";
+  const surfaceOpen = surface !== null;
+  // The Open loops file as last read (the sidebar count and the pane), and
+  // the update job the `open-loops-progress` events describe.
+  const [loops, setLoops] = useState<OpenLoops | null>(null);
+  const [loopsJob, setLoopsJob] = useState<{
+    running: boolean;
+    error: string | null;
+    message: string | null;
+  }>({ running: false, error: null, message: null });
   // The user's prompts (prompts.toml): the toolbar menu lists summary styles.
   const { prompts } = usePrompts();
   // A question handed to Ask your notes from the ⌘K palette's bottom row.
@@ -390,7 +407,7 @@ function App() {
   // Reclamp after window resizing, restored widths and pane toggles. Shrink the
   // secondary drawer first, then the sidebar, preserving MAIN_PANE_MIN. Setters skip
   // unchanged values to avoid loops.
-  const drawerVisible = askCallOpen && selectedPath !== null && !askNotesOpen;
+  const drawerVisible = askCallOpen && selectedPath !== null && !surfaceOpen;
   useEffect(() => {
     function reclamp() {
       const available = window.innerWidth - MAIN_PANE_MIN;
@@ -550,6 +567,48 @@ function App() {
       window.removeEventListener("focus", handleFocus);
     };
   }, [refreshSessions]);
+
+  // Open loops: read on mount, on focus (an external editor may have changed
+  // the file), when the notes folder changes, and after every update.
+  const refreshLoops = useCallback(() => {
+    openLoopsRead()
+      .then(setLoops)
+      .catch(() => {
+        // The count and pane are conveniences; recording works without them.
+      });
+  }, []);
+  useEffect(() => {
+    refreshLoops();
+    window.addEventListener("focus", refreshLoops);
+    return () => window.removeEventListener("focus", refreshLoops);
+  }, [refreshLoops, appConfig?.output_dir]);
+  useEffect(() => {
+    const unlisten = listen<OpenLoopsProgress>("open-loops-progress", (event) => {
+      const { phase, message } = event.payload;
+      if (phase === "running") {
+        setLoopsJob({ running: true, error: null, message });
+        // A long read merges call by call; show each step's result.
+        if (message) refreshLoops();
+        return;
+      }
+      setLoopsJob({
+        running: false,
+        error: phase === "error" ? (message ?? "update failed") : null,
+        message: null,
+      });
+      refreshLoops();
+    });
+    return () => {
+      void unlisten.then((fn) => fn());
+    };
+  }, [refreshLoops]);
+
+  function handleLoopsUpdate() {
+    setLoopsJob({ running: true, error: null, message: null });
+    openLoopsUpdate().catch((err) => {
+      setLoopsJob({ running: false, error: String(err), message: null });
+    });
+  }
 
   useEffect(() => {
     const unlisten = listen<string>("transcript-line", (event) => {
@@ -954,18 +1013,19 @@ function App() {
     openTranscriptFind: () => {},
     toggleAskNotes: () => {},
     toggleAskCall: () => {},
+    toggleLoops: () => {},
   });
   useEffect(() => {
     shortcutsRef.current = {
       newNote: () => {
         if (!appConfig?.onboarding_complete) return;
-        setAskNotesOpen(false);
+        setSurface(null);
         void handleNewSession();
       },
       startRecording: () => {
         // Same gating as the Record button and the EmptyState row.
         if (!appConfig?.onboarding_complete || busy || sessionActive || !modelReady) return;
-        setAskNotesOpen(false);
+        setSurface(null);
         void handleStart();
       },
       openSettings: () => setSettingsOpen(true),
@@ -975,7 +1035,7 @@ function App() {
       openTranscriptFind: () => {
         if (!appConfig?.onboarding_complete) return;
         if (settingsOpen) return;
-        if (selectedPath === null || askNotesOpen) {
+        if (selectedPath === null || surfaceOpen) {
           setSearchOpen(true);
           return;
         }
@@ -989,12 +1049,17 @@ function App() {
       // and comes back on close.
       toggleAskNotes: () => {
         if (!appConfig?.onboarding_complete || settingsOpen) return;
-        setAskNotesOpen((open) => !open);
+        setSurface((open) => (open === "ask" ? null : "ask"));
+      },
+      // Open loops (⌘T): a toggle, like Ask your notes.
+      toggleLoops: () => {
+        if (!appConfig?.onboarding_complete || settingsOpen) return;
+        setSurface((open) => (open === "loops" ? null : "loops"));
       },
       // Ask this call (⌘J): only meaningful with a note on screen.
       toggleAskCall: () => {
         if (!appConfig?.onboarding_complete || settingsOpen) return;
-        if (selectedPath === null || askNotesOpen) return;
+        if (selectedPath === null || surfaceOpen) return;
         setAskCallOpen((open) => !open);
       },
     };
@@ -1025,6 +1090,9 @@ function App() {
       } else if (key === "j" && !e.shiftKey) {
         e.preventDefault();
         shortcutsRef.current.toggleAskCall();
+      } else if (key === "t" && !e.shiftKey) {
+        e.preventDefault();
+        shortcutsRef.current.toggleLoops();
       } else if (key === "\\" && !e.shiftKey) {
         e.preventDefault();
         setSidebarCollapsed((collapsed) => !collapsed);
@@ -1089,7 +1157,7 @@ function App() {
     const fileName = source.file;
     const session = sessions.find((s) => s.path.endsWith(`/${fileName}`));
     if (session) {
-      setAskNotesOpen(false);
+      setSurface(null);
       setSelectedPath(session.path);
       if (source.timestamp) {
         setTranscriptJumpRequest({
@@ -1108,7 +1176,7 @@ function App() {
   // The ⌘K palette's bottom row: the typed query becomes a question on the
   // Ask your notes surface, sent as soon as it mounts.
   function handleAskAllNotes(question: string) {
-    setAskNotesOpen(true);
+    setSurface("ask");
     setAskNotesRequest({ id: ++askNotesRequestIdRef.current, question });
   }
 
@@ -1116,7 +1184,7 @@ function App() {
   // with the question already sent (one field reaches every scope).
   function handleAskThisCall(question: string) {
     if (selectedPath === null) return;
-    setAskNotesOpen(false);
+    setSurface(null);
     setAskCallOpen(true);
     setAskCallRequest({ id: ++askCallRequestIdRef.current, question });
   }
@@ -1124,7 +1192,7 @@ function App() {
   async function handleNewSession() {
     if (!appConfig?.onboarding_complete || busy) return;
     setBusy(true);
-    setAskNotesOpen(false);
+    setSurface(null);
     try {
       const path = await createSession();
       await refreshSessions();
@@ -1158,7 +1226,7 @@ function App() {
   // The empty-state screen (nothing selected and not recording)
   // hides the topbar entirely. A lone Record button floating over the
   // shortcut menu reads as clutter, so its branch renders a bare drag strip.
-  const showTopbar = sessionActive || selectedPath !== null || askNotesOpen;
+  const showTopbar = sessionActive || selectedPath !== null || surfaceOpen;
   // Use one processing label for sidebar rows with work in flight.
   const busyPaths: Record<string, string> = {};
   if (enhancingPath !== null) busyPaths[enhancingPath] = "finishing";
@@ -1213,18 +1281,21 @@ function App() {
         sessions={sessions}
         // One selection at a time: while the conversation owns the pane, no note row may
         // look chosen.
-        selectedPath={askNotesOpen ? null : selectedPath}
+        selectedPath={surfaceOpen ? null : selectedPath}
         activePath={activePath}
         busyPaths={busyPaths}
         onSelect={(path) => {
-          setAskNotesOpen(false);
+          setSurface(null);
           setSelectedPath(path);
         }}
         onNewSession={handleNewSession}
         onCollapse={() => setSidebarCollapsed(true)}
         onOpenSearch={() => setSearchOpen(true)}
-        onOpenAsk={() => setAskNotesOpen(true)}
+        onOpenAsk={() => setSurface("ask")}
         askActive={askNotesOpen}
+        onOpenLoops={() => setSurface("loops")}
+        loopsActive={loopsOpen}
+        loopsCount={loops?.exists ? loops.open_count : null}
         onDelete={handleDeleteSession}
         onOpenFile={(path) => void openPath(path)}
         onRevealInFinder={(path) => void revealItemInDir(path)}
@@ -1344,7 +1415,7 @@ function App() {
  * toolbar controls.
  *
  */}
-          {showTopbar && selectedPath !== null && !askNotesOpen && (
+          {showTopbar && selectedPath !== null && !surfaceOpen && (
             <Button
               variant="ghost"
               size="icon"
@@ -1374,7 +1445,7 @@ function App() {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
-              {selectedPath !== null && !askNotesOpen && (
+              {selectedPath !== null && !surfaceOpen && (
                 <>
                   <DropdownMenuItem
                     disabled={
@@ -1494,6 +1565,19 @@ function App() {
             sessions={sessions}
             askRequest={askNotesRequest}
             onOpenCitation={(source) => handleOpenCitation(source, null)}
+          />
+        ) : loopsOpen ? (
+          <OpenLoopsView
+            loops={loops}
+            running={loopsJob.running || (loops?.running ?? false)}
+            progress={loopsJob.message}
+            error={loopsJob.error}
+            onChange={setLoops}
+            onUpdate={handleLoopsUpdate}
+            onOpenCitation={(source) => handleOpenCitation(source, null)}
+            onOpenFile={() => {
+              if (appConfig) void openPath(`${appConfig.output_dir}/Open loops.md`);
+            }}
           />
         ) : (
         <div className="flex min-h-0 flex-1 flex-col px-8 pb-7 pt-1">
@@ -1639,7 +1723,7 @@ function App() {
         onOpenChange={setSearchOpen}
         sessions={sessions}
         onOpenSession={(path: string, spoken?: SpokenSearchTarget) => {
-          setAskNotesOpen(false);
+          setSurface(null);
           setSelectedPath(path);
           setTranscriptFindRequest({
             id: ++transcriptFindRequestIdRef.current,
@@ -1649,7 +1733,7 @@ function App() {
           });
         }}
         onAskAllNotes={handleAskAllNotes}
-        onAskThisCall={selectedPath !== null && !askNotesOpen ? handleAskThisCall : undefined}
+        onAskThisCall={selectedPath !== null && !surfaceOpen ? handleAskThisCall : undefined}
       />
     </div>
   );

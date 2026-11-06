@@ -421,14 +421,19 @@ pub(crate) fn build_prompt(
 /// The user's part of the summary prompt (prompts.toml, see `prompts.rs`).
 /// `style_prompt` is a summary style's text: it REPLACES the built-in task
 /// rule (what to extract, in what shape) and nothing else, so the source
-/// data, the language rule, the honesty rules and the TITLE/PEOPLE output
+/// data, the language rule, the honesty rules and the TITLE/PEOPLE/LOOP output
 /// contracts hold for every style. `instructions` are the standing
 /// instructions appended to every run; the prompt says in words that they
 /// apply within the rules and cannot lift them.
+///
+/// `open_items` is not the user's: it is the numbered list of items still
+/// open in `Open loops.md`, present only while the file is kept, so the
+/// reply can report which of them this call finished (`LOOP_DONE` lines).
 #[derive(Debug, Default, Clone, Copy)]
 pub(crate) struct PromptTuning<'a> {
     pub style_prompt: Option<&'a str>,
     pub instructions: &'a str,
+    pub open_items: Option<&'a str>,
 }
 
 pub(crate) fn build_prompt_tuned(
@@ -447,7 +452,7 @@ pub(crate) fn build_prompt_tuned(
         notes.trim().to_string()
     };
     let task_rule = if notes_are_empty {
-        "Start with one sentence stating the overall work status and main blocker. Then use Markdown headings in the output language for Status (at most 3 bullets), Risks (at most 2 bullets, omit if empty), and Next steps (at most 2 bullets, omit if empty). Keep the entire answer under 140 words"
+        "Start with one sentence stating the overall work status and main blocker. Then use Markdown headings in the output language for Status (at most 3 bullets) and Risks (at most 2 bullets, omit if empty). Keep this note under 140 words; the LOOP lines below do not count toward it"
     } else {
         "Rewrite the user's rough notes in their original structure. Preserve every distinct user point, add only directly supporting transcript detail, and do not introduce unrelated transcript topics"
     };
@@ -458,8 +463,9 @@ pub(crate) fn build_prompt_tuned(
     let language_rule = output_language_rule(cyrillic_output);
     let prompt_transcript = compact_transcript(transcript);
     let extra_rules = format!(
-        "{}{}",
+        "{}{}{}",
         build_extra_rules(propose_title, list_people, event, cyrillic_output),
+        crate::loops::summary_rule(tuning.open_items, cyrillic_output),
         instructions_rule(tuning.instructions, cyrillic_output)
     );
     let final_check = if cyrillic_output {
@@ -469,7 +475,7 @@ pub(crate) fn build_prompt_tuned(
     };
     if cyrillic_output {
         let cyrillic_task = if notes_are_empty {
-            "Начни без метки с одного предложения об общем статусе и главном блокере. Затем дай максимум 3 пункта в разделе «Статус», максимум 2 в «Риски» и максимум 2 в «Следующие шаги». Пустой раздел пропусти. Уложись в 140 слов"
+            "Начни без метки с одного предложения об общем статусе и главном блокере. Затем дай максимум 3 пункта в разделе «Статус» и максимум 2 в «Риски». Пустой раздел пропусти. Уложи заметку в 140 слов; строки LOOP ниже в этот лимит не входят"
         } else {
             "Перепиши заметки пользователя, сохранив их структуру и каждый отдельный пункт. Добавляй только прямо подтверждающие детали из расшифровки и не вводи посторонние темы"
         };
@@ -644,7 +650,7 @@ fn instructions_rule(instructions: &str, cyrillic_output: bool) -> String {
         format!(
             "\nThe user's standing instructions for every summary. Apply them within \
              the rules above: they refine the summary, they never lift the rules on \
-             language, accuracy or the TITLE/PEOPLE lines.\n{instructions}\n"
+             language, accuracy or the TITLE/PEOPLE/LOOP lines.\n{instructions}\n"
         )
     }
 }
@@ -737,29 +743,38 @@ fn sanitize_title(raw: &str) -> String {
 }
 
 /// Removes low-information acknowledgements and joins adjacent fragments from
-/// one speaker for the summary prompt only. The transcript on disk is never
+/// one speaker, for prompts only. The transcript on disk is never
 /// changed. Keeping each paragraph bounded prevents a long monologue from
 /// turning into one attention-heavy line.
-fn compact_transcript(transcript: &str) -> String {
+///
+/// Each paragraph keeps its first `[hh:mm:ss]`, so a reply can cite where
+/// something was said (the summary's LOOP lines, open loops).
+pub(crate) fn compact_transcript(transcript: &str) -> String {
     const MIN_LETTERS: usize = 12;
     const MAX_PARAGRAPH_CHARS: usize = 240;
 
     let mut paragraphs = Vec::new();
     let mut speaker = String::new();
     let mut paragraph = String::new();
+    let mut started = String::new();
     let mut previous_fragment = String::new();
 
-    let flush = |paragraphs: &mut Vec<String>, speaker: &str, paragraph: &mut String| {
+    let flush = |paragraphs: &mut Vec<String>, speaker: &str, started: &str, paragraph: &mut String| {
         if !paragraph.is_empty() {
-            paragraphs.push(format!("{speaker}: {}", paragraph.trim()));
+            if !started.is_empty() {
+                paragraphs.push(format!("[{started}] {speaker}: {}", paragraph.trim()));
+            } else {
+                paragraphs.push(format!("{speaker}: {}", paragraph.trim()));
+            }
             paragraph.clear();
         }
     };
 
     for line in transcript.lines() {
-        let Some((_, after_time)) = line.split_once("] ") else {
+        let Some((time, after_time)) = line.split_once("] ") else {
             continue;
         };
+        let time = time.trim_start().trim_start_matches('[');
         let Some((line_speaker, raw_text)) = after_time.split_once(": ") else {
             continue;
         };
@@ -776,16 +791,18 @@ fn compact_transcript(transcript: &str) -> String {
         let can_join = speaker == line_speaker
             && paragraph.chars().count() + text.chars().count() < MAX_PARAGRAPH_CHARS;
         if !can_join {
-            flush(&mut paragraphs, &speaker, &mut paragraph);
+            flush(&mut paragraphs, &speaker, &started, &mut paragraph);
             speaker.clear();
             speaker.push_str(line_speaker);
+            started.clear();
+            started.push_str(time);
         }
         if !paragraph.is_empty() {
             paragraph.push(' ');
         }
         paragraph.push_str(&text);
     }
-    flush(&mut paragraphs, &speaker, &mut paragraph);
+    flush(&mut paragraphs, &speaker, &started, &mut paragraph);
 
     if paragraphs.is_empty() {
         transcript.trim().to_string()
@@ -797,7 +814,7 @@ fn compact_transcript(transcript: &str) -> String {
 /// Use the language of meaningful user notes when present, otherwise the main transcript
 /// language. Do not pool notes and transcript: a long transcript would override a short
 /// note. Ignore English speaker labels and prompt wrappers when detecting language.
-fn uses_cyrillic_output(notes: &str, transcript: &str) -> bool {
+pub(crate) fn uses_cyrillic_output(notes: &str, transcript: &str) -> bool {
     /// Fewer letters than this is a stray word or an emoji title, not a
     /// language choice.
     const MIN_LETTERS: usize = 20;
@@ -966,6 +983,23 @@ fn normalize_server_name(name: &str) -> String {
             }
         })
         .collect()
+}
+
+/// Runs the configured summary provider and model over a text-only
+/// `prompt`, for features that share the one AI choice (open loops).
+pub(crate) fn run_configured(prompt: &str) -> Result<String, String> {
+    let cfg = Config::load();
+    let spec = PROVIDERS
+        .iter()
+        .find(|s| s.id == cfg.enhance_provider)
+        .ok_or_else(|| format!("unknown enhance provider: {}", cfg.enhance_provider))?;
+    let model = cfg
+        .enhance_models
+        .get(spec.id)
+        .map(|m| m.trim())
+        .filter(|m| !m.is_empty())
+        .map(str::to_string);
+    run_provider(spec, model.as_deref(), prompt)
 }
 
 /// Runs `spec`'s CLI over `prompt` (with `model` overriding the CLI's
@@ -1310,6 +1344,10 @@ fn enhance_path_inner<R: tauri::Runtime>(
             .map(|event| event.attendees.clone())
             .filter(|attendees| !attendees.is_empty());
         let list_people = calendar_people.is_none();
+        // The open loops file as it is now, while it is kept: its open items
+        // go into the prompt so the reply can close them by number.
+        let loops_snapshot = crate::loops::tracked_snapshot(&cfg, md_path);
+        let open_items = loops_snapshot.as_ref().and_then(crate::loops::open_items_block);
         let prompt = build_prompt_tuned(
             &existing.title,
             &existing.notes,
@@ -1320,6 +1358,7 @@ fn enhance_path_inner<R: tauri::Runtime>(
             &PromptTuning {
                 style_prompt: style.map(|s| s.prompt.as_str()),
                 instructions: &prompts.summary_instructions,
+                open_items: open_items.as_deref(),
             },
         );
         let raw = run_provider(spec, model.as_deref(), &prompt)?;
@@ -1333,6 +1372,11 @@ fn enhance_path_inner<R: tauri::Runtime>(
         } else {
             (None, summary)
         };
+        // The LOOP lines become the summary's Open loops section, drawn by
+        // code so the call file always carries the same parseable shape.
+        let (loop_lines, summary) = crate::loops::split_loop_lines(&summary);
+        let call_loops = crate::loops::CallLoops::from_lines(&loop_lines, loops_snapshot.as_ref());
+        let summary = crate::loops::with_section(&summary, &call_loops.render());
         let proposed_title = if rename_title {
             event.as_ref().map(|event| event.title.clone()).or(composed_title)
         } else {
@@ -1359,6 +1403,9 @@ fn enhance_path_inner<R: tauri::Runtime>(
             style.map(|s| s.id.as_str()),
         )
         .map_err(|e| e.to_string())?;
+        // On its own blocking task: the summary is saved, and an open loops
+        // failure never changes its result.
+        crate::loops::after_summary(app.clone(), md_path, loops_snapshot, loop_lines);
         Ok(summary)
     })();
     // Release the slot BEFORE the wrapper announces the terminal phase, so
@@ -1440,7 +1487,13 @@ mod tests {
             assert!(p.contains("took no notes"));
             assert!(p.contains("under 140 words"));
             assert!(p.contains("at most 3 bullets"));
-            assert!(p.ends_with("Stay under the requested word limit.\n"));
+            // Next steps live in the Open loops section now, without a count.
+            assert!(!p.contains("Next steps"));
+            assert!(
+                p.find("Stay under the requested word limit.").unwrap()
+                    < p.find("LOOP: mine | hh:mm:ss").unwrap()
+            );
+            assert!(p.contains("the LOOP lines below do not count toward it"));
         }
 
         /// Notes determine summary language when present; otherwise use the main
@@ -1506,6 +1559,7 @@ mod tests {
                               [00:00:03] Me: ага\n\
                               [00:00:05] Them: Маршрут можно переключить без изменения DNS";
             let compacted = compact_transcript(transcript);
+            assert!(compacted.starts_with("[00:00:01] Them: Новый API"), "the first time stays");
             assert_eq!(compacted.matches("Them:").count(), 1);
             assert!(!compacted.contains("ага"));
             assert!(compacted.contains("Новый API"));
@@ -1603,6 +1657,7 @@ mod tests {
         #[test]
         fn a_style_replaces_the_task_rule_and_instructions_trail_the_prompt() {
             let tuning = PromptTuning {
+                open_items: None,
                 style_prompt: Some("List only the action items, owner first."),
                 instructions: "Always use British spelling.",
             };
@@ -1637,7 +1692,7 @@ mod tests {
             assert!(!plain.contains("standing instructions"));
             assert!(plain.contains("Status (at most 3 bullets)"));
             // Whitespace-only tuning counts as none.
-            let blank = PromptTuning { style_prompt: Some("  "), instructions: " \n" };
+            let blank = PromptTuning { style_prompt: Some("  "), instructions: " \n", open_items: None };
             assert_eq!(build_prompt_tuned("Untitled", "", "[00:00:01] Me: hi", false, false, None, &blank), plain);
         }
 

@@ -389,20 +389,39 @@ pre {
   color: var(--fg-quiet);
 }
 
-/* Files */
+/* Text beside a file: the Files section and the Open loops file */
 
-.files {
+.split {
   display: grid;
   gap: 2.5rem;
   align-items: start;
 }
 
-.files-text p {
+.section > .split {
+  margin-top: 2.5rem;
+}
+
+.split-text p {
   color: var(--fg-quiet);
 }
 
-.files-text h2 + p {
+.split-text h2 + p {
   margin-top: 1.5rem;
+}
+
+.split-text .facts {
+  margin-top: 1.5rem;
+}
+
+.intro {
+  max-width: var(--measure);
+  margin-top: 1.25rem;
+  color: var(--fg-quiet);
+  font-size: 1.125rem;
+}
+
+.section .shot {
+  margin-top: 2.25rem;
 }
 
 .tree {
@@ -434,7 +453,7 @@ pre {
 }
 
 @media (min-width: 60rem) {
-  .files {
+  .split {
     grid-template-columns: minmax(0, 5fr) minmax(0, 6fr);
     gap: 4rem;
   }

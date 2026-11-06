@@ -6,7 +6,8 @@
 
 <p align="center">
   <strong>Your calls. Your files. Your AI.</strong><br>
-  Record and transcribe calls on your Mac. Save them as Markdown.
+  Record and transcribe calls on your Mac. Keep them as Markdown,<br>
+  and every promise from your calls in one list.
 </p>
 
 <p align="center">
@@ -18,7 +19,7 @@
 
 <p align="center"><sub>macOS 14.2+ · Apple Silicon · Free · MIT license</sub></p>
 
-![A meeting summary in Simstim](docs/images/beta-summary.png)
+![A call summary in Simstim, ending with the call's open loops](docs/images/summary.png)
 
 ## Recording
 
@@ -34,12 +35,32 @@ locally, and saves it in a folder you choose. Audio stays on your Mac.
 - Resume recording into an existing note. Earlier audio and timestamps
   are preserved.
 
+## Open loops
+
+A call ends with things you agreed to do, things others agreed to do for
+you and questions nobody answered. Every summary ends with them, each with
+the moment in the call where it was said.
+
+![The Open loops pane in Simstim](docs/images/open-loops.png)
+
+`Open loops.md` sits beside your calls and gathers them in four sections:
+Mine, Waiting for, Open questions and Done. After each summary, Simstim adds
+the call's new loops and checks off the ones the call reports as done. Each
+item links to its call and the second it was agreed. Check items off in the
+app or in any editor; Done keeps four weeks of history and then clears.
+
+Simstim only adds lines and checks lines in that file. It never rewords or
+deletes yours. There are no priorities, reminders or badges: it is one
+Markdown file with checkboxes that Obsidian, git and every other editor
+already understand.
+
 ## Plain files
 
 Each call is a Markdown file, with an optional audio file beside it.
 
 ```text
 Your notes/
+├── Open loops.md
 ├── 2026-09-09 15-30-00 call.md
 ├── 2026-09-09 15-30-00 call.m4a
 └── 2026-09-09 11-00-00 call.md
@@ -48,11 +69,6 @@ Your notes/
 Simstim reads and writes these files directly. You can open the same folder
 in Obsidian, keep it in git or sync it with your usual backup service.
 There is no export step.
-
-Each summary ends with the call's open loops: what you promised, what others
-promised you and questions left open. `Open loops.md` sits beside the calls
-and gathers them, each linked to its call. Simstim keeps it current after
-each summary, and you check items off in the app or any editor.
 
 [Example note](docs/examples/2026-09-09%2010-00-00%20call.md) ·
 [Example open loops](docs/examples/Open%20loops.md)
@@ -69,17 +85,19 @@ rebuild them inside a call recorder.
 
 ## Optional AI
 
-Connect **Claude or ChatGPT** to get summaries and ask questions about your
-calls. You can also use your own OpenAI, Anthropic or OpenRouter API key
-from Settings, stored in macOS Keychain with separate API billing.
-Simstim sets up the official Claude Code or Codex helper and opens
-its browser sign-in. Setup does not require a terminal.
+Connect **Claude or ChatGPT** to get summaries, keep your open loops
+current and ask questions about your calls. You can also use your own
+OpenAI, Anthropic or OpenRouter API key from Settings, stored in macOS
+Keychain with separate API billing. Simstim sets up the official Claude
+Code or Codex helper and opens its browser sign-in. Setup does not require
+a terminal.
 
 AI requests send text to your provider, never audio. Your provider's plan
 limits and billing settings apply; Simstim adds no fee.
 
 Without AI, recording, transcription, notes, playback and text search still
-work locally. You can also use your own tools, including local models,
+work locally. Open loops come from summaries, so they pause when automatic
+summaries are off. You can also use your own tools, including local models,
 on the saved files.
 
 [AI setup and example workflows](docs/your-ai.md)
@@ -92,14 +110,16 @@ on the saved files.
 2. Choose your notes folder and grant microphone and system-audio access.
    Speech models download on first launch, about **1.55 GB** for the default
    pair. You can start once the live model is ready.
-3. Connect an AI assistant if you want summaries, then start a recording.
+3. Connect an AI assistant if you want summaries and open loops, then start
+   a recording.
 
 Simstim can suggest recording when it detects a call, but always waits for
 your click. Let the other people know before you record.
 
-Simstim has no accounts, subscriptions or telemetry. Model downloads, AI
-setup and cloud AI requests need internet access. If you choose a synced
-folder, its files will sync through that service. [Privacy details](docs/privacy.md).
+Simstim has no accounts, subscriptions or telemetry. Model downloads, the
+daily release check, AI setup and cloud AI requests need internet access. If
+you choose a synced folder, its files will sync through that service.
+[Privacy details](docs/privacy.md).
 
 <details>
 <summary><strong>Limitations</strong></summary>

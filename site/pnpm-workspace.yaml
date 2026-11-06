@@ -1,0 +1,3 @@
+# sharp ships prebuilt binaries; its install script is not needed.
+allowBuilds:
+  sharp: false

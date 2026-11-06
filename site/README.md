@@ -47,6 +47,19 @@ repository is public.
 
 ## Images
 
-`public/assets/app-summary*.{webp,png}` and `public/og.png` are derived from
-`docs/images/beta-summary.png`. Regenerate them with `sharp` when the
-screenshot changes; trim the transparent margins and keep the 1165 px and 2330 px widths.
+`public/assets/app-summary*` and `public/assets/app-loops*` are the two app
+screenshots, `public/og.png` the link preview and `docs/images/*.png` the
+README copies. All of them come from one script:
+
+```sh
+(cd apps/desktop && pnpm exec vite --config vite.demo.config.ts)  # the fictional preview on port 1422
+pnpm --dir site install
+pnpm --dir site screenshots
+```
+
+`screenshots.mjs` renders the preview in headless Google Chrome at 2x,
+puts each render into `screenshot-frame.png`, a capture of the real app
+window's shadow and corners with the content removed, and writes the PNG,
+WebP and 2x WebP variants. It prints each image's size; copy it to the
+`width` and `height` of the `<img>` in `src/index.html` when it changes.
+The preview's fixtures live in `apps/desktop/demo/tauri.ts`.

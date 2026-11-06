@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Simstim: record calls on your Mac, keep them as Markdown</title>
-  <meta name="description" content="Simstim records your microphone and system audio, transcribes the call on your Mac and saves it as a Markdown file. Free, no accounts, no telemetry. Optional summaries with the Claude or ChatGPT you already have.">
+  <meta name="description" content="Simstim records your microphone and system audio, transcribes the call on your Mac and saves it as a Markdown file. What you promised and what others promised you go into one list. Free, no accounts, no telemetry. Optional summaries with the Claude or ChatGPT you already have.">
   <link rel="canonical" href="{{site}}/">
   <meta name="color-scheme" content="light dark">
   <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
@@ -16,12 +16,12 @@
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="Simstim">
   <meta property="og:title" content="Simstim: your calls, your files, your AI">
-  <meta property="og:description" content="Record and transcribe calls on your Mac. Each call becomes a Markdown file you own. Free, no accounts, no telemetry.">
+  <meta property="og:description" content="Record and transcribe calls on your Mac. Each call becomes a Markdown file you own, and every promise lands in one list. Free, no accounts, no telemetry.">
   <meta property="og:url" content="{{site}}/">
   <meta property="og:image" content="{{site}}/og.png">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
-  <meta property="og:image:alt" content="The Simstim window showing a call summary with decisions and next steps.">
+  <meta property="og:image:alt" content="The Simstim window showing a call summary with decisions and open loops.">
   <meta name="twitter:card" content="summary_large_image">
 </head>
 <body>
@@ -34,6 +34,7 @@
     </a>
     <nav aria-label="Sections">
       <a href="#how">How it works</a>
+      <a href="#loops">Open loops</a>
       <a href="#files">Files</a>
       <a href="#ai">AI</a>
       <a href="#privacy">Privacy</a>
@@ -46,7 +47,8 @@
       <h1>Your calls. Your files. Your&nbsp;AI.</h1>
       <p class="lede">
         Simstim records calls on your Mac, transcribes them on the same Mac and saves each one as a
-        Markdown file you own. Audio never leaves your computer.
+        Markdown file you own. What you promised and what others promised you go into one list beside
+        your notes. Audio never leaves your computer.
       </p>
       <div class="cta">
         <a class="button" href="/download">Download for macOS</a>
@@ -57,9 +59,9 @@
       </div>
       <figure class="shot">
         <picture>
-          <source type="image/webp" srcset="{{asset:app-summary.webp}} 1165w, {{asset:app-summary@2x.webp}} 2330w" sizes="(min-width: 1312px) 1216px, calc(100vw - 2rem)">
-          <img src="{{asset:app-summary.png}}" width="1165" height="793" fetchpriority="high" decoding="async"
-            alt="The Simstim window. On the left, a list of recent calls grouped by day. On the right, the summary of a design review: a short paragraph, a list of decisions, next steps with owners and one open question.">
+          <source type="image/webp" srcset="{{asset:app-summary.webp}} 1130w, {{asset:app-summary@2x.webp}} 2260w" sizes="(min-width: 1312px) 1216px, calc(100vw - 2rem)">
+          <img src="{{asset:app-summary.png}}" width="1130" height="790" fetchpriority="high" decoding="async"
+            alt="The Simstim window. On the left, a list of recent calls grouped by day. On the right, the summary of a website design review: a short paragraph, a list of decisions and the call's open loops: one thing to do, two things to wait for and one open question, each with the moment it was said.">
         </picture>
       </figure>
     </section>
@@ -88,14 +90,74 @@
           <p>
             Each call becomes a Markdown file with the recording beside it, in a folder you choose. Search
             across past calls, click a timestamp to hear that moment, or continue a recording into the
-            same note later.
+            same note later. With an assistant connected, a summary follows, ending with the call's open loops.
           </p>
         </li>
       </ol>
     </section>
 
-    <section id="files" class="section files">
-      <div class="files-text">
+    <section id="loops" class="section">
+      <h2>Every promise from every call, in one file</h2>
+      <p class="intro">
+        A call ends with things you agreed to do, things others agreed to do for you and questions
+        nobody answered. Simstim keeps them in <code>Open loops.md</code> beside your notes, in four
+        sections: Mine, Waiting for, Open questions and Done.
+      </p>
+      <figure class="shot">
+        <picture>
+          <source type="image/webp" srcset="{{asset:app-loops.webp}} 1130w, {{asset:app-loops@2x.webp}} 2260w" sizes="(min-width: 1312px) 1216px, calc(100vw - 2rem)">
+          <img src="{{asset:app-loops.png}}" width="1130" height="930" loading="lazy" decoding="async"
+            alt="The Open loops pane in Simstim. Under Mine, four things to do. Under Waiting for, four things other people promised, each starting with their name. One open question. Each item names its call and date, and a Done section with two checked items sits at the bottom.">
+        </picture>
+      </figure>
+      <div class="split">
+        <div class="split-text">
+          <p>
+            After each summary, Simstim adds the call's new loops to the file and checks off the ones the
+            call reports as done. Every item links to the second in the recording where it was agreed, so
+            the exact wording is one click away.
+          </p>
+          <p>
+            Check an item off in Simstim or in any other editor. Done keeps four weeks of history, then
+            clears itself. Everything else is yours: Simstim adds lines and checks lines, and never rewords
+            or deletes what you wrote.
+          </p>
+          <ul class="facts">
+            <li><strong>Waiting for is the part no to-do app can write.</strong> What other people owe you exists only in the conversation, and Simstim was listening.</li>
+            <li><strong>Not a task manager.</strong> No priorities, reminders or badges. One Markdown file with GitHub-style checkboxes, readable in Obsidian, git and every editor.</li>
+            <li><strong>Needs a summary.</strong> Open loops are written by the same assistant as your summaries, so they pause when automatic summaries are off. One switch in Settings.</li>
+          </ul>
+        </div>
+        <figure class="note">
+          <figcaption>Open loops.md</figcaption>
+<pre><code>---
+simstim: open-loops
+updated: 2026-11-06T16:04:00+01:00
+---
+
+## Mine
+
+- [ ] Send the revised prototype to two clients for a quick navigation check · Nov 6 · [Website design review](2026-11-06%2015-30-00%20call.md#t=00:28:12)
+- [ ] Confirm the packaging dimensions with the supplier before sketches begin · Nov 6 · [Fieldwork project kickoff](2026-11-06%2011-00-00%20call.md#t=00:19:00)
+
+## Waiting for
+
+- [ ] Maya: homepage layout, mobile crops and the portrait selects, by Wed Nov 11 · Nov 6 · [Website design review](2026-11-06%2015-30-00%20call.md#t=00:29:58)
+- [ ] Leo: edit the Fieldwork case study down to three short sections · Nov 6 · [Website design review](2026-11-06%2015-30-00%20call.md#t=00:22:56)
+
+## Open questions
+
+- [ ] Project credits beside the introduction or at the end of each case study? · Nov 6 · [Website design review](2026-11-06%2015-30-00%20call.md#t=00:26:27)
+
+## Done
+
+- [x] Follow up with the supplier about the Fieldwork packaging sizes · Nov 4 · [Monday studio check-in](2026-11-04%2009-30-00%20call.md#t=00:08:44) · done Nov 6 per [Fieldwork project kickoff](2026-11-06%2011-00-00%20call.md#t=00:09:32)</code></pre>
+        </figure>
+      </div>
+    </section>
+
+    <section id="files" class="section split">
+      <div class="split-text">
         <h2>Files are the database</h2>
         <p>
           There is no export step because there is nothing to export from. Open the folder in Obsidian,
@@ -107,9 +169,10 @@
           replaces only the transcript, never what you wrote.
         </p>
         <pre class="tree"><code>Your notes/
+├── Open loops.md
 ├── 2026-09-09 15-30-00 call.md
 ├── 2026-09-09 15-30-00 call.m4a
-└── 2026-09-09 11-00-00 call.md</code></pre>
+└── 2026-09-09 10-00-00 call.md</code></pre>
       </div>
       <figure class="note">
         <figcaption>2026-09-09 10-00-00 call.md</figcaption>
@@ -131,15 +194,21 @@ Keep the first release focused on recording and readable files.
 - Start with five testers using different Apple Silicon Macs.
 - Keep PDF creation and sharing in the AI tools people already use.
 
-### Next steps
+### Open loops
 
-- Sam: prepare a short sample call for the testers.
-- Alex: send the installation checklist after the candidate passes review.
+**Mine**
+
+- Send Alex the installation checklist once the candidate passes review · 00:00:16
+
+**Waiting for**
+
+- Sam: prepare a short sample call for the testers · 00:00:09
 
 ## Transcript
 
 [00:00:04] Me: Let's start with five testers on different Macs.
 [00:00:09] Them: I'll prepare a short sample call for them.
+[00:00:16] Me: Great. I'll send the installation checklist once the candidate passes review.
 [00:00:24] Them: Should we add a PDF export before the beta?
 [00:00:30] Me: The note is already a file. People can give it to the AI tools they use.</code></pre>
       </figure>
@@ -150,16 +219,17 @@ Keep the first release focused on recording and readable files.
       <div class="columns">
         <div>
           <p>
-            Connect Claude or ChatGPT to get a summary after each call and to ask questions across your
-            notes. Simstim installs the official helper and opens the provider's own sign-in. If you
-            prefer, use your own OpenAI, Anthropic or OpenRouter API key, stored in macOS Keychain.
+            Connect Claude or ChatGPT to get a summary after each call, keep your open loops current and
+            ask questions across your notes. Simstim installs the official helper and opens the provider's
+            own sign-in. If you prefer, use your own OpenAI, Anthropic or OpenRouter API key, stored in
+            macOS Keychain.
           </p>
           <p>
             Simstim sells no credits and adds no fee. Your plan, your limits, your bill.
           </p>
         </div>
         <ul class="facts">
-          <li><strong>Text only.</strong> Summaries and questions send the note's text to your provider, never audio.</li>
+          <li><strong>Text only.</strong> Summaries, open loops and questions send the note's text to your provider, never audio.</li>
           <li><strong>Off means off.</strong> Without AI, recording, transcription, notes, playback and search keep working.</li>
           <li><strong>Nothing to rebuild.</strong> For a PDF, a deck or a follow-up email, hand the file to your assistant. It already has those tools.</li>
         </ul>
@@ -174,7 +244,7 @@ Keep the first release focused on recording and readable files.
           <ul class="facts">
             <li>No Simstim account, no hosted notes, no analytics.</li>
             <li>Audio is recorded and transcribed on your Mac and stays there.</li>
-            <li>Network use is model downloads, the optional AI setup and the AI requests you make.</li>
+            <li>Network use is model downloads, a daily check for a new version, the optional AI setup and the AI requests you make.</li>
             <li>Deleting a note moves it to the Trash. Removing the app leaves your notes alone.</li>
           </ul>
         </div>
@@ -184,7 +254,7 @@ Keep the first release focused on recording and readable files.
             <li>Apple Silicon Macs on macOS 14.2 or later today. Windows and Linux versions are coming soon.</li>
             <li>"Me" and "Them" are your microphone and system audio, not individual speakers.</li>
             <li>Names and numbers can be misheard. Check important details against the recording.</li>
-            <li>Updates are manual: download a new version and replace the app.</li>
+            <li>Open loops come from summaries, so they need a connected assistant and start with your next summarized call.</li>
           </ul>
         </div>
       </div>
@@ -206,7 +276,7 @@ Keep the first release focused on recording and readable files.
       <ol class="install">
         <li>Open the disk image and drag Simstim into Applications.</li>
         <li>Choose a folder for your notes and allow microphone and system audio. Speech models, about 1.55 GB, download on first launch.</li>
-        <li>Connect an AI assistant if you want summaries, or skip it. Then press Record.</li>
+        <li>Connect Claude or ChatGPT if you want summaries and open loops, or skip it. Then press Record.</li>
       </ol>
       <details>
         <summary>Verify the download</summary>
@@ -220,8 +290,8 @@ Keep the first release focused on recording and readable files.
         <a href="https://github.com/pgrekovich/simstim/blob/main/docs/development.md">Build from source</a>
       </p>
       <p class="fine">
-        Updating from an earlier version: quit Simstim and replace the app. Your notes, models and settings
-        stay where they are.
+        Already have Simstim? It checks for a new version once a day and offers it in the app. Updating
+        is always your click, and your notes, models and settings stay where they are.
       </p>
     </section>
   </main>

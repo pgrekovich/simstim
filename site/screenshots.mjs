@@ -8,10 +8,11 @@
 // Chrome over the DevTools protocol at 2x, so no native window is involved
 // and the result does not depend on the Mac's screen or focus state.
 //
-// screenshot-frame.png is a capture of the real app window with the content
-// punched out: macOS's shadow, corner ring and margins. It is 9-sliced around
-// each render, the content gets the same corner radius and focused traffic
-// lights are drawn where the app places them.
+// screenshot-frame.png is a capture of the real app window with the opaque
+// content punched out: macOS's shadow, the window's corner curve with its
+// anti-aliasing and the dark ring around it. It is 9-sliced around each
+// render, the render is masked with the hole so it takes the window's exact
+// shape, and focused traffic lights are drawn where the app places them.
 //
 // Writes public/assets/app-{summary,loops}.{png,webp,@2x.webp}, public/og.png
 // and ../docs/images/{summary,open-loops}.png.
@@ -32,7 +33,6 @@ const WIDTH = 1100;
 // shadow margins, and the chrome measurements come from the same capture.
 const MARGIN = { left: 68, top: 52, right: 68, bottom: 84 };
 const SLICE = { left: 120, top: 120, right: 120, bottom: 150 };
-const RADIUS = 22;
 const LIGHTS = { cx: [41.5, 87.5, 133.5], cy: 55.5, r: 14 };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -161,7 +161,7 @@ async function frame(content, out) {
   const W = cm.width + MARGIN.left + MARGIN.right;
   const H = cm.height + MARGIN.top + MARGIN.bottom;
   const piece = (left, top, width, height, rw = width, rh = height) =>
-    sharp(framePath).extract({ left, top, width, height }).resize(rw, rh, { fit: "fill" }).png().toBuffer();
+    sharp(framePath).extract({ left, top, width, height }).resize(rw, rh, { fit: "fill", kernel: "nearest" }).png().toBuffer();
   const midW = fm.width - SLICE.left - SLICE.right;
   const midH = fm.height - SLICE.top - SLICE.bottom;
   const outMidW = W - SLICE.left - SLICE.right;
@@ -176,9 +176,21 @@ async function frame(content, out) {
     { input: await piece(0, SLICE.top, SLICE.left, midH, SLICE.left, outMidH), left: 0, top: SLICE.top },
     { input: await piece(fm.width - SLICE.right, SLICE.top, SLICE.right, midH, SLICE.right, outMidH), left: W - SLICE.right, top: SLICE.top },
   ];
-  const mask = Buffer.from(
-    `<svg width="${cm.width}" height="${cm.height}"><rect width="${cm.width}" height="${cm.height}" rx="${RADIUS}" ry="${RADIUS}" fill="white"/></svg>`,
-  );
+  const sliced = await sharp({ create: { width: W, height: H, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } })
+    .composite(pieces)
+    .png()
+    .toBuffer();
+  // The hole is the window's shape: opaque where the frame is fully transparent.
+  const hole = await sharp(sliced)
+    .extract({ left: MARGIN.left, top: MARGIN.top, width: cm.width, height: cm.height })
+    .extractChannel("alpha")
+    .threshold(1)
+    .negate()
+    .raw()
+    .toBuffer();
+  const rgba = Buffer.alloc(cm.width * cm.height * 4, 255);
+  for (let i = 0; i < hole.length; i++) rgba[i * 4 + 3] = hole[i];
+  const mask = await sharp(rgba, { raw: { width: cm.width, height: cm.height, channels: 4 } }).png().toBuffer();
   const lights = Buffer.from(
     `<svg width="${cm.width}" height="${cm.height}">${[
       ["#ff5f57", "#e0443e"],
@@ -196,8 +208,8 @@ async function frame(content, out) {
     ])
     .png()
     .toBuffer();
-  const full = await sharp({ create: { width: W, height: H, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } })
-    .composite([...pieces, { input: window, left: MARGIN.left, top: MARGIN.top }])
+  const full = await sharp(sliced)
+    .composite([{ input: window, left: MARGIN.left, top: MARGIN.top }])
     .png()
     .toBuffer();
   // Trim the faintest shadow and keep even dimensions so the 1x variant is exact.
@@ -206,8 +218,8 @@ async function frame(content, out) {
   const h2 = trimmed.info.height - (trimmed.info.height % 2);
   const even = await sharp(trimmed.data).extract({ left: 0, top: 0, width: w2, height: h2 }).png().toBuffer();
   await sharp(even).resize(w2 / 2, h2 / 2, { kernel: "lanczos3" }).png({ palette: true, quality: 90, compressionLevel: 9 }).toFile(`${out}.png`);
-  await sharp(even).resize(w2 / 2, h2 / 2, { kernel: "lanczos3" }).webp({ quality: 88, alphaQuality: 90 }).toFile(`${out}.webp`);
-  await sharp(even).webp({ quality: 86, alphaQuality: 90 }).toFile(`${out}@2x.webp`);
+  await sharp(even).resize(w2 / 2, h2 / 2, { kernel: "lanczos3" }).webp({ quality: 88, alphaQuality: 100 }).toFile(`${out}.webp`);
+  await sharp(even).webp({ quality: 86, alphaQuality: 100 }).toFile(`${out}@2x.webp`);
   console.log(`${path.basename(out)}: ${w2 / 2}x${h2 / 2}, set these on its <img> in src/index.html`);
 }
 

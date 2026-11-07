@@ -39,7 +39,7 @@ locally, and saves it in a folder you choose. Audio stays on your Mac.
   you click. While it runs, the toolbar shows whether you and the other side
   are being heard, and the menu bar shows the time with Stop and Add note.
 
-<img src="docs/images/call-banner.png" width="390" alt="A floating banner: Call detected, Zoom, Start recording">
+<img src="docs/images/call-banner.png" width="390" alt="A floating banner: Call detected, Zoom, Start recording"> <img src="docs/images/menu-bar.png" width="69" alt="The menu bar with the Simstim icon and the elapsed time 01:29">
 
 ## Open loops
 

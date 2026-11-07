@@ -64,3 +64,8 @@ window's shadow and corners with the content removed, and writes the PNG,
 WebP and 2x WebP variants. It prints each image's size; copy it to the
 `width` and `height` of the `<img>` in `src/index.html` when it changes.
 The preview's fixtures live in `apps/desktop/demo/tauri.ts`.
+
+`public/assets/menu-bar*.png` and `docs/images/menu-bar.png` are the one
+exception: the menu bar item is native, so they are a crop of a real
+`screencapture -R` of the menu bar while recording, 18 px of padding at 2x
+around the icon and timer, corners rounded.

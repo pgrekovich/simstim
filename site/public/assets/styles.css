@@ -422,6 +422,12 @@ pre {
   height: auto;
 }
 
+/* A real crop of the menu bar while recording, so it keeps the bar's own dark background. */
+.menubar {
+  display: block;
+  margin-top: 0.6rem;
+}
+
 .intro {
   max-width: var(--measure);
   margin-top: 1.25rem;

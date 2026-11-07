@@ -34,6 +34,7 @@
     </a>
     <nav aria-label="Sections">
       <a href="#how">How it works</a>
+      <a href="#notice">Never miss a call</a>
       <a href="#loops">Open loops</a>
       <a href="#files">Files</a>
       <a href="#ai">AI</a>
@@ -94,6 +95,35 @@
           </p>
         </li>
       </ol>
+    </section>
+
+    <section id="notice" class="section">
+      <h2>You will not forget to press Record</h2>
+      <div class="columns">
+        <div>
+          <p>
+            When Zoom, Teams, FaceTime, Slack, Discord, WhatsApp, Telegram or a browser tab starts using
+            the microphone, a small banner appears in the corner of your screen. One click starts
+            recording. Simstim never starts on its own: noticing a call is not permission to record it.
+          </p>
+          <figure class="banner">
+            <img src="{{asset:call-banner.png}}" srcset="{{asset:call-banner@2x.png}} 2x" width="390" height="76" loading="lazy" decoding="async"
+              alt="A small floating banner: the Simstim icon, the words Call detected and Zoom, and a blue Start recording button.">
+          </figure>
+        </div>
+        <ul class="facts">
+          <li><strong>Two dots while you talk.</strong> "you" and "them" light up while each side is being heard, so a muted microphone or a missing permission shows in the first minute, not after the call.</li>
+          <li><strong>A timer in the menu bar.</strong> Simstim sits in the menu bar too: the elapsed time while recording, Stop and Add note without switching windows.</li>
+          <li><strong>Knows when the call ends.</strong> The banner comes back with Stop, or Simstim stops by itself if you turn that on.</li>
+        </ul>
+      </div>
+      <figure class="shot">
+        <picture>
+          <source type="image/webp" srcset="{{asset:app-recording.webp}} 1168w, {{asset:app-recording@2x.webp}} 2336w" sizes="(min-width: 1312px) 1216px, calc(100vw - 2rem)">
+          <img src="{{asset:app-recording.png}}" width="1168" height="828" loading="lazy" decoding="async"
+            alt="The Simstim window during a call. The toolbar shows two green dots labeled you and them, a red Stop button with the elapsed time 12:35, and the Transcript tab with the conversation so far, each line marked Me or Them with its time.">
+        </picture>
+      </figure>
     </section>
 
     <section id="loops" class="section">

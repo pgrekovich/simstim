@@ -47,9 +47,10 @@ repository is public.
 
 ## Images
 
-`public/assets/app-summary*` and `public/assets/app-loops*` are the two app
-screenshots, `public/og.png` the link preview and `docs/images/*.png` the
-README copies. All of them come from one script:
+`public/assets/app-{summary,loops,recording}*` are the app screenshots,
+`public/assets/call-banner*` the floating call banner, `public/og.png` the
+link preview and `docs/images/*.png` the README copies. All of them come
+from one script:
 
 ```sh
 (cd apps/desktop && pnpm exec vite --config vite.demo.config.ts)  # the fictional preview on port 1422

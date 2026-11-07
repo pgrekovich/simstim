@@ -34,6 +34,12 @@ locally, and saves it in a folder you choose. Audio stays on your Mac.
   play that part of the recording.
 - Resume recording into an existing note. Earlier audio and timestamps
   are preserved.
+- When Zoom, Teams, FaceTime, Slack or a browser tab starts using the
+  microphone, a small banner offers to record. Recording starts only when
+  you click. While it runs, the toolbar shows whether you and the other side
+  are being heard, and the menu bar shows the time with Stop and Add note.
+
+<img src="docs/images/call-banner.png" width="390" alt="A floating banner: Call detected, Zoom, Start recording">
 
 ## Open loops
 

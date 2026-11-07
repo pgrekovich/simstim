@@ -4,6 +4,8 @@
 // Dates are relative to today so the sidebar reads Today and Yesterday in
 // every screenshot; the notes folder is a small design studio's week.
 const apiPreview = new URLSearchParams(location.search).has("api");
+// `?surface=banner` renders the floating call banner (main.tsx picks the
+// surface); here it always shows a detected Zoom call.
 const setupPreview = new URLSearchParams(location.search).has("setup");
 const updatesPreview = new URLSearchParams(location.search).has("updates");
 
@@ -291,8 +293,28 @@ function loopsOut() {
   return { exists: true, body: loopsLines.slice(4).join("\n"), body_line: 5, updated: at(0, 16, 4), open_count: open, running: false, unread: 0 };
 }
 
+// Backend events the real app would push; `emit` fires them from here.
+const listeners = new Map<string, Set<(event: { payload: unknown }) => void>>();
+function emit(name: string, payload: unknown) {
+  for (const callback of listeners.get(name) ?? []) callback({ payload });
+}
+// A pretend recording: Record continues the open note, the first live line
+// arrives right away so the toolbar shows the hearing dots, and both sides
+// count as heard.
+let recordingPath: string | null = null;
+
 export async function invoke(command: string, args?: Record<string, unknown>): Promise<unknown> {
   switch (command) {
+    case "start_recording": {
+      recordingPath = typeof args?.path === "string" ? args.path : "/demo/live.md";
+      setTimeout(() => emit("transcript-line", "[00:31:52] Them: Let us make this version feel finished before adding anything else."), 200);
+      return recordingPath;
+    }
+    case "stop_recording": recordingPath = null; return null;
+    case "recording_activity": return recordingPath ? { me_silent_ms: 900, them_silent_ms: 2600, mic: "MacBook Pro Microphone" } : null;
+    case "banner_current_state": return { kind: "detected", bundle_id: "us.zoom.xos", app_name: "Zoom" };
+    case "banner_dismiss": return null;
+    case "show_main_window": return null;
     case "get_config": return config;
     case "get_launch_at_login": return "unavailable";
     case "list_sessions": return sessions;
@@ -321,7 +343,6 @@ export async function invoke(command: string, args?: Record<string, unknown>): P
       { id: "claude", name: "Claude Code", installed_version: "2.1.236", latest_version: "2.1.314" },
       { id: "codex", name: "Codex", installed_version: "0.152.0", latest_version: "0.166.0" },
     ] : [];
-    case "recording_activity": return null;
     case "chat_history": return { messages: [], running: false };
     case "storage_stats": return { note_count: notes.length, notes_bytes: 24576, audio_bytes: 0, audio_secs: 0 };
     case "search_sessions": return sessions.filter(s => s.title.toLowerCase().includes(String(args?.query ?? "").toLowerCase())).map(s => ({ ...s, snippets: [], total_matches: 1 }));
@@ -352,7 +373,11 @@ export async function invoke(command: string, args?: Record<string, unknown>): P
     default: throw new Error("This is a fictional preview. Use the native app for this action.");
   }
 }
-export async function listen() { return () => {}; }
+export async function listen(name: string, callback: (event: { payload: unknown }) => void) {
+  if (!listeners.has(name)) listeners.set(name, new Set());
+  listeners.get(name)!.add(callback);
+  return () => { listeners.get(name)?.delete(callback); };
+}
 export async function emitTo() {}
 export function getCurrentWebviewWindow() { return { label: "main" }; }
 export function convertFileSrc(path: string) { return path; }

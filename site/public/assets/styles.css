@@ -413,6 +413,15 @@ pre {
   margin-top: 1.5rem;
 }
 
+.banner {
+  margin: 1.75rem 0 0;
+}
+
+.banner img {
+  max-width: 100%;
+  height: auto;
+}
+
 .intro {
   max-width: var(--measure);
   margin-top: 1.25rem;

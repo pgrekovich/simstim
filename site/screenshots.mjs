@@ -14,8 +14,9 @@
 // render, the render is masked with the hole so it takes the window's exact
 // shape, and focused traffic lights are drawn where the app places them.
 //
-// Writes public/assets/app-{summary,loops}.{png,webp,@2x.webp}, public/og.png
-// and ../docs/images/{summary,open-loops}.png.
+// Writes public/assets/app-{summary,loops,recording}.{png,webp,@2x.webp}, the
+// floating call banner as public/assets/call-banner{,@2x}.png, public/og.png
+// and ../docs/images/{summary,open-loops,call-banner}.png.
 
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -35,6 +36,7 @@ const MARGIN = { left: 68, top: 52, right: 68, bottom: 84 };
 const SLICE = { left: 120, top: 120, right: 120, bottom: 150 };
 const LIGHTS = { cx: [41.5, 87.5, 133.5], cy: 55.5, r: 14 };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const button = (text) => `[...document.querySelectorAll("button")].find((b) => b.textContent.includes(${JSON.stringify(text)}))`;
 
 const profile = mkdtempSync(path.join(tmpdir(), "simstim-shots-"));
 const chrome = spawn(
@@ -48,6 +50,8 @@ try {
   for (const [name, buffer] of Object.entries(renders)) {
     await frame(buffer, path.join(root, "public", "assets", `app-${name}`));
   }
+  await banner(await renderBanner(), path.join(root, "public", "assets", "call-banner"));
+  await sharp(path.join(root, "public", "assets", "call-banner@2x.png")).toFile(path.join(root, "..", "docs", "images", "call-banner.png"));
   await sharp(path.join(root, "public", "assets", "app-summary@2x.webp"))
     .png({ palette: true, quality: 92, compressionLevel: 9 })
     .toFile(path.join(root, "..", "docs", "images", "summary.png"));
@@ -75,9 +79,9 @@ async function waitForChrome() {
   throw new Error(`Chrome did not answer on port ${PORT}; set CHROME to its binary if it is elsewhere`);
 }
 
-/** Drives the preview: the summary of the newest call, then the Open loops pane. */
-async function render() {
-  const target = await (await fetch(`http://127.0.0.1:${PORT}/json/new?${DEMO}`, { method: "PUT" })).json();
+/** One DevTools session on a fresh tab at `url`. */
+async function connect(url) {
+  const target = await (await fetch(`http://127.0.0.1:${PORT}/json/new?${url}`, { method: "PUT" })).json();
   const ws = new WebSocket(target.webSocketDebuggerUrl);
   await new Promise((resolve, reject) => {
     ws.onopen = resolve;
@@ -127,8 +131,17 @@ async function render() {
     const { data } = await send("Page.captureScreenshot", { format: "png" });
     return Buffer.from(data, "base64");
   };
-  const button = (text) => `[...document.querySelectorAll("button")].find((b) => b.textContent.includes(${JSON.stringify(text)}))`;
+  const close = async () => {
+    ws.close();
+    await fetch(`http://127.0.0.1:${PORT}/json/close/${target.id}`);
+  };
+  return { send, evaluate, waitFor, viewport, click, shot, close };
+}
 
+
+/** Drives the preview: the newest call's summary, the Open loops pane, then a recording into that call. */
+async function render() {
+  const { send, evaluate, waitFor, viewport, click, shot, close } = await connect(DEMO);
   try {
     await viewport(760);
     await send("Page.enable");
@@ -146,11 +159,50 @@ async function render() {
     await click(`document.querySelector('button[title^="Open loops"]')`);
     await waitFor(`document.body.innerText.includes("Waiting for") && document.body.innerText.includes("Done")`);
     const loops = await shot();
-    return { summary, loops };
+
+    // Record continues the open note. Date.now is shifted while Record is
+    // clicked so the toolbar reads twelve minutes in, not 00:00.
+    await viewport(760);
+    await sleep(300);
+    await click(button("Website design review"));
+    await waitFor(`!!${button("Transcript")}`);
+    await evaluate("window.__realNow = Date.now; Date.now = () => window.__realNow() - 754000; 'ok'");
+    await click(`document.querySelector('button[title^="Record into this note"]')`);
+    await waitFor(`!!document.querySelector('[aria-label="Who is being heard"] [data-heard="true"]')`);
+    await evaluate("Date.now = window.__realNow; 'ok'");
+    await click(button("Transcript"));
+    await waitFor(`document.body.innerText.includes("feel finished before adding")`);
+    await sleep(1200);
+    const recording = await shot();
+    return { summary, loops, recording };
   } finally {
-    ws.close();
-    await fetch(`http://127.0.0.1:${PORT}/json/close/${target.id}`);
+    await close();
   }
+}
+
+/** The floating call banner on a transparent window, at its real size. */
+async function renderBanner() {
+  const { send, waitFor, shot, close } = await connect(`${DEMO}?surface=banner`);
+  try {
+    await send("Emulation.setDeviceMetricsOverride", { width: 392, height: 170, deviceScaleFactor: 2, mobile: false });
+    await send("Emulation.setDefaultBackgroundColorOverride", { color: { r: 0, g: 0, b: 0, a: 0 } });
+    await send("Page.enable");
+    await waitFor(`document.body.innerText.includes("Call detected")`);
+    return await shot();
+  } finally {
+    await close();
+  }
+}
+
+/** Trims the banner window's empty space and writes 1x and 2x PNGs. */
+async function banner(content, out) {
+  const trimmed = await sharp(content).trim({ threshold: 1, background: { r: 0, g: 0, b: 0, alpha: 0 } }).toBuffer({ resolveWithObject: true });
+  const w2 = trimmed.info.width - (trimmed.info.width % 2);
+  const h2 = trimmed.info.height - (trimmed.info.height % 2);
+  const even = await sharp(trimmed.data).extract({ left: 0, top: 0, width: w2, height: h2 }).png().toBuffer();
+  await sharp(even).png({ compressionLevel: 9 }).toFile(`${out}@2x.png`);
+  await sharp(even).resize(w2 / 2, h2 / 2, { kernel: "lanczos3" }).png({ compressionLevel: 9 }).toFile(`${out}.png`);
+  console.log(`${path.basename(out)}: ${w2 / 2}x${h2 / 2}, set these on its <img> in src/index.html`);
 }
 
 /** Composes a 2x content render into the window frame and writes the three site variants. */

@@ -212,11 +212,12 @@ async function frame(content, out) {
     .composite([{ input: window, left: MARGIN.left, top: MARGIN.top }])
     .png()
     .toBuffer();
-  // Trim the faintest shadow and keep even dimensions so the 1x variant is exact.
-  const trimmed = await sharp(full).trim({ threshold: 12, background: { r: 0, g: 0, b: 0, alpha: 0 } }).toBuffer({ resolveWithObject: true });
-  const w2 = trimmed.info.width - (trimmed.info.width % 2);
-  const h2 = trimmed.info.height - (trimmed.info.height % 2);
-  const even = await sharp(trimmed.data).extract({ left: 0, top: 0, width: w2, height: h2 }).png().toBuffer();
+  // The margins hold macOS's whole shadow, already faded to nothing at the
+  // edge, so nothing is trimmed: a threshold would cut it off along a
+  // rectangle. The margins are even, so the 1x variant is exact.
+  const w2 = W;
+  const h2 = H;
+  const even = full;
   await sharp(even).resize(w2 / 2, h2 / 2, { kernel: "lanczos3" }).png({ palette: true, quality: 90, compressionLevel: 9 }).toFile(`${out}.png`);
   await sharp(even).resize(w2 / 2, h2 / 2, { kernel: "lanczos3" }).webp({ quality: 88, alphaQuality: 100 }).toFile(`${out}.webp`);
   await sharp(even).webp({ quality: 86, alphaQuality: 100 }).toFile(`${out}@2x.webp`);

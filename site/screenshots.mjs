@@ -15,8 +15,9 @@
 // shape, and focused traffic lights are drawn where the app places them.
 //
 // Writes public/assets/app-{summary,loops,recording}.{png,webp,@2x.webp}, the
-// floating call banner as public/assets/call-banner{,@2x}.png, public/og.png
-// and ../docs/images/{summary,open-loops,call-banner}.png.
+// card crops loops-pane and hearing as {,@2x}.webp, the floating call banner
+// as public/assets/call-banner{,@2x}.png, public/og.png and
+// ../docs/images/{summary,open-loops,call-banner}.png.
 
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -50,6 +51,9 @@ try {
   for (const [name, buffer] of Object.entries(renders)) {
     await frame(buffer, path.join(root, "public", "assets", `app-${name}`));
   }
+  // Card crops for the feature grid, from the same renders (2x pixels).
+  await crop(renders.loops, { left: 600, top: 90, width: 1600, height: 1040 }, path.join(root, "public", "assets", "loops-pane"));
+  await crop(renders.recording, { left: 1560, top: 16, width: 470, height: 100 }, path.join(root, "public", "assets", "hearing"));
   await banner(await renderBanner(), path.join(root, "public", "assets", "call-banner"));
   await sharp(path.join(root, "public", "assets", "call-banner@2x.png")).toFile(path.join(root, "..", "docs", "images", "call-banner.png"));
   await sharp(path.join(root, "public", "assets", "app-summary@2x.webp"))
@@ -68,7 +72,7 @@ try {
 }
 
 async function waitForChrome() {
-  for (let i = 0; i < 50; i++) {
+  for (let i = 0; i < 150; i++) {
     try {
       await fetch(`http://127.0.0.1:${PORT}/json/version`);
       return;
@@ -79,9 +83,12 @@ async function waitForChrome() {
   throw new Error(`Chrome did not answer on port ${PORT}; set CHROME to its binary if it is elsewhere`);
 }
 
-/** One DevTools session on a fresh tab at `url`. */
-async function connect(url) {
-  const target = await (await fetch(`http://127.0.0.1:${PORT}/json/new?${url}`, { method: "PUT" })).json();
+/**
+ * One DevTools session on a fresh blank tab. The page is navigated only after
+ * the viewport is set: the app sizes its sidebar on first render and keeps it.
+ */
+async function connect() {
+  const target = await (await fetch(`http://127.0.0.1:${PORT}/json/new?about:blank`, { method: "PUT" })).json();
   const ws = new WebSocket(target.webSocketDebuggerUrl);
   await new Promise((resolve, reject) => {
     ws.onopen = resolve;
@@ -141,7 +148,7 @@ async function connect(url) {
 
 /** Drives the preview: the newest call's summary, the Open loops pane, then a recording into that call. */
 async function render() {
-  const { send, evaluate, waitFor, viewport, click, shot, close } = await connect(DEMO);
+  const { send, evaluate, waitFor, viewport, click, shot, close } = await connect();
   try {
     await viewport(760);
     await send("Page.enable");
@@ -182,16 +189,25 @@ async function render() {
 
 /** The floating call banner on a transparent window, at its real size. */
 async function renderBanner() {
-  const { send, waitFor, shot, close } = await connect(`${DEMO}?surface=banner`);
+  const { send, waitFor, shot, close } = await connect();
   try {
     await send("Emulation.setDeviceMetricsOverride", { width: 392, height: 170, deviceScaleFactor: 2, mobile: false });
     await send("Emulation.setDefaultBackgroundColorOverride", { color: { r: 0, g: 0, b: 0, a: 0 } });
     await send("Page.enable");
+    await send("Page.navigate", { url: `${DEMO}?surface=banner` });
     await waitFor(`document.body.innerText.includes("Call detected")`);
     return await shot();
   } finally {
     await close();
   }
+}
+
+/** A region of a 2x render as 1x and 2x WebP, for the feature cards. */
+async function crop(content, region, out) {
+  const part = await sharp(content).extract(region).png().toBuffer();
+  await sharp(part).webp({ quality: 90, alphaQuality: 100 }).toFile(`${out}@2x.webp`);
+  await sharp(part).resize(region.width / 2, region.height / 2, { kernel: "lanczos3" }).webp({ quality: 90, alphaQuality: 100 }).toFile(`${out}.webp`);
+  console.log(`${path.basename(out)}: ${region.width / 2}x${region.height / 2}`);
 }
 
 /** Trims the banner window's empty space and writes 1x and 2x PNGs. */

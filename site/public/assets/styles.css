@@ -289,45 +289,8 @@ pre {
 }
 
 .section > h2 + p,
-.section > h2 + .columns,
-.section > h2 + .steps {
+.section > h2 + .columns {
   margin-top: 1.5rem;
-}
-
-.steps {
-  display: grid;
-  gap: 2rem;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  counter-reset: step;
-}
-
-.steps li {
-  counter-increment: step;
-  padding-top: 1.1rem;
-  border-top: 1px solid var(--border);
-}
-
-.steps h3::before {
-  content: counter(step, decimal-leading-zero);
-  display: block;
-  margin-bottom: 0.9rem;
-  color: var(--fg-muted);
-  font: 500 0.85rem/1 var(--font-mono);
-  letter-spacing: 0.04em;
-}
-
-.steps p {
-  margin-top: 0.6rem;
-  color: var(--fg-quiet);
-}
-
-@media (min-width: 48rem) {
-  .steps {
-    grid-template-columns: repeat(3, 1fr);
-    gap: 2.5rem;
-  }
 }
 
 .columns {
@@ -379,99 +342,148 @@ pre {
   margin-top: 0.7rem;
 }
 
-.facts strong {
-  color: var(--fg);
-  font-weight: 600;
-}
-
 .more {
   margin-top: 1.75rem;
   color: var(--fg-quiet);
 }
 
-/* Text beside a file: the Files section and the Open loops file */
+/* Feature grid: one picture or one line per card, nothing to read twice. */
 
-.split {
+.features {
+  padding-top: 1rem;
+}
+
+.bento {
   display: grid;
-  gap: 2.5rem;
-  align-items: start;
+  grid-template-columns: 1fr;
+  grid-auto-rows: minmax(11rem, auto);
+  grid-auto-flow: dense;
+  gap: 0.75rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
 }
 
-.section > .split {
-  margin-top: 2.5rem;
+@media (min-width: 40rem) {
+  .bento {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-auto-rows: minmax(13.5rem, auto);
+    gap: 1rem;
+  }
+
+  .wide {
+    grid-column: span 2;
+  }
+
+  .tall {
+    grid-row: span 2;
+  }
 }
 
-.split-text p {
+@media (min-width: 60rem) {
+  .bento {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 1.25rem 1.35rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 22px;
+  overflow: hidden;
+}
+
+.card h3 {
+  font-size: 1.1rem;
+  letter-spacing: -0.015em;
+}
+
+.card p {
+  margin-top: 0.35rem;
   color: var(--fg-quiet);
+  font-size: 0.95rem;
+  line-height: 1.5;
 }
 
-.split-text h2 + p {
-  margin-top: 1.5rem;
+.card p a {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: var(--border);
 }
 
-.split-text .facts {
-  margin-top: 1.5rem;
+.card p a:hover {
+  color: var(--fg);
 }
 
-.banner {
-  margin: 1.75rem 0 0;
+/* The picture takes the space above the label, centered, at its real size. */
+.art {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  margin: 0 0 1.1rem;
+  min-height: 6.5rem;
 }
 
-.banner img {
+.art img {
   max-width: 100%;
   height: auto;
 }
 
-/* A real crop of the menu bar while recording, so it keeps the bar's own dark background. */
-.menubar {
+/* A fragment of the app's toolbar keeps its own white surface. */
+.chip {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+/* A window pane bleeds off the right edge of its card, like a screenshot
+   that keeps going. */
+.pane {
+  align-items: flex-start;
+  justify-content: flex-start;
+  margin: -0.25rem -1.35rem 1.1rem 0;
+  min-height: 0;
+}
+
+.pane picture,
+.pane img {
   display: block;
-  margin-top: 0.6rem;
-}
-
-.intro {
-  max-width: var(--measure);
-  margin-top: 1.25rem;
-  color: var(--fg-quiet);
-  font-size: 1.125rem;
-}
-
-.section .shot {
-  margin-top: 2.25rem;
+  width: 100%;
+  border-top-left-radius: 10px;
+  border-bottom-left-radius: 10px;
+  border: 1px solid var(--border);
+  border-right: 0;
+  background: var(--bg);
 }
 
 .tree {
-  margin-top: 1.5rem;
-}
-
-.note {
-  margin: 0;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: var(--surface);
+  width: 100%;
+  padding: 0.85rem 1rem;
+  font-size: 0.74rem;
+  background: var(--bg);
   overflow: hidden;
 }
 
-.note figcaption {
-  padding: 0.65rem 1.15rem;
-  border-bottom: 1px solid var(--border);
-  color: var(--fg-muted);
-  font: 500 0.8rem/1.4 var(--font-mono);
+/* A statement card is one sentence, large, with room around it. */
+.statement {
+  justify-content: center;
+  text-align: center;
+  padding: 1.75rem 1.5rem;
 }
 
-.note pre {
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  font-size: 0.82rem;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+.statement h3 {
+  font-size: clamp(1.3rem, 1.1rem + 0.8vw, 1.6rem);
+  letter-spacing: -0.02em;
+  line-height: 1.2;
 }
 
-@media (min-width: 60rem) {
-  .split {
-    grid-template-columns: minmax(0, 5fr) minmax(0, 6fr);
-    gap: 4rem;
-  }
+.statement p {
+  max-width: 28rem;
+  margin: 0.6rem auto 0;
 }
 
 /* Download */

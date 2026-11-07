@@ -48,6 +48,7 @@ repository is public.
 ## Images
 
 `public/assets/app-{summary,loops,recording}*` are the app screenshots,
+`loops-pane*` and `hearing*` crops of them for the feature cards,
 `public/assets/call-banner*` the floating call banner, `public/og.png` the
 link preview and `docs/images/*.png` the README copies. All of them come
 from one script:

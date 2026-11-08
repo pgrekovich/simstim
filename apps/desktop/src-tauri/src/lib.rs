@@ -78,8 +78,36 @@ struct Recording {
     pending_edits: Arc<Mutex<PendingEdits>>,
 }
 
+/// The one recording slot. `Starting` is held while `start_recording` sets
+/// up devices on the blocking pool: a second start is rejected at once and
+/// nobody holds the lock across that (up to seconds long) work.
+enum RecordingSlot {
+    Idle,
+    Starting,
+    Live(Recording),
+}
+
+impl RecordingSlot {
+    fn live(&self) -> Option<&Recording> {
+        match self {
+            RecordingSlot::Live(recording) => Some(recording),
+            _ => None,
+        }
+    }
+
+    fn take_live(&mut self) -> Option<Recording> {
+        if !matches!(self, RecordingSlot::Live(_)) {
+            return None;
+        }
+        match std::mem::replace(self, RecordingSlot::Idle) {
+            RecordingSlot::Live(recording) => Some(recording),
+            _ => None,
+        }
+    }
+}
+
 pub struct AppState {
-    recording: Mutex<Option<Recording>>,
+    recording: Mutex<RecordingSlot>,
     /// Sessions between Stop and completed transcript/audio finalization. Keep them
     /// reserved after freeing the recording slot so another call can start without
     /// allowing a second writer to these files.
@@ -109,7 +137,7 @@ pub struct HearingStatus {
 fn recording_activity(state: tauri::State<'_, AppState>) -> Option<HearingStatus> {
     let (activity, mic) = {
         let guard = state.recording.lock().unwrap();
-        let recording = guard.as_ref()?;
+        let recording = guard.live()?;
         (
             recording.activity.clone(),
             recording.mic.device_name().to_string(),
@@ -141,7 +169,7 @@ impl Drop for FinalizingGuard {
 impl Default for AppState {
     fn default() -> Self {
         AppState {
-            recording: Mutex::new(None),
+            recording: Mutex::new(RecordingSlot::Idle),
             finalizing: Mutex::new(Vec::new()),
         }
     }
@@ -151,7 +179,11 @@ impl AppState {
     /// The currently-recording session's output path, if any. Used by
     /// `sessions::save_session` to enforce the single-writer rule.
     fn active_output_path(&self) -> Option<PathBuf> {
-        self.recording.lock().unwrap().as_ref().map(|r| r.path.clone())
+        self.recording
+            .lock()
+            .unwrap()
+            .live()
+            .map(|r| r.path.clone())
     }
 
     /// Whether `path` is currently being finalized (its stop-to-encode
@@ -169,7 +201,7 @@ impl AppState {
     pub(crate) fn recording_status(&self) -> Option<RecordingStatus> {
         let (id, activity) = {
             let guard = self.recording.lock().unwrap();
-            let recording = guard.as_ref()?;
+            let recording = guard.live()?;
             (
                 recording.path.display().to_string(),
                 recording.activity.clone(),
@@ -199,41 +231,114 @@ fn recording_start_conflict(
     None
 }
 
+/// Moves an idle slot to `Starting`, or says why a start is refused.
+fn claim_recording_slot(
+    slot: &mut RecordingSlot,
+    path: Option<&Path>,
+    finalizing: Option<&Path>,
+) -> Result<(), &'static str> {
+    let active = slot.live().map(|r| r.path.clone());
+    if let Some(conflict) = recording_start_conflict(path, active.as_deref(), finalizing) {
+        return Err(conflict);
+    }
+    match slot {
+        RecordingSlot::Idle => {
+            *slot = RecordingSlot::Starting;
+            Ok(())
+        }
+        RecordingSlot::Starting => Err("a recording is already starting"),
+        RecordingSlot::Live(_) => Err("already recording"),
+    }
+}
+
+/// Owns the `Starting` slot while device setup runs off the main thread.
+/// `commit` fills the slot with the live recording. Dropping the claim
+/// without a commit (any setup error, or a panic in it) frees the slot and
+/// restores the call banner the user accepted, so the next click can retry.
+struct StartingClaim {
+    app: AppHandle,
+    committed: bool,
+}
+
+impl StartingClaim {
+    fn commit(mut self, recording: Recording) {
+        let state = self.app.state::<AppState>();
+        let mut slot = state.recording.lock().unwrap();
+        debug_assert!(matches!(*slot, RecordingSlot::Starting));
+        *slot = RecordingSlot::Live(recording);
+        self.committed = true;
+    }
+}
+
+impl Drop for StartingClaim {
+    fn drop(&mut self) {
+        if self.committed {
+            return;
+        }
+        {
+            let state = self.app.state::<AppState>();
+            let mut slot = state.recording.lock().unwrap();
+            if matches!(*slot, RecordingSlot::Starting) {
+                *slot = RecordingSlot::Idle;
+            }
+        }
+        self.app.state::<banner::Banner>().recording_start_failed();
+    }
+}
+
 /// `start_recording(path: None)` starts a brand-new session, exactly as
 /// before. `start_recording(path: Some(p))` instead continues the existing
 /// session at `p`: the worker loads its title/notes/transcript/date/duration
 /// and appends to it rather than overwriting, with new timestamps
 /// continuing from where the file left off (see `session::ContinueFrom`'s
 /// docs). Returns the path recorded into either way.
+///
+/// Async on purpose: opening the microphone and the system-audio tap takes
+/// 0.2-0.5 s on a wired device and seconds on Bluetooth. A sync command
+/// would run that on the main thread, freezing the banner and queueing the
+/// user's clicks. The slot is claimed first, then the work moves to the
+/// blocking pool like `stop_recording`'s finalization.
 #[tauri::command]
-fn start_recording(
+async fn start_recording(
     app: AppHandle,
     path: Option<String>,
     title: Option<String>,
     detected_bundle_id: Option<String>,
-    state: State<AppState>,
-    onboarding: State<onboarding::OnboardingState>,
 ) -> Result<String, String> {
-    if onboarding.is_running() {
+    if app.state::<onboarding::OnboardingState>().is_running() {
         return Err("wait for the permission check to finish".into());
     }
     let path = path.map(PathBuf::from);
     if path.is_some() && (title.is_some() || detected_bundle_id.is_some()) {
         return Err("a detected-call title can only be applied to a new session".into());
     }
-    let mut guard = state.recording.lock().unwrap();
-    let active_path = guard.as_ref().map(|r| r.path.clone());
-    let finalizing_path = path.as_deref().and_then(|p| state.finalizing_match(p));
-    if let Some(conflict) = recording_start_conflict(
-        path.as_deref(),
-        active_path.as_deref(),
-        finalizing_path.as_deref(),
-    ) {
-        return Err(conflict.into());
+    {
+        let state = app.state::<AppState>();
+        let finalizing_path = path.as_deref().and_then(|p| state.finalizing_match(p));
+        let mut slot = state.recording.lock().unwrap();
+        claim_recording_slot(&mut slot, path.as_deref(), finalizing_path.as_deref())?;
     }
-    if guard.is_some() {
-        return Err("already recording".into());
-    }
+    let claim = StartingClaim {
+        app: app.clone(),
+        committed: false,
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        start_recording_blocking(app, claim, path, title, detected_bundle_id)
+    })
+    .await
+    .map_err(|error| format!("recording start task failed: {error}"))?
+}
+
+/// The device and worker setup behind `start_recording`, on the blocking
+/// pool. The banner hides as soon as the checks pass, before any device
+/// work, so accepting a call feels instant; the claim restores it on error.
+fn start_recording_blocking(
+    app: AppHandle,
+    claim: StartingClaim,
+    path: Option<PathBuf>,
+    title: Option<String>,
+    detected_bundle_id: Option<String>,
+) -> Result<String, String> {
     let cfg = Config::load();
     if !cfg.onboarding_complete {
         return Err("finish first-run setup before recording".into());
@@ -256,6 +361,7 @@ fn start_recording(
         }
         None
     };
+    app.state::<banner::Banner>().recording_starting();
     let (tx, rx) = std::sync::mpsc::channel();
     // Call apps pick their microphone independently of the macOS default
     // input, so record from the device the call app is capturing with and
@@ -304,7 +410,7 @@ fn start_recording(
         },
     );
     let activity = session.activity();
-    *guard = Some(Recording {
+    claim.commit(Recording {
         session,
         activity,
         mic,
@@ -330,7 +436,7 @@ fn update_active_session(
     state: State<AppState>,
 ) -> Result<(), String> {
     let guard = state.recording.lock().unwrap();
-    let recording = guard.as_ref().ok_or("not recording")?;
+    let recording = guard.live().ok_or("not recording")?;
     recording.pending_edits.lock().unwrap().update(title, notes);
     Ok(())
 }
@@ -340,7 +446,10 @@ async fn stop_recording(app: AppHandle) -> Result<String, String> {
     let state = app.state::<AppState>();
     let recording = {
         let mut active = state.recording.lock().unwrap();
-        let recording = active.take().ok_or("not recording")?;
+        if matches!(*active, RecordingSlot::Starting) {
+            return Err("the recording is still starting".into());
+        }
+        let recording = active.take_live().ok_or("not recording")?;
         // Publish finalization before releasing the active-state lock, so
         // no reader can mistake an unfinished audio file for a saved one.
         state
@@ -736,6 +845,45 @@ mod tests {
         state.finalizing.lock().unwrap().retain(|p| p != &b);
         assert_eq!(state.finalizing_match(&a), Some(a.clone()));
         assert_eq!(state.finalizing_match(&b), None);
+    }
+
+    #[test]
+    fn claiming_the_slot_rejects_a_second_start_until_the_claim_is_released() {
+        let mut slot = RecordingSlot::Idle;
+        assert_eq!(claim_recording_slot(&mut slot, None, None), Ok(()));
+        assert!(matches!(slot, RecordingSlot::Starting));
+        // The banner's second queued click, or Cmd+R during setup.
+        assert_eq!(
+            claim_recording_slot(&mut slot, None, None),
+            Err("a recording is already starting")
+        );
+        // What StartingClaim's drop does after a failed setup.
+        slot = RecordingSlot::Idle;
+        assert_eq!(claim_recording_slot(&mut slot, None, None), Ok(()));
+    }
+
+    #[test]
+    fn claiming_the_slot_checks_path_conflicts_before_taking_it() {
+        let mut slot = RecordingSlot::Idle;
+        assert_eq!(
+            claim_recording_slot(
+                &mut slot,
+                Some(Path::new("/tmp/call.md")),
+                Some(Path::new("/tmp/call.md"))
+            ),
+            Err("this session is still saving; wait for it to finish or start a new note")
+        );
+        assert!(matches!(slot, RecordingSlot::Idle));
+    }
+
+    #[test]
+    fn take_live_leaves_a_starting_slot_alone() {
+        let mut slot = RecordingSlot::Starting;
+        assert!(slot.take_live().is_none());
+        assert!(matches!(slot, RecordingSlot::Starting));
+        let mut slot = RecordingSlot::Idle;
+        assert!(slot.take_live().is_none());
+        assert!(matches!(slot, RecordingSlot::Idle));
     }
 
     #[test]

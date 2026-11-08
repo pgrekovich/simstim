@@ -39,6 +39,12 @@ default is used. The app's own aggregate device is never selected. The device
 is fixed for the recording; a microphone switch inside the call app is not
 followed. The toolbar's "you" dot names the device in its tooltip.
 
+Starting claims the single recording slot as `Starting`, then opens the
+microphone and the tap on the blocking pool, like stop's finalization. A
+second start is refused at once, and the main thread stays free for the
+banner and its clicks while a device takes its 0.2-2 s to open. The slot
+is freed again if setup fails or panics.
+
 Silero VAD groups speech into chunks for Parakeet. Interim decoding provides
 live text; finalized segments are appended to disk. The worker also forces
 chunk boundaries for continuous speech. Parakeet's model configuration uses
@@ -97,6 +103,12 @@ Detection observes Core Audio microphone-usage metadata. Device listeners
 trigger process scans, with debounce and per-app cooldown; detection does
 not authorize recording. Chromium helpers must resolve to their outer app
 bundle. Browser microphone activity cannot identify a meeting tab reliably.
+
+The banner is a non-activating panel clicked while the call app is active,
+so its webview, like the main window's, accepts the first mouse click
+instead of spending it on activation. Accepting a suggestion hides the
+banner before any device work and remembers it; a failed start shows the
+same suggestion again, a successful one commits the hide.
 
 Audio capture permissions depend on the launching application's TCC identity.
 Unsigned builds may inherit the terminal's identity and record silent system

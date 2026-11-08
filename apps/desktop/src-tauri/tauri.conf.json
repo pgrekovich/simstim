@@ -20,6 +20,7 @@
         "minWidth": 800,
         "minHeight": 500,
         "titleBarStyle": "Overlay",
+        "acceptFirstMouse": true,
         "trafficLightPosition": {
           "x": 14,
           "y": 30

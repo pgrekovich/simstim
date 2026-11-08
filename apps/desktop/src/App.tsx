@@ -436,9 +436,16 @@ function App() {
   // handleStopRef: the permanent listener must see current busy/model/recording state.
   useEffect(() => {
     bannerStartRef.current = (payload: CallDetectedPayload) => {
-      if (!appConfig?.onboarding_complete || busy || !modelReady || activePath !== null) {
-        // Cannot start right now (mid-operation, model missing, or already
-        // recording): surface the app instead of silently doing nothing.
+      if (busy || activePath !== null) {
+        // A start is already in flight (the backend hides the banner as soon
+        // as it accepts one) or a recording is live: nothing to do. This used
+        // to surface the app, which stole focus from the call when a second
+        // click queued up behind a slow device setup.
+        return;
+      }
+      if (!appConfig?.onboarding_complete || !modelReady) {
+        // Cannot start at all (setup incomplete, model missing): surface the
+        // app, which explains what is needed, instead of silently doing nothing.
         void showMainWindow();
         return;
       }

@@ -28,7 +28,17 @@ const SCREEN_MARGIN: f64 = 16.0;
 pub enum BannerState {
     Hidden,
     Detected { bundle_id: String, app_name: String },
+    /// The user accepted the suggestion and the recording is being set up.
+    /// The window is hidden at once so the click feels instant, but the
+    /// suggestion is remembered: a failed start brings it back.
+    Accepted { bundle_id: String, app_name: String },
     Ended,
+}
+
+impl BannerState {
+    fn is_visible(&self) -> bool {
+        matches!(self, BannerState::Detected { .. } | BannerState::Ended)
+    }
 }
 
 /// The `banner-state` event payload and `banner_current_state` return value.
@@ -43,7 +53,7 @@ pub enum BannerPayload {
 impl From<&BannerState> for BannerPayload {
     fn from(state: &BannerState) -> Self {
         match state {
-            BannerState::Hidden => BannerPayload::Hidden,
+            BannerState::Hidden | BannerState::Accepted { .. } => BannerPayload::Hidden,
             BannerState::Detected {
                 bundle_id,
                 app_name,
@@ -93,11 +103,15 @@ impl BannerController {
         })
     }
 
-    /// The detected app released the mic before the user reacted. Only hides
-    /// the banner that this exact bundle put up.
+    /// The detected app released the mic before the user reacted (or while
+    /// their accepted start was still setting up). Only clears the
+    /// suggestion that this exact bundle put up.
     pub fn on_detection_cleared(&mut self, bundle_id: &str) -> Option<BannerState> {
         match &self.state {
-            BannerState::Detected { bundle_id: shown, .. } if shown == bundle_id => {
+            BannerState::Detected { bundle_id: shown, .. }
+            | BannerState::Accepted { bundle_id: shown, .. }
+                if shown == bundle_id =>
+            {
                 self.transition(BannerState::Hidden)
             }
             _ => None,
@@ -108,6 +122,40 @@ impl BannerController {
     /// no state guard is needed here.
     pub fn on_call_ended(&mut self) -> Option<BannerState> {
         self.transition(BannerState::Ended)
+    }
+
+    /// Device setup for a recording has begun. Hides a shown suggestion
+    /// immediately (as `Accepted`, so a failed start can restore it) and
+    /// stops new detections from replacing it meanwhile.
+    pub fn on_recording_starting(&mut self) -> Option<BannerState> {
+        self.recording_live = true;
+        match &self.state {
+            BannerState::Detected {
+                bundle_id,
+                app_name,
+            } => self.transition(BannerState::Accepted {
+                bundle_id: bundle_id.clone(),
+                app_name: app_name.clone(),
+            }),
+            _ => None,
+        }
+    }
+
+    /// Device setup failed: the call is still on, so the suggestion the
+    /// user accepted comes back. Nothing to restore after a start from the
+    /// main window or once the app released the mic.
+    pub fn on_recording_start_failed(&mut self) -> Option<BannerState> {
+        self.recording_live = false;
+        match &self.state {
+            BannerState::Accepted {
+                bundle_id,
+                app_name,
+            } => self.transition(BannerState::Detected {
+                bundle_id: bundle_id.clone(),
+                app_name: app_name.clone(),
+            }),
+            _ => None,
+        }
     }
 
     pub fn on_recording_started(&mut self) -> Option<BannerState> {
@@ -160,6 +208,11 @@ impl Banner {
             .resizable(false)
             .focused(false)
             .visible(false)
+            // The banner is clicked while another app (the call) is active.
+            // Without this, AppKit spends the first click making the panel
+            // key and the button never receives it: "Start recording" needed
+            // two clicks.
+            .accept_first_mouse(true)
             .inner_size(WINDOW_WIDTH, WINDOW_HEIGHT)
             .visible_on_all_workspaces(true)
             .build()?;
@@ -200,6 +253,18 @@ impl Banner {
         self.apply(next);
     }
 
+    pub fn recording_starting(&self) {
+        let mut controller = self.controller.lock().unwrap();
+        let next = controller.on_recording_starting();
+        self.apply(next);
+    }
+
+    pub fn recording_start_failed(&self) {
+        let mut controller = self.controller.lock().unwrap();
+        let next = controller.on_recording_start_failed();
+        self.apply(next);
+    }
+
     pub fn recording_started(&self) {
         let mut controller = self.controller.lock().unwrap();
         let next = controller.on_recording_started();
@@ -224,7 +289,7 @@ impl Banner {
 
     fn apply(&self, next: Option<BannerState>) {
         let Some(state) = next else { return };
-        let visible = !matches!(state, BannerState::Hidden);
+        let visible = state.is_visible();
         // Emit before showing so the webview never gets displayed while
         // still rendering the previous state.
         if let Err(error) = self
@@ -436,6 +501,59 @@ mod tests {
     fn recording_start_while_hidden_is_ignored() {
         let mut c = BannerController::new();
         assert_eq!(c.on_recording_started(), None);
+    }
+
+    #[test]
+    fn starting_hides_the_detected_banner_and_a_failed_start_brings_it_back() {
+        let mut c = BannerController::new();
+        c.on_detected("us.zoom.xos", "Zoom");
+        let accepted = c.on_recording_starting().expect("hides");
+        assert!(!accepted.is_visible());
+        assert!(matches!(BannerPayload::from(&accepted), BannerPayload::Hidden));
+
+        // The call is still on and a new detection must not replace the
+        // remembered suggestion while devices are being set up.
+        assert_eq!(c.on_detected("com.hnc.Discord", "Discord"), None);
+
+        assert_eq!(
+            c.on_recording_start_failed(),
+            Some(detected("us.zoom.xos", "Zoom"))
+        );
+        // Detections flow again after the failure.
+        assert_eq!(
+            c.on_detected("com.hnc.Discord", "Discord"),
+            Some(detected("com.hnc.Discord", "Discord"))
+        );
+    }
+
+    #[test]
+    fn a_successful_start_commits_the_accepted_banner_to_hidden() {
+        let mut c = BannerController::new();
+        c.on_detected("us.zoom.xos", "Zoom");
+        c.on_recording_starting();
+        assert_eq!(c.on_recording_started(), Some(BannerState::Hidden));
+        assert_eq!(c.on_detected("us.zoom.xos", "Zoom"), None);
+        assert_eq!(c.on_recording_stopped(), None);
+        assert_eq!(*c.current(), BannerState::Hidden);
+    }
+
+    #[test]
+    fn starting_from_the_main_window_has_nothing_to_hide_or_restore() {
+        let mut c = BannerController::new();
+        assert_eq!(c.on_recording_starting(), None);
+        assert_eq!(c.on_detected("us.zoom.xos", "Zoom"), None);
+        assert_eq!(c.on_recording_start_failed(), None);
+        assert_eq!(*c.current(), BannerState::Hidden);
+    }
+
+    #[test]
+    fn a_call_released_during_setup_does_not_come_back_after_a_failed_start() {
+        let mut c = BannerController::new();
+        c.on_detected("us.zoom.xos", "Zoom");
+        c.on_recording_starting();
+        assert_eq!(c.on_detection_cleared("us.zoom.xos"), Some(BannerState::Hidden));
+        assert_eq!(c.on_recording_start_failed(), None);
+        assert_eq!(*c.current(), BannerState::Hidden);
     }
 
     #[test]

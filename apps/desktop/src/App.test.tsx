@@ -257,14 +257,44 @@ describe("App: call detection via the banner window", () => {
     expect(ipc.showMainWindow).not.toHaveBeenCalled();
   });
 
-  it("surfaces the main window instead of starting while recording", async () => {
+  it("ignores a banner start while recording instead of stealing focus", async () => {
     render(<App />);
     fireEvent.click(await findStartControl());
     await screen.findByRole("button", { name: /stop/i });
 
     await emitBannerStart();
-    await waitFor(() => expect(ipc.showMainWindow).toHaveBeenCalledTimes(1));
+    // Give a wrongly scheduled start or focus steal time to show up.
+    await new Promise((resolve) => setTimeout(resolve, 20));
     expect(ipc.startRecording).toHaveBeenCalledTimes(1);
+    expect(ipc.showMainWindow).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: /stop/i })).toBeVisible();
+  });
+
+  it("ignores a second banner click while the first start is still setting up", async () => {
+    // Device setup takes 0.2-0.5 s on a wired mic and seconds on Bluetooth;
+    // the user's second click must neither start twice nor open the app.
+    let finishStart: (path: string) => void = () => {};
+    vi.mocked(ipc.startRecording).mockImplementationOnce(
+      () =>
+        new Promise<string>((resolve) => {
+          finishStart = resolve;
+        }),
+    );
+    render(<App />);
+    const start = await findStartControl();
+    await waitFor(() => expect(start).toBeEnabled());
+
+    await emitBannerStart();
+    await waitFor(() => expect(ipc.startRecording).toHaveBeenCalledTimes(1));
+    await emitBannerStart();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(ipc.startRecording).toHaveBeenCalledTimes(1);
+    expect(ipc.showMainWindow).not.toHaveBeenCalled();
+
+    await act(async () => {
+      finishStart("/tmp/detected.md");
+    });
+    expect(await screen.findByRole("button", { name: /stop/i })).toBeVisible();
   });
 
   it("surfaces the main window instead of starting when the model is not ready", async () => {

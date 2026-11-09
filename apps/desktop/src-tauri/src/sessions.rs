@@ -327,12 +327,19 @@ pub fn rewrite_transcript_at(path: &Path, new_transcript: &str, asr_id: &str) ->
     })
 }
 
+/// `title_by:` value for a title the app itself minted (a detected call's
+/// "{app} call {HH:MM}", see `detected_call_title`). `enhance` treats any
+/// `title_by` as replaceable, so new notes do not depend on the shape
+/// heuristic below.
+pub(crate) const TITLE_BY_APP: &str = "simstim";
+
 /// Whether `title` is one the APP generated rather than one the user
 /// typed: the "Untitled" default (`create_session`, a fresh recording), or
-/// the detected-call shape `"{app} call {time}"` (`detectedCallTitle` in
-/// App.tsx -- the time part is locale-formatted, so both "14:03" and
-/// "2:03 PM" occur). Only such titles may ever be replaced by a
-/// model-proposed one: a title the user typed themselves is their words
+/// the detected-call shape `"{app} call {time}"`. Notes from before
+/// `title_by: simstim` was written carry no marker, and older builds minted
+/// the time in the UI's locale, so both "14:03" and "2:03 PM" occur. Only
+/// such titles may ever be replaced by a model-proposed one: a title the
+/// user typed themselves is their words
 /// (rule 6) and is never touched.
 pub(crate) fn title_is_auto(title: &str) -> bool {
     let title = title.trim();

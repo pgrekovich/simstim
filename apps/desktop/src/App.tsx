@@ -204,11 +204,6 @@ const ACTIVE_SESSION_PLACEHOLDER: Pick<SessionData, "title" | "notes"> = {
   notes: "",
 };
 
-function detectedCallTitle(appName: string, now = new Date()): string {
-  const time = now.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  return `${appName} call ${time}`;
-}
-
 type Status =
   | { kind: "idle" }
   | { kind: "loading-model" }
@@ -929,8 +924,7 @@ function App() {
       // no SessionView mounted at all (nothing selected).
       await activeSessionViewRef.current?.flushPendingEdits();
 
-      const detectedTitle = detected ? detectedCallTitle(detected.app_name) : undefined;
-      let seedTitle = detectedTitle ?? ACTIVE_SESSION_PLACEHOLDER.title;
+      let seedTitle = ACTIVE_SESSION_PLACEHOLDER.title;
       let seedNotes = ACTIVE_SESSION_PLACEHOLDER.notes;
       let seedLines: string[] = [];
       if (continuePath !== null) {
@@ -942,13 +936,12 @@ function App() {
       setLines(seedLines);
       setActiveTitle(seedTitle);
       setActiveNotes(seedNotes);
-      const path = detected
-        ? await startRecording(
-            null,
-            detectedTitle,
-            detected.bundle_id,
-          )
+      const started = detected
+        ? await startRecording(null, detected.app_name, detected.bundle_id)
         : await startRecording(continuePath);
+      const path = started.path;
+      // The backend titles a detected call's note; show that title live.
+      if (started.title !== null) setActiveTitle(started.title);
       setRecordingStartedAt(Date.now());
       setActivePath(path);
       setSelectedPath(path);

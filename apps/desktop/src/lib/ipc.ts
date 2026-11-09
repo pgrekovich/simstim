@@ -390,16 +390,23 @@ export function deleteModel(id: string): Promise<void> {
  * behavior). `path: <a session's path>` instead continues that existing
  * session: the worker loads its title/notes/transcript/date/duration and
  * appends to it rather than overwriting, with new timestamps continuing from
- * where the file left off. Mirrors `start_recording`
- * (apps/desktop/src-tauri/src/lib.rs). Resolves with the path recorded into
- * either way.
+ * where the file left off. A detected call (`detectedAppName` with
+ * `detectedBundleId`) always starts a new note the backend titles after the
+ * app. Mirrors `start_recording` (apps/desktop/src-tauri/src/lib.rs).
  */
 export function startRecording(
   path: string | null,
-  title?: string,
+  detectedAppName?: string,
   detectedBundleId?: string,
-): Promise<string> {
-  return invoke("start_recording", { path, title, detectedBundleId });
+): Promise<StartedRecording> {
+  return invoke("start_recording", { path, detectedBundleId, detectedAppName });
+}
+
+/** Mirrors `StartedRecording` (apps/desktop/src-tauri/src/lib.rs). */
+export interface StartedRecording {
+  path: string;
+  /** The title the backend minted for a detected call; `null` otherwise. */
+  title: string | null;
 }
 
 export function stopRecording(): Promise<string> {

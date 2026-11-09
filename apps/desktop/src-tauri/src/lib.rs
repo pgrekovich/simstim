@@ -325,12 +325,31 @@ impl Drop for StartingClaim {
     }
 }
 
+/// `start_recording`'s reply. Mirrors `StartedRecording` in `ipc.ts`.
+#[derive(Clone, Serialize)]
+pub struct StartedRecording {
+    pub path: String,
+    /// The title the backend minted for a detected call ("Zoom call
+    /// 14:03"), `None` when the note keeps its own or the default title.
+    pub title: Option<String>,
+}
+
+/// The title a detected call's note starts with: the app and the local
+/// 24-hour time, minted here (not in the UI) so it has one shape in every
+/// locale. Marked `title_by: simstim` in the file, which is what lets a
+/// later summary replace it while a title the user typed is never touched.
+pub(crate) fn detected_call_title(app_name: &str, now: chrono::DateTime<chrono::Local>) -> String {
+    format!("{} call {}", app_name.trim(), now.format("%H:%M"))
+}
+
 /// `start_recording(path: None)` starts a brand-new session, exactly as
 /// before. `start_recording(path: Some(p))` instead continues the existing
 /// session at `p`: the worker loads its title/notes/transcript/date/duration
 /// and appends to it rather than overwriting, with new timestamps
 /// continuing from where the file left off (see `session::ContinueFrom`'s
-/// docs). Returns the path recorded into either way.
+/// docs). A detected call (`detected_bundle_id` with `detected_app_name`)
+/// always starts a new note titled after the app. Returns the path recorded
+/// into either way, and the minted title.
 ///
 /// Async on purpose: opening the microphone and the system-audio tap takes
 /// 0.2-0.5 s on a wired device and seconds on Bluetooth. A sync command
@@ -341,16 +360,20 @@ impl Drop for StartingClaim {
 async fn start_recording(
     app: AppHandle,
     path: Option<String>,
-    title: Option<String>,
     detected_bundle_id: Option<String>,
-) -> Result<String, String> {
+    detected_app_name: Option<String>,
+) -> Result<StartedRecording, String> {
     if app.state::<onboarding::OnboardingState>().is_running() {
         return Err("wait for the permission check to finish".into());
     }
     let path = path.map(PathBuf::from);
-    if path.is_some() && (title.is_some() || detected_bundle_id.is_some()) {
-        return Err("a detected-call title can only be applied to a new session".into());
+    if path.is_some() && (detected_app_name.is_some() || detected_bundle_id.is_some()) {
+        return Err("a detected call always records into a new note".into());
     }
+    let title = detected_app_name
+        .as_deref()
+        .filter(|name| !name.trim().is_empty())
+        .map(|name| detected_call_title(name, chrono::Local::now()));
     {
         let state = app.state::<AppState>();
         let finalizing_path = path.as_deref().and_then(|p| state.finalizing_match(p));
@@ -361,11 +384,16 @@ async fn start_recording(
         app: app.clone(),
         committed: false,
     };
-    tauri::async_runtime::spawn_blocking(move || {
+    let minted = title.clone();
+    let path = tauri::async_runtime::spawn_blocking(move || {
         start_recording_blocking(app, claim, path, title, detected_bundle_id)
     })
     .await
-    .map_err(|error| format!("recording start task failed: {error}"))?
+    .map_err(|error| format!("recording start task failed: {error}"))??;
+    Ok(StartedRecording {
+        path,
+        title: minted,
+    })
 }
 
 /// The device and worker setup behind `start_recording`, on the blocking
@@ -946,6 +974,14 @@ mod tests {
         state.finalizing.lock().retain(|p| p != &b);
         assert_eq!(state.finalizing_match(&a), Some(a.clone()));
         assert_eq!(state.finalizing_match(&b), None);
+    }
+
+    #[test]
+    fn a_detected_call_title_is_the_app_and_the_local_24h_time() {
+        use chrono::TimeZone;
+        let at = chrono::Local.with_ymd_and_hms(2026, 11, 9, 14, 3, 0).unwrap();
+        assert_eq!(detected_call_title("Zoom", at), "Zoom call 14:03");
+        assert_eq!(detected_call_title(" Microsoft Teams ", at), "Microsoft Teams call 14:03");
     }
 
     #[test]

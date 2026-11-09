@@ -55,7 +55,7 @@ vi.mock("@/lib/ipc", () => ({
     .fn()
     .mockResolvedValue({ title: "", date: "", notes: "", transcript: "", audio_path: null, summary: "", summary_model: null, summary_style: null, people: [] }),
   openNote: vi.fn().mockResolvedValue(undefined),
-  startRecording: vi.fn().mockResolvedValue("/tmp/active.md"),
+  startRecording: vi.fn().mockResolvedValue({ path: "/tmp/active.md", title: null }),
   stopRecording: vi.fn().mockResolvedValue("/tmp/active.md"),
   saveSession: vi.fn().mockResolvedValue(undefined),
   updateActiveSession: vi.fn().mockResolvedValue(undefined),
@@ -192,7 +192,7 @@ beforeEach(() => {
     auto_stop_after_call: false,
     track_open_loops: true,
   });
-  vi.mocked(ipc.startRecording).mockReset().mockResolvedValue("/tmp/active.md");
+  vi.mocked(ipc.startRecording).mockReset().mockResolvedValue({ path: "/tmp/active.md", title: null });
   vi.mocked(ipc.stopRecording).mockReset().mockResolvedValue("/tmp/active.md");
   vi.mocked(ipc.openNote).mockClear();
   vi.mocked(ipc.listSessions).mockClear();
@@ -251,9 +251,10 @@ describe("App: call detection via the banner window", () => {
     await emitBannerStart();
 
     await waitFor(() => expect(ipc.startRecording).toHaveBeenCalledTimes(1));
-    const [path, title, bundleId] = vi.mocked(ipc.startRecording).mock.calls[0];
+    const [path, appName, bundleId] = vi.mocked(ipc.startRecording).mock.calls[0];
     expect(path).toBeNull();
-    expect(title).toMatch(/^Slack call /);
+    // The backend mints the title from the app name; the UI passes the name.
+    expect(appName).toBe("Slack");
     expect(bundleId).toBe("com.tinyspeck.slackmacgap");
     expect(ipc.showMainWindow).not.toHaveBeenCalled();
   });
@@ -274,10 +275,10 @@ describe("App: call detection via the banner window", () => {
   it("ignores a second banner click while the first start is still setting up", async () => {
     // Device setup takes 0.2-0.5 s on a wired mic and seconds on Bluetooth;
     // the user's second click must neither start twice nor open the app.
-    let finishStart: (path: string) => void = () => {};
+    let finishStart: (started: { path: string; title: string | null }) => void = () => {};
     vi.mocked(ipc.startRecording).mockImplementationOnce(
       () =>
-        new Promise<string>((resolve) => {
+        new Promise<{ path: string; title: string | null }>((resolve) => {
           finishStart = resolve;
         }),
     );
@@ -293,7 +294,7 @@ describe("App: call detection via the banner window", () => {
     expect(ipc.showMainWindow).not.toHaveBeenCalled();
 
     await act(async () => {
-      finishStart("/tmp/detected.md");
+      finishStart({ path: "/tmp/detected.md", title: "Zoom call 14:03" });
     });
     expect(await screen.findByRole("button", { name: /stop/i })).toBeVisible();
   });
@@ -730,7 +731,7 @@ describe("App: a saving session must not block the next call", () => {
   });
 
   it("starts a detected call from the banner while the previous session is still saving", async () => {
-    vi.mocked(ipc.startRecording).mockResolvedValue("/tmp/detected.md");
+    vi.mocked(ipc.startRecording).mockResolvedValue({ path: "/tmp/detected.md", title: "Zoom call 14:03" });
     await enterSavingState();
 
     emit("banner-start", { bundle_id: "us.zoom.xos", app_name: "Zoom" });
@@ -888,7 +889,7 @@ describe("App: record continues into the open note (behavior fix)", () => {
       summary_style: null,
       people: [],
     });
-    vi.mocked(ipc.startRecording).mockResolvedValue("/tmp/other.md");
+    vi.mocked(ipc.startRecording).mockResolvedValue({ path: "/tmp/other.md", title: null });
 
     render(<App />);
 
@@ -933,7 +934,7 @@ describe("App: record continues into the open note (behavior fix)", () => {
       summary_style: null,
       people: [],
     });
-    vi.mocked(ipc.startRecording).mockResolvedValue("/tmp/other.md");
+    vi.mocked(ipc.startRecording).mockResolvedValue({ path: "/tmp/other.md", title: null });
 
     render(<App />);
 

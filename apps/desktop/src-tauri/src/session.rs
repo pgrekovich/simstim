@@ -512,6 +512,9 @@ fn run_worker(
         None => {
             if let Some(title) = new_title {
                 transcript.set_title(title);
+                // Minted by the app, not typed by the user: a later summary
+                // may replace it (see `sessions::title_is_auto`).
+                transcript.set_title_by(Some(crate::sessions::TITLE_BY_APP.to_string()));
             }
             None
         }

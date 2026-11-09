@@ -308,7 +308,7 @@ export async function invoke(command: string, args?: Record<string, unknown>): P
     case "start_recording": {
       recordingPath = typeof args?.path === "string" ? args.path : "/demo/live.md";
       setTimeout(() => emit("transcript-line", "[00:31:52] Them: Let us make this version feel finished before adding anything else."), 200);
-      return recordingPath;
+      return { path: recordingPath, title: null };
     }
     case "stop_recording": recordingPath = null; return null;
     case "recording_activity": return recordingPath ? { me_silent_ms: 900, them_silent_ms: 2600, mic: "MacBook Pro Microphone" } : null;

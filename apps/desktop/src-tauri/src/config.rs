@@ -4,7 +4,8 @@ use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 const CONFIG_PREAMBLE: &str = "# Simstim configuration\n\
-# Every value may be edited by hand. Restart Simstim after manual changes.\n\
+# Every value may be edited by hand; Simstim reads this file on every use.\n\
+# Hand edits to show_in_dock and detect_calls apply after a restart.\n\
 # Reference: https://github.com/pgrekovich/simstim#configuration\n\n";
 
 /// Default active model id, matching the single entry in `models::REGISTRY`.

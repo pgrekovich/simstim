@@ -2,7 +2,9 @@
 
 Most settings and `~/.config/simstim/config.toml` share one source of truth.
 If `XDG_CONFIG_HOME` is set, use `$XDG_CONFIG_HOME/simstim/config.toml` instead.
-Restart after hand edits. Missing values inherit these defaults; malformed
+Simstim reads the file on every use, so hand edits apply at once, except
+`show_in_dock` and `detect_calls`, which apply after a restart. Missing
+values inherit these defaults; malformed
 files are reported rather than overwritten by a Settings change.
 
 ```toml

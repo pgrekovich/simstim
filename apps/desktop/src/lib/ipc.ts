@@ -267,6 +267,17 @@ export interface SessionErrorPayload {
 }
 
 /**
+ * Mirrors `RecordingLostPayload` (apps/desktop/src-tauri/src/lib.rs), the
+ * `recording-lost` event: the recording at `path` ended on its own because
+ * its worker died (engine or VAD init failed). Capture is already torn
+ * down and the backend is no longer recording.
+ */
+export interface RecordingLostPayload {
+  path: string;
+  message: string;
+}
+
+/**
  * Mirrors `TranscriptInterimPayload` (apps/desktop/src-tauri/src/lib.rs), the
  * `transcript-interim` event payload: a live (not-yet-finalized) draft for
  * one channel. An empty `text` means "clear this channel's draft" (the

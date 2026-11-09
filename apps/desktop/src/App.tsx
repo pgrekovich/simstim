@@ -71,6 +71,7 @@ import {
   type ModelInfo,
   type RetranscribeProgress,
   type SessionData,
+  type RecordingLostPayload,
   type SessionErrorPayload,
   type SessionMeta,
   type TranscriptInterimPayload,
@@ -662,6 +663,25 @@ function App() {
     const unlisten = listen<SessionErrorPayload>("session-error", (event) => {
       setStatus({ kind: "error", message: event.payload.message });
       refreshSessions();
+    });
+    return () => {
+      unlisten.then((f) => f());
+    };
+  }, [refreshSessions]);
+
+  // The backend tore a live recording down because its worker died (the
+  // engine or VAD failed to load). Leave the recording state the way a
+  // stop does, minus the saving phase: there is nothing to finalize.
+  useEffect(() => {
+    const unlisten = listen<RecordingLostPayload>("recording-lost", (event) => {
+      if (callLifecycleRef.current.activePath !== event.payload.path) return;
+      clearLoadingFallback();
+      setRecordingStartedAt(null);
+      setActivePath(null);
+      setInterimMe("");
+      setInterimThem("");
+      setStatus({ kind: "error", message: event.payload.message });
+      void refreshSessions();
     });
     return () => {
       unlisten.then((f) => f());

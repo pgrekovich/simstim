@@ -642,6 +642,24 @@ describe("App: hot-mic fix", () => {
     expect(await screen.findByText(/^saved$/)).toBeVisible();
   });
 
+  it("leaves the recording state when the backend reports the recording lost", async () => {
+    render(<App />);
+    fireEvent.click(await findStartControl());
+    await screen.findByRole("button", { name: /stop/i });
+
+    // Another recording's loss is not ours.
+    emit("recording-lost", { path: "/tmp/other.md", message: "engine init failed" });
+    expect(screen.getByRole("button", { name: /stop/i })).toBeVisible();
+
+    emit("recording-lost", { path: "/tmp/active.md", message: "session: engine init failed" });
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("engine init failed");
+    // Back to a Record control without any stop call: the backend already
+    // tore the recording down.
+    expect(await findStartControl()).toBeVisible();
+    expect(ipc.stopRecording).not.toHaveBeenCalled();
+  });
+
   it("keeps the record control wired to Stop when a session-error lands mid-recording", async () => {
     render(<App />);
 

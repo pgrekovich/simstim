@@ -204,6 +204,11 @@ pub fn load_continue_from(path: &Path) -> anyhow::Result<ContinueFrom> {
 /// down; `stop` blocks until the worker has flushed and saved everything.
 pub struct Session {
     stop_flag: Arc<AtomicBool>,
+    /// Set by the worker right before `on_died` when it exits without
+    /// being asked to stop (engine or VAD init failed). The owner checks it
+    /// when it takes the recording over, so a worker that died before the
+    /// handover is noticed either way.
+    death: Arc<Mutex<Option<String>>>,
     activity: Arc<RecordingActivity>,
     handle: JoinHandle<anyhow::Result<PathBuf>>,
 }
@@ -327,7 +332,7 @@ impl Session {
         on_error: impl Fn(String) + Send + 'static,
     ) -> Session {
         Self::start_with_lease(chunk_rx, out_path, None, continue_from, new_title,
-            pending_edits, keep_audio, audio_format, on_line, on_interim, on_error)
+            pending_edits, keep_audio, audio_format, on_line, on_interim, on_error, |_| {})
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -343,9 +348,12 @@ impl Session {
         on_line: impl Fn(String) + Send + 'static,
         on_interim: impl Fn(Channel, String) + Send + 'static,
         on_error: impl Fn(String) + Send + 'static,
+        on_died: impl FnOnce(String) + Send + 'static,
     ) -> Session {
         let stop_flag = Arc::new(AtomicBool::new(false));
         let worker_stop_flag = stop_flag.clone();
+        let death = Arc::new(Mutex::new(None));
+        let worker_death = death.clone();
         let activity = Arc::new(RecordingActivity::new());
         let worker_activity = activity.clone();
         // `start_recording` must not race its immediate sidebar refresh.
@@ -355,25 +363,40 @@ impl Session {
         let handle = std::thread::spawn(move || {
             // Ownership outlives the UI's recording slot and is released only
             // after run_worker finishes its final transcript and audio save.
-            let _lease = match lease {
-                Some(lease) => lease,
-                None => crate::session_files::record(&out_path)?,
-            };
-            run_worker(
-                chunk_rx,
-                out_path,
-                continue_from,
-                new_title,
-                pending_edits,
-                keep_audio,
-                audio_format,
-                on_line,
-                on_interim,
-                on_error,
-                worker_stop_flag,
-                worker_activity,
-                initial_save_tx,
-            )
+            let result = (|| {
+                let _lease = match lease {
+                    Some(lease) => lease,
+                    None => crate::session_files::record(&out_path)?,
+                };
+                run_worker(
+                    chunk_rx,
+                    out_path,
+                    continue_from,
+                    new_title,
+                    pending_edits,
+                    keep_audio,
+                    audio_format,
+                    on_line,
+                    on_interim,
+                    on_error,
+                    worker_stop_flag.clone(),
+                    worker_activity,
+                    initial_save_tx,
+                )
+            })();
+            // An error after a stop request is a final-save failure that
+            // `stop()` reports. An error before one means the worker died
+            // under a live capture (engine or VAD init), and the owner
+            // must release the recording slot or the app stays "recording"
+            // until a manual Stop.
+            if let Err(error) = &result {
+                if !worker_stop_flag.load(Ordering::SeqCst) {
+                    let message = format!("{error:#}");
+                    *worker_death.lock().unwrap_or_else(|e| e.into_inner()) = Some(message.clone());
+                    on_died(message);
+                }
+            }
+            result
         });
         // If the worker panics before the handoff, dropping the sender also
         // releases this receive. The eventual `stop()` still reports the
@@ -381,6 +404,7 @@ impl Session {
         let _ = initial_save_rx.recv();
         Session {
             stop_flag,
+            death,
             activity,
             handle,
         }
@@ -388,6 +412,12 @@ impl Session {
 
     pub(crate) fn activity(&self) -> Arc<RecordingActivity> {
         self.activity.clone()
+    }
+
+    /// The error the worker died with before any stop was requested, if
+    /// it did. See `death`.
+    pub(crate) fn died(&self) -> Option<String> {
+        self.death.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     /// Signals the worker to stop, waits for it to flush both VADs,
@@ -963,6 +993,75 @@ mod tests {
 
         activity.mark_voice_at(Channel::Them, 105);
         assert_eq!(activity.silent_for_at(Channel::Them, 110), Duration::from_millis(5));
+    }
+
+    /// A worker that exits under a live capture (here: the file is already
+    /// leased, the same path an engine init failure takes) must announce
+    /// its death before its thread ends, so the owner frees the slot
+    /// instead of leaving the app "recording" until a manual Stop.
+    #[test]
+    fn a_worker_that_dies_before_any_stop_reports_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("call.md");
+        let _held_by_another_recording = crate::session_files::record(&out).unwrap();
+
+        let (chunk_tx, chunk_rx) = std::sync::mpsc::channel::<Chunk>();
+        let (died_tx, died_rx) = std::sync::mpsc::channel::<String>();
+        let session = Session::start_with_lease(
+            chunk_rx,
+            out,
+            None,
+            None,
+            None,
+            Arc::new(Mutex::new(PendingEdits::default())),
+            false,
+            AudioFormat::Aac,
+            |_| {},
+            |_, _| {},
+            |_| {},
+            move |message| {
+                let _ = died_tx.send(message);
+            },
+        );
+
+        let message = died_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the worker announces its death");
+        assert!(message.contains("recording or still saving"), "{message}");
+        assert_eq!(session.died().as_deref(), Some(message.as_str()));
+
+        drop(chunk_tx);
+        assert!(session.stop().is_err());
+    }
+
+    /// The ordinary end of a recording is not a death: the stop flag is
+    /// set before the worker returns.
+    #[test]
+    fn a_stopped_worker_does_not_report_a_death() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("call.md");
+        let (chunk_tx, chunk_rx) = std::sync::mpsc::channel::<Chunk>();
+        let died = Arc::new(Mutex::new(false));
+        let seen = died.clone();
+        let session = Session::start_with_lease(
+            chunk_rx,
+            out,
+            None,
+            None,
+            None,
+            Arc::new(Mutex::new(PendingEdits::default())),
+            false,
+            AudioFormat::Aac,
+            |_| {},
+            |_, _| {},
+            |_| {},
+            move |_| *seen.lock().unwrap() = true,
+        );
+        drop(chunk_tx);
+        // Whether the engine loads or not (no models on CI), a stop that
+        // was requested is never a death.
+        let _ = session.stop();
+        assert!(!*died.lock().unwrap());
     }
 
     // Partial-audio continuation boundaries.

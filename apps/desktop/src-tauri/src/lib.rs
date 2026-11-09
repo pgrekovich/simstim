@@ -36,6 +36,15 @@ struct SessionErrorPayload {
     message: String,
 }
 
+/// `recording-lost` event payload: the worker of the recording at `path` died
+/// under a live capture (engine or VAD init failed). Capture has been torn
+/// down and the slot freed; the UI must leave its recording state.
+#[derive(Clone, Serialize)]
+struct RecordingLostPayload {
+    path: String,
+    message: String,
+}
+
 /// `transcript-interim` event payload: `channel` is `"me"` or `"them"`; an empty `text`
 /// clears that channel's draft. Never written to disk, see `session.rs`'s module docs.
 #[derive(Clone, Serialize)]
@@ -261,12 +270,29 @@ struct StartingClaim {
 }
 
 impl StartingClaim {
-    fn commit(mut self, recording: Recording) {
+    /// Fills the slot, unless the worker already died before this handover
+    /// (`Session::died`): then capture is torn down here, the claim's drop
+    /// frees the slot, and the start fails with the worker's error.
+    fn commit(mut self, recording: Recording) -> Result<(), String> {
         let state = self.app.state::<AppState>();
         let mut slot = state.recording.lock().unwrap();
         debug_assert!(matches!(*slot, RecordingSlot::Starting));
+        if let Some(message) = recording.session.died() {
+            drop(slot);
+            let Recording {
+                session,
+                mic,
+                speaker,
+                ..
+            } = recording;
+            drop(mic);
+            drop(speaker);
+            let _ = session.stop();
+            return Err(message);
+        }
         *slot = RecordingSlot::Live(recording);
         self.committed = true;
+        Ok(())
     }
 }
 
@@ -408,6 +434,11 @@ fn start_recording_blocking(
         move |message| {
             let _ = error_emitter.emit("session-error", SessionErrorPayload { message });
         },
+        {
+            let app = app.clone();
+            let path = out.clone();
+            move |message| recording_lost(&app, &path, message)
+        },
     );
     let activity = session.activity();
     claim.commit(Recording {
@@ -417,12 +448,51 @@ fn start_recording_blocking(
         speaker,
         path: out.clone(),
         pending_edits,
-    });
+    })?;
     app.state::<detect::DetectHandle>()
         .recording_started(detected_bundle_id, out.display().to_string());
     app.state::<banner::Banner>().recording_started();
     app.state::<menu_bar::MenuBar>().recording_started();
     Ok(out.display().to_string())
+}
+
+/// The worker of the live recording at `path` died (see `Session::died`).
+/// Runs on that worker's own thread: tear capture down, free the slot and
+/// tell the UI, but join the thread from elsewhere. A slot still `Starting`
+/// is left to `StartingClaim::commit`, which sees the same death flag.
+fn recording_lost(app: &AppHandle, path: &Path, message: String) {
+    let state = app.state::<AppState>();
+    let recording = {
+        let mut slot = state.recording.lock().unwrap();
+        match slot.live() {
+            Some(live) if live.path == path => slot.take_live(),
+            _ => None,
+        }
+    };
+    let Some(recording) = recording else {
+        return;
+    };
+    app.state::<detect::DetectHandle>().recording_stopped();
+    app.state::<banner::Banner>().recording_stopped();
+    app.state::<menu_bar::MenuBar>().recording_stopped();
+    let Recording {
+        session,
+        mic,
+        speaker,
+        ..
+    } = recording;
+    drop(mic);
+    drop(speaker);
+    std::thread::spawn(move || {
+        let _ = session.stop();
+    });
+    let _ = app.emit(
+        "recording-lost",
+        RecordingLostPayload {
+            path: path.display().to_string(),
+            message,
+        },
+    );
 }
 
 /// Routes title/notes edits for the active recording session into its

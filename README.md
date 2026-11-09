@@ -114,7 +114,8 @@ on the saved files.
 
 1. [Download for macOS](https://simstim.tech/download),
    open the DMG and drag Simstim into Applications. The release is signed
-   and notarized by Apple.
+   and notarized by Apple. Or install with Homebrew:
+   `brew install --cask pgrekovich/tap/simstim`.
 2. Choose your notes folder and grant microphone and system-audio access.
    Speech models download on first launch, about **1.55 GB** for the default
    pair. You can start once the live model is ready.

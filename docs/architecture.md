@@ -70,7 +70,8 @@ and preserves metadata through rewrites. See [the example](examples/2026-09-09%2
 
 The recording worker is the only writer to a live session. UI edits route
 through that worker. Finished-session updates are serialized and saved with
-a temporary file plus rename. Reservations cover finalization, transcription,
+a hidden temporary file that is flushed to disk and renamed into place:
+the flush survives a power loss, the rename a crash. Reservations cover finalization, transcription,
 summaries and cleanup, preventing overlapping operations on the same file.
 External editors do not participate in these locks.
 

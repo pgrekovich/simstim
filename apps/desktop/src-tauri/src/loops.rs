@@ -1388,11 +1388,9 @@ fn read_doc(path: &Path) -> anyhow::Result<Option<Doc>> {
     }
 }
 
-/// Temporary file plus rename, like every other note write.
+/// Flushed temporary file plus rename, like every other note write.
 fn write_doc(path: &Path, doc: &Doc) -> anyhow::Result<()> {
-    let tmp = path.with_extension("md.tmp");
-    std::fs::write(&tmp, doc.render())?;
-    std::fs::rename(&tmp, path)?;
+    simstim_transcript::write_atomic(path, doc.render())?;
     Ok(())
 }
 
@@ -2280,7 +2278,7 @@ mod tests {
             assert!(saved.starts_with("---\nsimstim: open-loops\nupdated: 2026-09-10T09:00:00+02:00\n---\n"));
             assert!(saved.contains("Sam: record"));
             assert!(save_in(dir.path(), "x", Some(&after.body)).is_err());
-            assert!(!dir.path().join("Open loops.md.tmp").exists());
+            assert!(!dir.path().join(".Open loops.md.tmp").exists());
         }
 
         #[test]

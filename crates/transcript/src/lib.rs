@@ -352,11 +352,41 @@ impl Transcript {
     }
 
     pub fn save(&self, path: &Path) -> Result<()> {
-        let tmp = path.with_extension("md.tmp");
-        std::fs::write(&tmp, self.render())?;
-        std::fs::rename(&tmp, path)?;
+        write_atomic(path, self.render())?;
         Ok(())
     }
+}
+
+/// The hidden sibling a write goes to before it is renamed over `path`:
+/// `.name.tmp`. Hidden, so Finder, Spotlight and sync clients (iCloud,
+/// Dropbox) do not pick up an in-progress write beside the note.
+pub fn temp_path(path: &Path) -> PathBuf {
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    path.with_file_name(format!(".{name}.tmp"))
+}
+
+/// Writes `bytes` to the temp sibling, flushes it to disk and renames it
+/// over `path`. The rename alone survives an app crash; the flush (a full
+/// fsync on macOS) is what survives a kernel panic or power loss, where
+/// APFS could otherwise leave the renamed file empty. For a product whose
+/// files are the database that is worth a few milliseconds per save. A
+/// failed write removes the temp file and leaves `path` untouched.
+pub fn write_atomic(path: &Path, bytes: impl AsRef<[u8]>) -> std::io::Result<()> {
+    use std::io::Write;
+    let tmp = temp_path(path);
+    let result = (|| {
+        let mut file = std::fs::File::create(&tmp)?;
+        file.write_all(bytes.as_ref())?;
+        file.sync_all()?;
+        std::fs::rename(&tmp, path)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result
 }
 
 /// `%Y-%m-%d %H-%M-%S call.md`: seconds included so two recordings started in
@@ -972,7 +1002,19 @@ mod tests {
         t.save(&path).unwrap();
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(content.contains("Me: test"));
-        assert!(!dir.path().join("call.md.tmp").exists());
+        assert!(!dir.path().join(".call.md.tmp").exists());
+    }
+
+    #[test]
+    fn a_failed_atomic_write_leaves_the_old_file_and_no_temp() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("call.md");
+        std::fs::write(&path, "old").unwrap();
+        // A directory at the temp path makes the write fail before the rename.
+        std::fs::create_dir(temp_path(&path)).unwrap();
+        assert!(write_atomic(&path, "new").is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "old");
+        assert_eq!(temp_path(&path), dir.path().join(".call.md.tmp"));
     }
 
     #[test]

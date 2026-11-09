@@ -159,10 +159,8 @@ impl Prompts {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let tmp = path.with_extension("toml.tmp");
         let body = toml::to_string_pretty(self)?;
-        std::fs::write(&tmp, format!("{PREAMBLE}{body}"))?;
-        std::fs::rename(&tmp, path)?;
+        simstim_transcript::write_atomic(path, format!("{PREAMBLE}{body}"))?;
         Ok(())
     }
 

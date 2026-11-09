@@ -238,13 +238,7 @@ fn encode_flac(wav_path: &Path, flac_path: &Path) -> anyhow::Result<()> {
     // partway through the write must never leave that file half-overwritten
     // or missing. `std::fs::rename` within the same directory is atomic on
     // every platform this app targets.
-    let tmp_path = flac_path.with_extension("flac.tmp");
-    let result = std::fs::write(&tmp_path, sink.as_slice())
-        .and_then(|()| std::fs::rename(&tmp_path, flac_path));
-    if result.is_err() {
-        let _ = std::fs::remove_file(&tmp_path);
-    }
-    result.map_err(anyhow::Error::from)
+    simstim_transcript::write_atomic(flac_path, sink.as_slice()).map_err(anyhow::Error::from)
 }
 
 /// Encodes `wav_path` (must already be a finalized, readable WAV file) to `m4a_path` as
@@ -252,16 +246,21 @@ fn encode_flac(wav_path: &Path, flac_path: &Path) -> anyhow::Result<()> {
 /// `aac::encode_wav_to_m4a`'s job (see that module's docs for the measured 12kHz pitfall
 /// it guards against); this function only adds the same temp-then-rename discipline
 /// [`encode_flac`] already uses, for the same reason -- `afconvert` writes straight to
-/// `<base>.m4a.tmp` first, and only once that file has been verified as real,
+/// `.<base>.m4a.tmp` first, and only once that file has been verified as real,
 /// correctly-rated AAC is it renamed onto `m4a_path`. A mid-encode crash, a
 /// wrong-bitrate/wrong-rate result, or any other `afconvert` failure never touches
 /// `m4a_path` itself -- when continuing a session, that path may already hold the
 /// previous recording's audio (see the module docs), and this must never leave it
 /// half-overwritten.
 fn encode_aac(wav_path: &Path, m4a_path: &Path) -> anyhow::Result<()> {
-    let tmp_path = m4a_path.with_extension("m4a.tmp");
+    let tmp_path = simstim_transcript::temp_path(m4a_path);
     let result = crate::aac::encode_wav_to_m4a(wav_path, &tmp_path)
-        .and_then(|()| std::fs::rename(&tmp_path, m4a_path).map_err(anyhow::Error::from));
+        .and_then(|()| {
+            // afconvert wrote the file; flush it before the rename for the
+            // same power-loss reason as `write_atomic`.
+            std::fs::File::open(&tmp_path)?.sync_all()?;
+            std::fs::rename(&tmp_path, m4a_path).map_err(anyhow::Error::from)
+        });
     if result.is_err() {
         let _ = std::fs::remove_file(&tmp_path);
     }
@@ -1495,9 +1494,9 @@ mod tests {
             // Force THIS recording's own encode to fail without touching the
             // real (pre-existing, real-content) flac_path at all: pre-create
             // a directory at the exact temp path `encode_flac` writes its
-            // bytes to first (`<base>.flac.tmp`), so the write fails before
+            // bytes to first (`.<base>.flac.tmp`), so the write fails before
             // the rename onto the real flac_path is ever attempted.
-            std::fs::create_dir(flac_path.with_extension("flac.tmp")).unwrap();
+            std::fs::create_dir(simstim_transcript::temp_path(&flac_path)).unwrap();
 
             let errors = std::cell::RefCell::new(Vec::<String>::new());
             let on_error_cb = |msg: String| errors.borrow_mut().push(msg);

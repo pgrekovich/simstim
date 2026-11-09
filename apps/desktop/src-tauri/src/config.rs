@@ -489,10 +489,8 @@ impl Config {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let tmp = path.with_extension("toml.tmp");
         let body = toml::to_string_pretty(self)?;
-        std::fs::write(&tmp, format!("{CONFIG_PREAMBLE}{body}"))?;
-        std::fs::rename(&tmp, path)?;
+        simstim_transcript::write_atomic(path, format!("{CONFIG_PREAMBLE}{body}"))?;
         Ok(())
     }
 }
@@ -668,7 +666,7 @@ mod tests {
         let cfg = Config::default();
         cfg.save_to(&path).unwrap();
         assert!(path.exists());
-        assert!(!dir.path().join("config.toml.tmp").exists());
+        assert!(!dir.path().join(".config.toml.tmp").exists());
     }
 
     #[test]

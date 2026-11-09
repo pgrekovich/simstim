@@ -136,7 +136,11 @@ catalogs through authenticated GET requests, including provider pagination.
 An entered key can be used for discovery before being saved. Catalogs stay
 in memory and requests send no notes or inference prompts. They send text to fixed HTTPS endpoints,
 with redirects disabled, bounded responses and deadlines, and no automatic retries.
-API chat cancellation aborts in-flight network work. Chat exposes only bounded
+A cited note that matches no listed file opens through `open_note`, which
+accepts only a Markdown file directly inside the notes folder; the app
+grants no other path-opening permission. The windows run under a Content
+Security Policy, and Markdown renders a remote image as a link rather
+than fetching it. API chat cancellation aborts in-flight network work. Chat exposes only bounded
 list, literal search and paginated read operations over direct Markdown children
 of the notes folder; symlinks, traversal, audio and writes are rejected. API
 summaries use no tools. Calendar context and connectors remain helper-only.

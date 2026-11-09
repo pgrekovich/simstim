@@ -274,6 +274,8 @@ function App() {
     activePath: null as string | null,
     autoStopAfterCall: false,
   });
+  /** Latest selection for callbacks that outlive the render they were made in. */
+  const selectedPathRef = useRef<string | null>(null);
   const handleStopRef = useRef<() => Promise<void>>(async () => {});
   const bannerStartRef = useRef<(payload: CallDetectedPayload) => void>(() => {});
   const menuBarToggleRef = useRef<() => void>(() => {});
@@ -353,6 +355,10 @@ function App() {
       autoStopAfterCall,
     };
   }, [activePath, autoStopAfterCall]);
+
+  useEffect(() => {
+    selectedPathRef.current = selectedPath;
+  }, [selectedPath]);
 
   useEffect(() => {
     onboardingCompleteRef.current = appConfig?.onboarding_complete === true;
@@ -965,11 +971,30 @@ function App() {
       // overwriting newer recording status.
       const epoch = ++stopEpochRef.current;
       void stopPromise
-        .then((path) => {
+        .then(async (path) => {
           if (stopEpochRef.current === epoch) {
             setStatus((prev) => (prev.kind === "saving" ? { kind: "saved", path } : prev));
           }
           void refreshSessions();
+          // `activePath` was cleared above, so the open note was re-read
+          // while the worker was still finalizing it: without the last
+          // segments, the duration and the audio (`read_session` hides the
+          // player until the file is complete). Now that it is, save what
+          // was typed meanwhile (a save during finalization is refused and
+          // retried here, see SessionView) and show the finished note.
+          if (selectedPathRef.current !== path || callLifecycleRef.current.activePath === path) {
+            return;
+          }
+          await activeSessionViewRef.current?.flushPendingEdits();
+          try {
+            const data = await readSession(path);
+            if (selectedPathRef.current === path && callLifecycleRef.current.activePath !== path) {
+              setSessionData(data);
+              setReloadTick((n) => n + 1);
+            }
+          } catch (err) {
+            setSessionDataError(String(err));
+          }
         })
         .catch((err) => {
           // A failed save means that call's file may be incomplete; always

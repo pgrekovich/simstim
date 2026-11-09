@@ -722,6 +722,22 @@ describe("App: a saving session must not block the next call", () => {
     expect(vi.mocked(ipc.startRecording).mock.calls[1][0]).toBeNull();
   });
 
+  it("re-reads and remounts the open note once its save completes", async () => {
+    const finishStop = await enterSavingState();
+    // The stop already triggered a (too early) read of the note: the file
+    // is still being finalized, so that read lacks the last segments, the
+    // duration and the audio.
+    const readsBefore = vi.mocked(ipc.readSession).mock.calls.length;
+
+    finishStop("/tmp/active.md");
+    await waitFor(() =>
+      expect(vi.mocked(ipc.readSession).mock.calls.length).toBeGreaterThan(readsBefore),
+    );
+    const reads = vi.mocked(ipc.readSession).mock.calls;
+    expect(reads[reads.length - 1][0]).toBe("/tmp/active.md");
+    expect(await screen.findByText(/^saved$/)).toBeVisible();
+  });
+
   it("still reports the finished save when nothing newer replaced the status", async () => {
     const finishStop = await enterSavingState();
     finishStop("/tmp/active.md");

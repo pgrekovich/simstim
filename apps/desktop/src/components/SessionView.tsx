@@ -179,6 +179,16 @@ export interface SessionViewHandle {
 }
 
 /**
+ * `save_session` refuses to write a note whose recording is still being
+ * finalized (sessions.rs: "this call is still being saved"). The edit stays
+ * unsaved in the refs and App flushes it once the save completes, so this
+ * is a deferred retry, not an error to show.
+ */
+function isFinalizingRefusal(err: unknown): boolean {
+  return String(err).includes("still being saved");
+}
+
+/**
  * Render one session with editable notes and transcript. App keys the
  * component by path, so local state is seeded on mount and preserved during
  * edits. Flush debounced edits before recording ownership changes; use the
@@ -397,6 +407,7 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
         onTitleChange?.();
       })
       .catch((err) => {
+        if (isFinalizingRefusal(err)) return;
         // A real failure (not the no-op skip above): rare (e.g. the
         // "not recording" rejection if this races past a stop, or a disk
         // error), but not silently swallowed -- the worker's own
@@ -426,6 +437,7 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
         savedNotesRef.current = value;
       })
       .catch((err) => {
+        if (isFinalizingRefusal(err)) return;
         // See commitTitle.
         console.error("failed to save session notes", err);
         onSaveError?.(String(err));

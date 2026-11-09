@@ -7,7 +7,8 @@
     "build": "node build.mjs",
     "preview": "node build.mjs && npx --yes wrangler dev",
     "deploy": "node build.mjs && npx --yes wrangler deploy",
-    "screenshots": "node screenshots.mjs"
+    "screenshots": "node screenshots.mjs",
+    "demo-gif": "node demo-gif.mjs"
   },
   "engines": {
     "node": ">=22"

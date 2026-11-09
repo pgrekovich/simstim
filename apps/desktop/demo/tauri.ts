@@ -298,6 +298,8 @@ const listeners = new Map<string, Set<(event: { payload: unknown }) => void>>();
 function emit(name: string, payload: unknown) {
   for (const callback of listeners.get(name) ?? []) callback({ payload });
 }
+// Scripted previews (site/demo-gif.mjs) push their own live lines through here.
+(window as unknown as { __simstimDemo?: unknown }).__simstimDemo = { emit };
 // A pretend recording: Record continues the open note, the first live line
 // arrives right away so the toolbar shows the hearing dots, and both sides
 // count as heard.
@@ -306,11 +308,19 @@ let recordingPath: string | null = null;
 export async function invoke(command: string, args?: Record<string, unknown>): Promise<unknown> {
   switch (command) {
     case "start_recording": {
-      recordingPath = typeof args?.path === "string" ? args.path : "/demo/live.md";
-      setTimeout(() => emit("transcript-line", "[00:31:52] Them: Let us make this version feel finished before adding anything else."), 200);
+      // Continuing a note gets a first line at once; a fresh recording stays
+      // silent so a scripted preview can push its own lines.
+      const continuing = typeof args?.path === "string";
+      recordingPath = continuing ? (args.path as string) : "/demo/live.md";
+      if (continuing) setTimeout(() => emit("transcript-line", "[00:31:52] Them: Let us make this version feel finished before adding anything else."), 200);
       return { path: recordingPath, title: null };
     }
-    case "stop_recording": recordingPath = null; return null;
+    case "stop_recording": {
+      const path = recordingPath;
+      recordingPath = null;
+      return path;
+    }
+    case "update_active_session": return null;
     case "recording_activity": return recordingPath ? { me_silent_ms: 900, them_silent_ms: 2600, mic: "MacBook Pro Microphone" } : null;
     case "banner_current_state": return { kind: "detected", bundle_id: "us.zoom.xos", app_name: "Zoom" };
     case "banner_dismiss": return null;

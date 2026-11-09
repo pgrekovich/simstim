@@ -17,9 +17,9 @@
   <a href="docs/development.md">Build from source</a>
 </p>
 
-<p align="center"><sub>macOS 14.2+ · Apple Silicon · Free · MIT license</sub></p>
+<p align="center"><sub>macOS 14.2+ · Apple Silicon · Free · MIT license · Signed and notarized</sub></p>
 
-![A call summary in Simstim, ending with the call's open loops](docs/images/summary.png)
+![A call is detected and recorded with a live transcript; after Stop its summary ends with open loops](docs/images/demo.gif)
 
 ## Recording
 
@@ -105,6 +105,8 @@ Without AI, recording, transcription, notes, playback and text search still
 work locally. Open loops come from summaries, so they pause when automatic
 summaries are off. You can also use your own tools, including local models,
 on the saved files.
+
+![A call summary in Simstim, ending with the call's open loops](docs/images/summary.png)
 
 [AI setup and example workflows](docs/your-ai.md)
 

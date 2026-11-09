@@ -316,7 +316,7 @@ impl Transcript {
         }
         if !summary.is_empty() {
             out.push_str("## Summary\n\n");
-            out.push_str(summary);
+            out.push_str(&demote_section_headings(summary));
             out.push_str("\n\n");
         }
         out.push_str("## Transcript\n\n");
@@ -383,6 +383,22 @@ pub fn output_path(dir: &Path, started_at: DateTime<Local>) -> PathBuf {
 /// and collide with (or read as earlier than) what's already on disk.
 pub fn last_offset_secs(raw: &str) -> f64 {
     raw.lines().rev().find_map(parse_line_offset_secs).unwrap_or(0.0)
+}
+
+/// The section headings are the file's structure: `parse_session` finds the
+/// LAST exact `## Summary` and `## Transcript` lines. A generated summary
+/// containing such a line (a model habit, or an injection through the
+/// transcript) would move everything above it into the user's Notes at the
+/// next parse, for good. Machine-written text therefore renders those lines
+/// one level deeper.
+fn demote_section_headings(text: &str) -> String {
+    text.split('\n')
+        .map(|line| match line.trim_end() {
+            "## Notes" | "## Summary" | "## Transcript" => format!("#{line}"),
+            _ => line.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Splits an existing `## Transcript` section body at `cutoff_secs`: returns the text to
@@ -883,6 +899,31 @@ mod tests {
             let md = t.render();
             assert!(!md.contains("## Summary"));
             assert!(!md.contains("summary_model"));
+        }
+
+        /// A generated summary must not be able to redraw the file's
+        /// sections: its own `## Summary` or `## Transcript` lines would
+        /// otherwise turn the text above them into the user's Notes.
+        #[test]
+        fn section_headings_inside_a_summary_cannot_move_text_into_notes() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("call.md");
+            let mut t = Transcript::new(t0());
+            t.set_notes("my own words".into());
+            t.set_summary(
+                "Decisions first.\n## Summary\nThe generated part.\n## Transcript\nnot a transcript\n## Notes".into(),
+                Some("claude".into()),
+            );
+            t.add(Speaker::Me, 1.0, "hi".into());
+            t.save(&path).unwrap();
+
+            let parsed = parse_session(&path).unwrap();
+            assert_eq!(parsed.notes, "my own words");
+            assert_eq!(
+                parsed.summary,
+                "Decisions first.\n### Summary\nThe generated part.\n### Transcript\nnot a transcript\n### Notes"
+            );
+            assert_eq!(parsed.transcript, "[00:00:01] Me: hi");
         }
 
         #[test]

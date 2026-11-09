@@ -14,10 +14,9 @@
 
 use anyhow::{anyhow, Context, Result};
 use std::ffi::OsStr;
-use std::io::Read;
 use std::path::Path;
-use std::process::{Command, Output, Stdio};
-use std::time::{Duration, Instant};
+use std::process::{Command, Output};
+use std::time::Duration;
 
 /// Force and verify a 16 kHz sample rate for AAC.
 pub const TARGET_SAMPLE_RATE_HZ: u32 = 16_000;
@@ -34,81 +33,24 @@ const AFCONVERT_TIMEOUT: Duration = Duration::from_secs(120);
 /// hence the tighter bound).
 const AFINFO_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// Run a command with a deadline, draining stdout and stderr concurrently to avoid
-/// full-pipe deadlock. Poll try_wait and terminate the process group on timeout. An
+/// Runs a command under the shared process discipline (`process.rs`): own
+/// process group, drained and bounded output, killed at `timeout`. An
 /// explicit program path allows timeout tests with a synthetic executable.
 fn run_with_timeout(program: &Path, args: &[&OsStr], timeout: Duration) -> Result<Output> {
     let mut cmd = Command::new(program);
-    cmd.args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    // Put the child in its own process group. Kill descendants on timeout too: inherited
-    // stdout/stderr pipes would otherwise keep the reader threads blocked.
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        cmd.process_group(0);
+    cmd.args(args);
+    match crate::process::run(cmd, crate::process::Run::with_timeout(timeout)) {
+        Ok(finished) => Ok(Output {
+            status: finished.status,
+            stdout: finished.stdout,
+            stderr: finished.stderr,
+        }),
+        Err(crate::process::RunError::TimedOut(timeout)) => Err(anyhow!(
+            "{} timed out after {timeout:?} and was killed",
+            program.display()
+        )),
+        Err(error) => Err(anyhow!("{}: {error}", program.display())),
     }
-    let mut child = cmd
-        .spawn()
-        .with_context(|| format!("spawning {}", program.display()))?;
-
-    let mut stdout_pipe = child.stdout.take().expect("stdout was piped");
-    let mut stderr_pipe = child.stderr.take().expect("stderr was piped");
-    let stdout_reader = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = stdout_pipe.read_to_end(&mut buf);
-        buf
-    });
-    let stderr_reader = std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = stderr_pipe.read_to_end(&mut buf);
-        buf
-    });
-
-    let started = Instant::now();
-    let status = loop {
-        match child.try_wait().context("polling child process status")? {
-            Some(status) => break status,
-            None => {
-                if started.elapsed() >= timeout {
-                    // Kill the whole process group first (see the
-                    // process_group comment above: the direct child alone is
-                    // not enough when it forked helpers that hold our
-                    // pipes), then the direct child as a belt-and-suspenders
-                    // fallback. Best-effort throughout: if the kill itself
-                    // fails (process already gone in a race, or a
-                    // permissions oddity), there is nothing more
-                    // constructive to do than report the timeout anyway --
-                    // the caller must not block forever either way.
-                    #[cfg(unix)]
-                    unsafe {
-                        libc::kill(-(child.id() as i32), libc::SIGKILL);
-                    }
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    // The reader threads will observe EOF once the process
-                    // is gone; join them so this function never returns
-                    // while they're still running (they hold no resources
-                    // this function owns after that, but joining keeps the
-                    // lifecycle strictly bounded rather than leaking a
-                    // detached thread per timeout).
-                    let _ = stdout_reader.join();
-                    let _ = stderr_reader.join();
-                    return Err(anyhow!(
-                        "{} timed out after {timeout:?} and was killed",
-                        program.display()
-                    ));
-                }
-                std::thread::sleep(Duration::from_millis(20));
-            }
-        }
-    };
-
-    let stdout = stdout_reader.join().unwrap_or_default();
-    let stderr = stderr_reader.join().unwrap_or_default();
-    Ok(Output { status, stdout, stderr })
 }
 
 /// Runs `afconvert` with the given arguments (bounded by [`AFCONVERT_TIMEOUT`],
@@ -228,6 +170,7 @@ pub fn decode_m4a_to_wav(m4a_path: &Path, out_path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Instant;
 
     fn write_stereo_wav(path: &Path, frames: &[(i16, i16)]) {
         let spec = hound::WavSpec {

@@ -14,6 +14,7 @@ pub mod models;
 mod launch_at_login;
 pub mod menu_bar;
 pub mod onboarding;
+pub(crate) mod process;
 pub mod prompts;
 pub mod retranscribe;
 pub mod session;

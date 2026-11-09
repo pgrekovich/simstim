@@ -9,11 +9,10 @@
 //! Ordinary summaries use no connectors; calendar lookup and connector questions use
 //! restricted read operations.
 
-use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 use parking_lot::Mutex;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde::Serialize;
 use tauri::Manager;
@@ -348,48 +347,22 @@ fn run_cli_capture(
     timeout: Duration,
 ) -> Result<String, String> {
     let workdir = tempfile::tempdir().map_err(|e| e.to_string())?;
-    let mut child = Command::new(binary)
-        .args(args)
-        .current_dir(workdir.path())
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| e.to_string())?;
-    child
-        .stdin
-        .take()
-        .expect("stdin was piped")
-        .write_all(prompt.as_bytes())
-        .map_err(|e| e.to_string())?;
-
-    let stdout = child.stdout.take().expect("stdout was piped");
-    let stderr = child.stderr.take().expect("stderr was piped");
-    let reader = std::thread::spawn(move || {
-        use std::io::Read;
-        let mut out = String::new();
-        let mut err = String::new();
-        let _ = std::io::BufReader::new(stdout).read_to_string(&mut out);
-        let _ = std::io::BufReader::new(stderr).read_to_string(&mut err);
-        (out, err)
-    });
-    let deadline = Instant::now() + timeout;
-    let status = loop {
-        match child.try_wait().map_err(|e| e.to_string())? {
-            Some(status) => break status,
-            None if Instant::now() >= deadline => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err("timed out".to_string());
-            }
-            None => std::thread::sleep(Duration::from_millis(200)),
-        }
-    };
-    let (out, err) = reader.join().unwrap_or_default();
-    if !status.success() {
-        return Err(err.trim().to_string());
+    let mut cmd = Command::new(binary);
+    cmd.args(args).current_dir(workdir.path());
+    let finished = crate::process::run(
+        cmd,
+        crate::process::Run {
+            stdin: Some(prompt),
+            timeout,
+            cancel: None,
+            on_stdout_line: None,
+        },
+    )
+    .map_err(|e| e.to_string())?;
+    if !finished.status.success() {
+        return Err(finished.stderr_lossy().trim().to_string());
     }
-    Ok(out.trim().to_string())
+    Ok(finished.stdout_lossy().trim().to_string())
 }
 
 /// Build the summary prompt from user notes and supporting transcript. Without notes,
@@ -1049,53 +1022,33 @@ fn run_provider(spec: &ProviderSpec, model: Option<&str>, prompt: &str) -> Resul
         }
         other => return Err(format!("unknown enhance provider: {other}")),
     }
-    let mut child = cmd
-        .current_dir(workdir.path())
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("couldn't start {}: {e}", spec.name))?;
-
-    child
-        .stdin
-        .take()
-        .expect("stdin was piped")
-        .write_all(prompt.as_bytes())
-        .map_err(|e| format!("couldn't send the note to {}: {e}", spec.name))?;
-    // Dropping stdin closes it -- both CLIs read to EOF before answering.
-
-    // Poll-with-deadline instead of a plain `wait`: a hung provider must
-    // not hold the enhance slot forever. Output is drained in a thread so a
-    // chatty stdout can't deadlock the child on a full pipe.
-    let stdout = child.stdout.take().expect("stdout was piped");
-    let stderr = child.stderr.take().expect("stderr was piped");
-    let reader = std::thread::spawn(move || {
-        use std::io::Read;
-        let mut out = String::new();
-        let mut err = String::new();
-        let _ = std::io::BufReader::new(stdout).read_to_string(&mut out);
-        let _ = std::io::BufReader::new(stderr).read_to_string(&mut err);
-        (out, err)
-    });
-
-    let deadline = Instant::now() + ENHANCE_TIMEOUT;
-    let status = loop {
-        match child.try_wait().map_err(|e| e.to_string())? {
-            Some(status) => break status,
-            None if Instant::now() >= deadline => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(format!(
-                    "{} took longer than {} minutes and was stopped",
-                    spec.name,
-                    ENHANCE_TIMEOUT.as_secs() / 60
-                ));
-            }
-            None => std::thread::sleep(Duration::from_millis(200)),
+    cmd.current_dir(workdir.path());
+    // A hung provider must not hold the enhance slot forever: killed, with
+    // its process group, at the deadline.
+    let finished = match crate::process::run(
+        cmd,
+        crate::process::Run {
+            stdin: Some(prompt),
+            timeout: ENHANCE_TIMEOUT,
+            cancel: None,
+            on_stdout_line: None,
+        },
+    ) {
+        Ok(finished) => finished,
+        Err(crate::process::RunError::Spawn(e)) => {
+            return Err(format!("couldn't start {}: {e}", spec.name));
         }
+        Err(crate::process::RunError::TimedOut(_)) => {
+            return Err(format!(
+                "{} took longer than {} minutes and was stopped",
+                spec.name,
+                ENHANCE_TIMEOUT.as_secs() / 60
+            ));
+        }
+        Err(e) => return Err(format!("{} failed: {e}", spec.name)),
     };
-    let (out, err) = reader.join().unwrap_or_default();
+    let status = finished.status;
+    let (out, err) = (finished.stdout_lossy(), finished.stderr_lossy());
 
     if !status.success() {
         if spec.id == "claude" {

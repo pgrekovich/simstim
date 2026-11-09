@@ -6,14 +6,12 @@
 //! and progress events update the UI.
 
 use std::collections::HashMap;
-use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc;
 use parking_lot::Mutex;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde::Serialize;
 use tauri::Manager;
@@ -537,6 +535,10 @@ fn build_command(
                         "--allowedTools",
                         "Read,Grep,Glob",
                         "--strict-mcp-config",
+                        // No user or project settings and no hooks: a plain
+                        // question runs the CLI exactly as configured here.
+                        "--setting-sources",
+                        "",
                     ]);
                 }
                 // A connector question: the user's MCP servers are in, the
@@ -662,77 +664,48 @@ fn step_message(tool: &str, input: &serde_json::Value) -> String {
 
 /// `on_step` receives each tool call as it happens (see [`parse_stream_line`]).
 fn run_chat(
-    mut cmd: Command,
+    cmd: Command,
     codex_out: Option<&Path>,
     prompt: &str,
     cancel: &AtomicBool,
     on_step: &mut dyn FnMut(String),
 ) -> Result<String, String> {
-    let mut child = cmd
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("couldn't start the chat provider: {e}"))?;
-    child
-        .stdin
-        .take()
-        .expect("stdin was piped")
-        .write_all(prompt.as_bytes())
-        .map_err(|e| format!("couldn't send the question: {e}"))?;
-    // Dropping stdin closes it -- both CLIs read to EOF before answering.
-
-    let stdout = child.stdout.take().expect("stdout was piped");
-    let stderr = child.stderr.take().expect("stderr was piped");
     // stdout is read line by line as it streams: tool calls go to the UI
-    // at once through the channel, the final result envelope is kept apart
-    // from the rest so the answer parser sees exactly what `--output-format
-    // json` would have printed.
-    let (steps_tx, steps_rx) = mpsc::channel::<String>();
-    let reader = std::thread::spawn(move || {
-        use std::io::{BufRead, Read};
-        let mut out = String::new();
-        let mut result_line: Option<String> = None;
-        for line in std::io::BufReader::new(stdout).lines().map_while(Result::ok) {
-            match parse_stream_line(&line) {
-                StreamLine::Step(step) => {
-                    let _ = steps_tx.send(step);
-                }
-                StreamLine::Result(envelope) => result_line = Some(envelope),
-                StreamLine::Nothing => {}
-            }
-            out.push_str(&line);
-            out.push('\n');
-        }
-        let mut err = String::new();
-        let _ = std::io::BufReader::new(stderr).read_to_string(&mut err);
-        (result_line.unwrap_or(out), err)
-    });
-
-    let deadline = Instant::now() + CHAT_TIMEOUT;
-    let status = loop {
-        while let Ok(step) = steps_rx.try_recv() {
-            on_step(step);
-        }
-        match child.try_wait().map_err(|e| e.to_string())? {
-            Some(status) => break status,
-            None if cancel.load(Ordering::Relaxed) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err("cancelled".to_string());
-            }
-            None if Instant::now() >= deadline => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(format!(
-                    "the provider took longer than {} minutes and was stopped",
-                    CHAT_TIMEOUT.as_secs() / 60
-                ));
-            }
-            None => std::thread::sleep(Duration::from_millis(200)),
-        }
+    // at once, and the final `result` envelope is kept apart from the rest
+    // so the answer parser sees exactly what `--output-format json` would
+    // have printed.
+    let mut result_line: Option<String> = None;
+    let mut on_line = |line: &str| match parse_stream_line(line) {
+        StreamLine::Step(step) => on_step(step),
+        StreamLine::Result(envelope) => result_line = Some(envelope),
+        StreamLine::Nothing => {}
     };
-    let (out, err) = reader.join().unwrap_or_default();
+    let finished = match crate::process::run(
+        cmd,
+        crate::process::Run {
+            stdin: Some(prompt),
+            timeout: CHAT_TIMEOUT,
+            cancel: Some(cancel),
+            on_stdout_line: Some(&mut on_line),
+        },
+    ) {
+        Ok(finished) => finished,
+        Err(crate::process::RunError::Spawn(e)) => {
+            return Err(format!("couldn't start the chat provider: {e}"));
+        }
+        // The literal the UI treats as a quiet close.
+        Err(crate::process::RunError::Cancelled) => return Err("cancelled".to_string()),
+        Err(crate::process::RunError::TimedOut(_)) => {
+            return Err(format!(
+                "the provider took longer than {} minutes and was stopped",
+                CHAT_TIMEOUT.as_secs() / 60
+            ));
+        }
+        Err(e) => return Err(format!("chat provider failed: {e}")),
+    };
+    let status = finished.status;
+    let err = finished.stderr_lossy();
+    let out = result_line.unwrap_or_else(|| finished.stdout_lossy());
     if !status.success() {
         if codex_out.is_none() {
             if let Some(message) = crate::enhance::claude_error(&out)

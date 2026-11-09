@@ -1763,31 +1763,43 @@ pub(crate) fn save_in(dir: &Path, body: &str, base: Option<&str>) -> Result<(), 
 }
 
 #[tauri::command]
-pub fn open_loops_read(state: tauri::State<LoopsState>) -> Result<OpenLoopsOut, String> {
-    read_in(&Config::load().output_dir, running(&state), Local::now().date_naive())
+pub async fn open_loops_read(app: tauri::AppHandle) -> Result<OpenLoopsOut, String> {
+    crate::blocking(move || {
+        let state = app.state::<LoopsState>();
+        read_in(&Config::load().output_dir, running(&state), Local::now().date_naive())
+    })
+    .await?
 }
 
 #[tauri::command]
-pub fn open_loops_toggle(
+pub async fn open_loops_toggle(
     line: usize,
     expected: String,
     done: bool,
-    state: tauri::State<LoopsState>,
+    app: tauri::AppHandle,
 ) -> Result<OpenLoopsOut, String> {
-    let dir = Config::load().output_dir;
-    toggle_in(&dir, line, &expected, done, Local::now().date_naive())?;
-    read_in(&dir, running(&state), Local::now().date_naive())
+    crate::blocking(move || {
+        let state = app.state::<LoopsState>();
+        let dir = Config::load().output_dir;
+        toggle_in(&dir, line, &expected, done, Local::now().date_naive())?;
+        read_in(&dir, running(&state), Local::now().date_naive())
+    })
+    .await?
 }
 
 #[tauri::command]
-pub fn open_loops_save(
+pub async fn open_loops_save(
     body: String,
     base: Option<String>,
-    state: tauri::State<LoopsState>,
+    app: tauri::AppHandle,
 ) -> Result<OpenLoopsOut, String> {
-    let dir = Config::load().output_dir;
-    save_in(&dir, &body, base.as_deref())?;
-    read_in(&dir, running(&state), Local::now().date_naive())
+    crate::blocking(move || {
+        let state = app.state::<LoopsState>();
+        let dir = Config::load().output_dir;
+        save_in(&dir, &body, base.as_deref())?;
+        read_in(&dir, running(&state), Local::now().date_naive())
+    })
+    .await?
 }
 
 /// "Update now" and the first build: merges the last four weeks of calls,

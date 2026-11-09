@@ -160,6 +160,18 @@ fn recording_activity(state: tauri::State<'_, AppState>) -> Option<HearingStatus
     })
 }
 
+/// Runs disk or process work on the runtime's blocking pool. A sync command
+/// executes on the main thread, where a slow folder scan freezes the window
+/// and the banner; every command that touches the file system goes through
+/// here instead. The error is the task failing to run at all (a panic).
+pub(crate) async fn blocking<T: Send + 'static>(
+    work: impl FnOnce() -> T + Send + 'static,
+) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(work)
+        .await
+        .map_err(|error| format!("background task failed: {error}"))
+}
+
 /// Keeps `finalizing` accurate even if the async IPC request is cancelled.
 /// The blocking task owns this guard, so dropping the request future cannot
 /// expose a still-being-written audio file as complete.
@@ -580,8 +592,12 @@ async fn stop_recording(app: AppHandle) -> Result<String, String> {
 }
 
 #[tauri::command]
-fn get_config() -> Config {
-    Config::load()
+async fn get_config() -> Config {
+    crate::blocking(move || {
+        Config::load()
+    })
+    .await
+    .unwrap_or_default()
 }
 
 /// Grant recursive asset access to the configured folder, canonicalizing symlinks to
@@ -619,8 +635,11 @@ fn set_output_dir_at<R: tauri::Runtime>(
 }
 
 #[tauri::command]
-fn set_output_dir(path: String, app: AppHandle) -> Result<(), String> {
-    set_output_dir_at(&app, &config::config_path(), path)
+async fn set_output_dir(path: String, app: AppHandle) -> Result<(), String> {
+    crate::blocking(move || {
+        set_output_dir_at(&app, &config::config_path(), path)
+    })
+    .await?
 }
 
 /// Accept only registered models with the Live role. Offline Whisper models cannot be
@@ -636,11 +655,14 @@ fn validate_active_model(id: &str) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn set_active_model(id: String) -> Result<(), String> {
-    validate_active_model(&id)?;
-    let mut cfg = Config::load_for_update().map_err(|e| e.to_string())?;
-    cfg.active_model = id;
-    cfg.save().map_err(|e| e.to_string())
+async fn set_active_model(id: String) -> Result<(), String> {
+    crate::blocking(move || {
+        validate_active_model(&id)?;
+        let mut cfg = Config::load_for_update().map_err(|e| e.to_string())?;
+        cfg.active_model = id;
+        cfg.save().map_err(|e| e.to_string())
+    })
+    .await?
 }
 
 /// Accept only registered, non-retired models with the Retranscribe role.
@@ -658,11 +680,14 @@ fn validate_retranscribe_model(id: &str) -> Result<(), String> {
 /// Rejects an unknown id or a `Live` one (Parakeet can't be used to re-transcribe) via
 /// `validate_retranscribe_model`.
 #[tauri::command]
-fn set_retranscribe_model(id: String) -> Result<(), String> {
-    validate_retranscribe_model(&id)?;
-    let mut cfg = Config::load_for_update().map_err(|e| e.to_string())?;
-    cfg.retranscribe_model = id;
-    cfg.save().map_err(|e| e.to_string())
+async fn set_retranscribe_model(id: String) -> Result<(), String> {
+    crate::blocking(move || {
+        validate_retranscribe_model(&id)?;
+        let mut cfg = Config::load_for_update().map_err(|e| e.to_string())?;
+        cfg.retranscribe_model = id;
+        cfg.save().map_err(|e| e.to_string())
+    })
+    .await?
 }
 
 /// Tauri's declarative traffic-light inset is not reliably applied to the config-created

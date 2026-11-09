@@ -7,7 +7,7 @@ use anyhow::{anyhow, Result};
 use chrono::{DateTime, FixedOffset, Local};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
-use tauri::State;
+use tauri::{AppHandle, Manager};
 
 use simstim_transcript::{parse_meta, parse_session, Transcript};
 
@@ -122,8 +122,12 @@ pub fn storage_stats_in(dir: &Path) -> StorageStats {
 }
 
 #[tauri::command]
-pub fn storage_stats() -> StorageStats {
-    storage_stats_in(&Config::load().output_dir)
+pub async fn storage_stats() -> StorageStats {
+    crate::blocking(move || {
+        storage_stats_in(&Config::load().output_dir)
+    })
+    .await
+    .unwrap_or_default()
 }
 
 /// Read a note and resolve retained audio for playback. Hide audio while this session is
@@ -449,10 +453,13 @@ pub(crate) fn note_in_dir(notes_dir: &Path, path: &Path) -> Result<PathBuf> {
 /// file name in a chat answer, opens only when it is a note in the notes
 /// folder.
 #[tauri::command]
-pub fn open_note(path: String) -> Result<(), String> {
-    let cfg = Config::load();
-    let note = note_in_dir(&cfg.output_dir, Path::new(&path)).map_err(|e| e.to_string())?;
-    tauri_plugin_opener::open_path(note, None::<&str>).map_err(|e| e.to_string())
+pub async fn open_note(path: String) -> Result<(), String> {
+    crate::blocking(move || {
+        let cfg = Config::load();
+        let note = note_in_dir(&cfg.output_dir, Path::new(&path)).map_err(|e| e.to_string())?;
+        tauri_plugin_opener::open_path(note, None::<&str>).map_err(|e| e.to_string())
+    })
+    .await?
 }
 
 /// Create an empty note without recording. Use exclusive creation and a filename suffix
@@ -604,26 +611,40 @@ pub fn delete_session_at(md_path: &Path) -> Result<()> {
 }
 
 #[tauri::command]
-pub fn list_sessions() -> Vec<SessionMeta> {
-    list_sessions_in(&Config::load().output_dir)
+pub async fn list_sessions() -> Vec<SessionMeta> {
+    crate::blocking(move || {
+        list_sessions_in(&Config::load().output_dir)
+    })
+    .await
+    .unwrap_or_default()
 }
 
 #[tauri::command]
-pub fn search_sessions(query: String) -> Vec<SearchHit> {
-    search_sessions_in(&Config::load().output_dir, &query)
+pub async fn search_sessions(query: String) -> Vec<SearchHit> {
+    crate::blocking(move || {
+        search_sessions_in(&Config::load().output_dir, &query)
+    })
+    .await
+    .unwrap_or_default()
 }
 
 #[tauri::command]
-pub fn create_session() -> Result<String, String> {
-    create_session_in(&Config::load().output_dir)
-        .map(|path| path.display().to_string())
-        .map_err(|e| e.to_string())
+pub async fn create_session() -> Result<String, String> {
+    crate::blocking(move || {
+        create_session_in(&Config::load().output_dir)
+            .map(|path| path.display().to_string())
+            .map_err(|e| e.to_string())
+    })
+    .await?
 }
 
 #[tauri::command]
-pub fn read_session(path: String, state: State<AppState>) -> Result<SessionDataOut, String> {
-    let finalizing = state.finalizing_match(Path::new(&path));
-    read_session_at(Path::new(&path), finalizing.as_deref()).map_err(|e| e.to_string())
+pub async fn read_session(path: String, app: AppHandle) -> Result<SessionDataOut, String> {
+    crate::blocking(move || {
+        let finalizing = app.state::<AppState>().finalizing_match(Path::new(&path));
+        read_session_at(Path::new(&path), finalizing.as_deref()).map_err(|e| e.to_string())
+    })
+    .await?
 }
 
 /// Moves a session's `.md` and its audio to the Trash. Rejects the currently-recording
@@ -631,35 +652,40 @@ pub fn read_session(path: String, state: State<AppState>) -> Result<SessionDataO
 /// file anyway), one still being finalized, and one with an in-flight or queued
 /// re-transcribe job.
 #[tauri::command]
-pub fn delete_session(
-    path: String,
-    state: State<AppState>,
-    retranscribe: State<crate::retranscribe::RetranscribeState>,
-) -> Result<(), String> {
-    let md_path = Path::new(&path);
-    let active = state.active_output_path();
-    let finalizing = state.finalizing_match(md_path);
-    validate_delete_session(
-        md_path,
-        active.as_deref(),
-        finalizing.as_deref(),
-        retranscribe.involves(&path),
-    )?;
-    delete_session_at(md_path).map_err(|e| e.to_string())
+pub async fn delete_session(path: String, app: AppHandle) -> Result<(), String> {
+    crate::blocking(move || {
+        let state = app.state::<AppState>();
+        let retranscribe = app.state::<crate::retranscribe::RetranscribeState>();
+        let md_path = Path::new(&path);
+        let active = state.active_output_path();
+        let finalizing = state.finalizing_match(md_path);
+        validate_delete_session(
+            md_path,
+            active.as_deref(),
+            finalizing.as_deref(),
+            retranscribe.involves(&path),
+        )?;
+        delete_session_at(md_path).map_err(|e| e.to_string())
+    })
+    .await?
 }
 
 #[tauri::command]
-pub fn save_session(
+pub async fn save_session(
     path: String,
     title: String,
     notes: String,
-    state: State<AppState>,
+    app: AppHandle,
 ) -> Result<(), String> {
-    let active = state.active_output_path();
-    let md_path = Path::new(&path);
-    let finalizing = state.finalizing_match(md_path);
-    save_session_at(md_path, &title, &notes, active.as_deref(), finalizing.as_deref())
-        .map_err(|e| e.to_string())
+    crate::blocking(move || {
+        let state = app.state::<AppState>();
+        let active = state.active_output_path();
+        let md_path = Path::new(&path);
+        let finalizing = state.finalizing_match(md_path);
+        save_session_at(md_path, &title, &notes, active.as_deref(), finalizing.as_deref())
+            .map_err(|e| e.to_string())
+    })
+    .await?
 }
 
 #[cfg(test)]

@@ -244,25 +244,34 @@ pub fn prompts_path() -> PathBuf {
 }
 
 #[tauri::command]
-pub fn get_prompts() -> std::result::Result<Prompts, String> {
-    Prompts::load().map_err(|e| format!("{e:#}"))
+pub async fn get_prompts() -> std::result::Result<Prompts, String> {
+    crate::blocking(move || {
+        Prompts::load().map_err(|e| format!("{e:#}"))
+    })
+    .await?
 }
 
 /// Replaces the whole document. Returns what was saved so the UI can
 /// re-render from the source of truth.
 #[tauri::command]
-pub fn save_prompts(prompts: Prompts) -> std::result::Result<Prompts, String> {
-    prompts.validate()?;
-    prompts.save().map_err(|e| format!("{e:#}"))?;
-    Ok(prompts)
+pub async fn save_prompts(prompts: Prompts) -> std::result::Result<Prompts, String> {
+    crate::blocking(move || {
+        prompts.validate()?;
+        prompts.save().map_err(|e| format!("{e:#}"))?;
+        Ok(prompts)
+    })
+    .await?
 }
 
 /// Back to the seeded defaults, discarding every edit.
 #[tauri::command]
-pub fn restore_default_prompts() -> std::result::Result<Prompts, String> {
-    let prompts = Prompts::default();
-    prompts.save().map_err(|e| format!("{e:#}"))?;
-    Ok(prompts)
+pub async fn restore_default_prompts() -> std::result::Result<Prompts, String> {
+    crate::blocking(move || {
+        let prompts = Prompts::default();
+        prompts.save().map_err(|e| format!("{e:#}"))?;
+        Ok(prompts)
+    })
+    .await?
 }
 
 #[cfg(test)]

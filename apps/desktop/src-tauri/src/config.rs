@@ -181,11 +181,14 @@ fn validate_theme(theme: &str) -> Result<(), String> {
 /// [`VALID_THEMES`] rather than writing an unrecognized value the frontend
 /// wouldn't know how to interpret.
 #[tauri::command]
-pub fn set_theme(theme: String) -> Result<(), String> {
-    validate_theme(&theme)?;
-    let mut cfg = Config::load_for_update().map_err(|e| e.to_string())?;
-    cfg.theme = theme;
-    cfg.save().map_err(|e| e.to_string())
+pub async fn set_theme(theme: String) -> Result<(), String> {
+    crate::blocking(move || {
+        validate_theme(&theme)?;
+        let mut cfg = Config::load_for_update().map_err(|e| e.to_string())?;
+        cfg.theme = theme;
+        cfg.save().map_err(|e| e.to_string())
+    })
+    .await?
 }
 
 /// Switches between a regular Dock application and a menu-bar-only app, then
@@ -224,63 +227,81 @@ pub fn set_show_in_dock(show_in_dock: bool, app: tauri::AppHandle) -> Result<(),
 /// Validates against [`VALID_ENHANCE_PROVIDERS`] rather than persisting an
 /// id the runner wouldn't know how to spawn.
 #[tauri::command]
-pub fn set_enhance_provider(provider: String) -> Result<(), String> {
-    if !VALID_ENHANCE_PROVIDERS.contains(&provider.as_str()) {
-        return Err(format!("unknown enhance provider: {provider}"));
-    }
-    let mut cfg = Config::load_for_update().map_err(|e| e.to_string())?;
-    cfg.enhance_provider = provider;
-    cfg.save().map_err(|e| e.to_string())
+pub async fn set_enhance_provider(provider: String) -> Result<(), String> {
+    crate::blocking(move || {
+        if !VALID_ENHANCE_PROVIDERS.contains(&provider.as_str()) {
+            return Err(format!("unknown enhance provider: {provider}"));
+        }
+        let mut cfg = Config::load_for_update().map_err(|e| e.to_string())?;
+        cfg.enhance_provider = provider;
+        cfg.save().map_err(|e| e.to_string())
+    })
+    .await?
 }
 
 /// Persist the automatic-summary preference.
 #[tauri::command]
-pub fn set_auto_enhance(auto_enhance: bool) -> Result<(), String> {
-    let mut cfg = Config::load_for_update().map_err(|e| e.to_string())?;
-    cfg.auto_enhance = auto_enhance;
-    cfg.save().map_err(|e| e.to_string())
+pub async fn set_auto_enhance(auto_enhance: bool) -> Result<(), String> {
+    crate::blocking(move || {
+        let mut cfg = Config::load_for_update().map_err(|e| e.to_string())?;
+        cfg.auto_enhance = auto_enhance;
+        cfg.save().map_err(|e| e.to_string())
+    })
+    .await?
 }
 
 /// Sets and persists whether an enhance may retitle automatically-named
 /// notes from the summary. See the `Config` field's doc comment.
 #[tauri::command]
-pub fn set_enhance_rename_title(enhance_rename_title: bool) -> Result<(), String> {
-    let mut cfg = Config::load_for_update().map_err(|e| e.to_string())?;
-    cfg.enhance_rename_title = enhance_rename_title;
-    cfg.save().map_err(|e| e.to_string())
+pub async fn set_enhance_rename_title(enhance_rename_title: bool) -> Result<(), String> {
+    crate::blocking(move || {
+        let mut cfg = Config::load_for_update().map_err(|e| e.to_string())?;
+        cfg.enhance_rename_title = enhance_rename_title;
+        cfg.save().map_err(|e| e.to_string())
+    })
+    .await?
 }
 
 /// Sets and persists whether the Claude Code provider may consult the
 /// user's calendar connectors. See the `Config` field's doc comment.
 #[tauri::command]
-pub fn set_enhance_use_calendar(enhance_use_calendar: bool) -> Result<(), String> {
-    let mut cfg = Config::load_for_update().map_err(|e| e.to_string())?;
-    cfg.enhance_use_calendar = enhance_use_calendar;
-    cfg.save().map_err(|e| e.to_string())
+pub async fn set_enhance_use_calendar(enhance_use_calendar: bool) -> Result<(), String> {
+    crate::blocking(move || {
+        let mut cfg = Config::load_for_update().map_err(|e| e.to_string())?;
+        cfg.enhance_use_calendar = enhance_use_calendar;
+        cfg.save().map_err(|e| e.to_string())
+    })
+    .await?
 }
 
 /// Persist one provider's model override. Empty input restores the provider default.
 #[tauri::command]
-pub fn set_enhance_model(provider: String, model: String) -> Result<(), String> {
-    if !VALID_ENHANCE_PROVIDERS.contains(&provider.as_str()) {
-        return Err(format!("unknown enhance provider: {provider}"));
-    }
-    let mut cfg = Config::load_for_update().map_err(|e| e.to_string())?;
-    let model = model.trim().to_string();
-    if model.is_empty() {
-        cfg.enhance_models.remove(&provider);
-    } else {
-        cfg.enhance_models.insert(provider, model);
-    }
-    cfg.save().map_err(|e| e.to_string())
+pub async fn set_enhance_model(provider: String, model: String) -> Result<(), String> {
+    crate::blocking(move || {
+        if !VALID_ENHANCE_PROVIDERS.contains(&provider.as_str()) {
+            return Err(format!("unknown enhance provider: {provider}"));
+        }
+        let mut cfg = Config::load_for_update().map_err(|e| e.to_string())?;
+        let model = model.trim().to_string();
+        if model.is_empty() {
+            cfg.enhance_models.remove(&provider);
+        } else {
+            cfg.enhance_models.insert(provider, model);
+        }
+        cfg.save().map_err(|e| e.to_string())
+    })
+    .await?
 }
 
 /// Persist whether recordings retain audio alongside the transcript.
 #[tauri::command]
-pub fn set_keep_audio(keep_audio: bool) -> Result<(), String> {
-    let mut cfg = Config::load_for_update().map_err(|e| e.to_string())?;
-    cfg.keep_audio = keep_audio;
-    cfg.save().map_err(|e| e.to_string())
+pub async fn set_keep_audio(keep_audio: bool) -> Result<(), String> {
+    crate::blocking(move || {
+        let mut cfg = Config::load_for_update().map_err(|e| e.to_string())?;
+        cfg.keep_audio = keep_audio;
+        cfg.save().map_err(|e| e.to_string())
+    })
+    .await?
 }
 
 /// `Err` with a message naming the allowed values unless `format` is one of
@@ -301,46 +322,61 @@ fn validate_audio_format(format: &str) -> Result<(), String> {
 /// encodes: an already-recorded session's audio file keeps whatever format it was
 /// written in (see `audio_sink`'s module docs on continuing a session across formats).
 #[tauri::command]
-pub fn set_audio_format(format: String) -> Result<(), String> {
-    validate_audio_format(&format)?;
-    let mut cfg = Config::load_for_update().map_err(|e| e.to_string())?;
-    cfg.audio_format = format;
-    cfg.save().map_err(|e| e.to_string())
+pub async fn set_audio_format(format: String) -> Result<(), String> {
+    crate::blocking(move || {
+        validate_audio_format(&format)?;
+        let mut cfg = Config::load_for_update().map_err(|e| e.to_string())?;
+        cfg.audio_format = format;
+        cfg.save().map_err(|e| e.to_string())
+    })
+    .await?
 }
 
 /// Persist automatic re-transcription after Stop. Actual execution also requires
 /// retained audio and a ready model.
 #[tauri::command]
-pub fn set_auto_retranscribe(auto_retranscribe: bool) -> Result<(), String> {
-    let mut cfg = Config::load_for_update().map_err(|e| e.to_string())?;
-    cfg.auto_retranscribe = auto_retranscribe;
-    cfg.save().map_err(|e| e.to_string())
+pub async fn set_auto_retranscribe(auto_retranscribe: bool) -> Result<(), String> {
+    crate::blocking(move || {
+        let mut cfg = Config::load_for_update().map_err(|e| e.to_string())?;
+        cfg.auto_retranscribe = auto_retranscribe;
+        cfg.save().map_err(|e| e.to_string())
+    })
+    .await?
 }
 
 /// Persist the opt-in deletion of audio after a successful accurate pass. This operation
 /// is irreversible.
 #[tauri::command]
-pub fn set_delete_audio_after_retranscribe(
+pub async fn set_delete_audio_after_retranscribe(
     delete_audio_after_retranscribe: bool,
 ) -> Result<(), String> {
-    let mut cfg = Config::load_for_update().map_err(|e| e.to_string())?;
-    cfg.delete_audio_after_retranscribe = delete_audio_after_retranscribe;
-    cfg.save().map_err(|e| e.to_string())
+    crate::blocking(move || {
+        let mut cfg = Config::load_for_update().map_err(|e| e.to_string())?;
+        cfg.delete_audio_after_retranscribe = delete_audio_after_retranscribe;
+        cfg.save().map_err(|e| e.to_string())
+    })
+    .await?
 }
 
 /// Persist whether open loops follow each automatic summary.
 #[tauri::command]
-pub fn set_track_open_loops(track_open_loops: bool) -> Result<(), String> {
-    let mut cfg = Config::load_for_update().map_err(|e| e.to_string())?;
-    cfg.track_open_loops = track_open_loops;
-    cfg.save().map_err(|e| e.to_string())
+pub async fn set_track_open_loops(track_open_loops: bool) -> Result<(), String> {
+    crate::blocking(move || {
+        let mut cfg = Config::load_for_update().map_err(|e| e.to_string())?;
+        cfg.track_open_loops = track_open_loops;
+        cfg.save().map_err(|e| e.to_string())
+    })
+    .await?
 }
 
 #[tauri::command]
-pub fn set_auto_stop_after_call(auto_stop_after_call: bool) -> Result<(), String> {
-    let mut cfg = Config::load_for_update().map_err(|e| e.to_string())?;
-    cfg.auto_stop_after_call = auto_stop_after_call;
-    cfg.save().map_err(|e| e.to_string())
+pub async fn set_auto_stop_after_call(auto_stop_after_call: bool) -> Result<(), String> {
+    crate::blocking(move || {
+        let mut cfg = Config::load_for_update().map_err(|e| e.to_string())?;
+        cfg.auto_stop_after_call = auto_stop_after_call;
+        cfg.save().map_err(|e| e.to_string())
+    })
+    .await?
 }
 
 /// XDG-style configuration path. macOS does not normally define

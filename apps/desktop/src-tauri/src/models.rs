@@ -8,7 +8,7 @@ use serde::Serialize;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::config::Config;
 use crate::retranscribe::RetranscribeState;
@@ -404,8 +404,12 @@ fn list_models_at(models_dir: &Path, cfg: &Config) -> Vec<ModelInfo> {
 }
 
 #[tauri::command]
-pub fn list_models() -> Vec<ModelInfo> {
-    list_models_at(&simstim_engine::models_dir(), &Config::load())
+pub async fn list_models() -> Vec<ModelInfo> {
+    crate::blocking(move || {
+        list_models_at(&simstim_engine::models_dir(), &Config::load())
+    })
+    .await
+    .unwrap_or_default()
 }
 
 /// `Err` unless `id` names a registered, still-offered model spec; `Ok` with
@@ -537,20 +541,21 @@ fn delete_model_at(
 }
 
 #[tauri::command]
-pub fn delete_model(
-    id: String,
-    downloads: State<'_, DownloadState>,
-    jobs: State<'_, RetranscribeState>,
-) -> Result<(), String> {
-    let downloading = downloads.0.lock().unwrap().contains(&id);
-    // Queued jobs also need their model files; block deletion before they start.
-    let retranscribing = jobs.is_running() || jobs.has_queued_jobs();
-    delete_model_at(
-        &id,
-        &simstim_engine::models_dir(),
-        downloading,
-        retranscribing,
-    )
+pub async fn delete_model(id: String, app: AppHandle) -> Result<(), String> {
+    crate::blocking(move || {
+        let downloads = app.state::<DownloadState>();
+        let jobs = app.state::<RetranscribeState>();
+        let downloading = downloads.0.lock().unwrap().contains(&id);
+        // Queued jobs also need their model files; block deletion before they start.
+        let retranscribing = jobs.is_running() || jobs.has_queued_jobs();
+        delete_model_at(
+            &id,
+            &simstim_engine::models_dir(),
+            downloading,
+            retranscribing,
+        )
+    })
+    .await?
 }
 
 /// Streams `url` to `dest` with periodic `"download"` progress events,
@@ -1015,7 +1020,7 @@ mod tests {
 
     #[test]
     fn list_models_role_reflects_the_registry() {
-        let models = list_models();
+        let models = list_models_at(&simstim_engine::models_dir(), &Config::load());
         let parakeet = models
             .iter()
             .find(|m| m.id == "parakeet-tdt-0.6b-v3-int8")

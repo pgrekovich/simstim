@@ -84,8 +84,11 @@ fn newest_log() -> PathBuf {
 
 /// Settings' "Reveal log": selects the newest log file in Finder.
 #[tauri::command]
-pub fn reveal_log() -> Result<(), String> {
-    tauri_plugin_opener::reveal_item_in_dir(newest_log()).map_err(|error| error.to_string())
+pub async fn reveal_log() -> Result<(), String> {
+    crate::blocking(move || {
+        tauri_plugin_opener::reveal_item_in_dir(newest_log()).map_err(|error| error.to_string())
+    })
+    .await?
 }
 
 #[cfg(test)]

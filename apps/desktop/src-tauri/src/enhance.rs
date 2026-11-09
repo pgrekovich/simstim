@@ -910,8 +910,11 @@ fn filter_calendar_names(mut names: Vec<String>) -> Vec<String> {
 /// grant a whole server: the same MCP server can read AND send/delete.
 /// Unknown tools remain denied; broader workflows belong in the user's own
 /// interactive assistant. See docs/privacy.md for the trust boundary.
+/// A generic `fetch` is deliberately absent: on a web-fetch server it is an
+/// outbound channel for whatever the model was told to send, and the
+/// document connectors expose their reads under specific names.
 const CONNECTOR_READ_TOOLS: &[&str] = &[
-    "search", "fetch", "read", "list", "get",
+    "search", "read", "list", "get",
     "list_calendars", "list_events", "get_event", "search_events", "get_free_busy",
     "get_calendar", "list_calendar_events", "get_calendar_event", "find_free_time",
     "searchJiraIssuesUsingJql", "getJiraIssue", "getJiraProjectIssueTypesMetadata",
@@ -1816,6 +1819,15 @@ mod tests {
         assert!(!rules.contains(&"mcp__claude_ai_Google_Calendar__create_event"));
         assert!(!rules.contains(&"mcp__claude_ai_Google_Calendar__delete_event"));
         assert!(rules.iter().all(|r| !r.contains('*')));
+    }
+
+    #[test]
+    fn connector_reads_never_include_a_generic_fetch() {
+        let rules = mcp_allowed_tools(&["fetch".into(), "Atlassian".into()]);
+        let rules: Vec<_> = rules.split(',').collect();
+        assert!(!rules.iter().any(|r| r.ends_with("__fetch")), "{rules:?}");
+        assert!(rules.contains(&"mcp__Atlassian__search"));
+        assert!(rules.contains(&"mcp__Atlassian__getJiraIssue"));
     }
 
     #[test]

@@ -43,6 +43,11 @@ const _: () = assert!(DONE_KEEP_DAYS >= RECENT_DAYS, "Done must outlive the read
 /// mentions them.
 const MAX_ACTIONS_PER_CALL: usize = 40;
 const MAX_QUESTIONS_PER_CALL: usize = 20;
+/// One call can close at most this many earlier items, each with the
+/// transcript time of the evidence. An injected or over-eager reply thus
+/// cannot sweep the whole file into Done; a closed item stays visible in
+/// Done for four weeks and can be unchecked.
+const MAX_CLOSES_PER_CALL: usize = 10;
 const MAX_ITEM_CHARS: usize = 280;
 /// One call's prompt stays well inside provider limits; a longer transcript
 /// is cut at the end.
@@ -613,13 +618,22 @@ impl Doc {
             .collect();
 
         let mut closed = 0;
+        let mut closes_per_call: HashMap<usize, usize> = HashMap::new();
         for close in &delta.close {
+            // No transcript time, no evidence: the prompt asks for one.
+            if close.at.is_none() {
+                continue;
+            }
             let Some(expected) = close.item.checked_sub(1).and_then(|i| shown.get(&i)) else {
                 continue;
             };
             let Some(call) = calls.get(close.call) else {
                 continue;
             };
+            let count = closes_per_call.entry(close.call).or_default();
+            if *count >= MAX_CLOSES_PER_CALL {
+                continue;
+            }
             let index = close.item - 1;
             let index = if self.lines.get(index) == Some(*expected) {
                 Some(index)
@@ -656,6 +670,7 @@ impl Doc {
                 call.link(close.at.as_deref())
             );
             self.lines[index] = line;
+            *count += 1;
             closed += 1;
         }
 
@@ -1128,11 +1143,16 @@ impl CallLoops {
         for line in lines {
             match line {
                 LoopLine::Add { kind, text, at } => out.adds.push((*kind, text.clone(), at.clone())),
-                LoopLine::Done { item, at } => {
-                    if let Some(text) = open.get(item) {
-                        out.done.push((text.clone(), at.clone()));
+                // Same rules as the file (`Doc::apply`): evidence time
+                // required, at most MAX_CLOSES_PER_CALL.
+                LoopLine::Done { item, at: Some(at) } => {
+                    if out.done.len() < MAX_CLOSES_PER_CALL {
+                        if let Some(text) = open.get(item) {
+                            out.done.push((text.clone(), Some(at.clone())));
+                        }
                     }
                 }
+                LoopLine::Done { at: None, .. } => {}
             }
         }
         out
@@ -2009,8 +2029,51 @@ mod tests {
 
             // Numbers that were not an open item are ignored.
             let mut doc = snapshot.clone();
-            let bogus = delta(r#"{"close":[{"item":1,"call":0},{"item":999,"call":0}]}"#, 1);
+            let bogus = delta(r#"{"close":[{"item":1,"call":0,"at":"00:00:01"},{"item":999,"call":0,"at":"00:00:01"}]}"#, 1);
             assert_eq!(doc.apply(&snapshot, &bogus, &[call(5)], day(11, 6)).1, 0);
+        }
+
+        /// A reply cannot close the whole file in one call, and a close
+        /// without a transcript time carries no evidence and is ignored.
+        #[test]
+        fn closes_need_evidence_and_are_capped_per_call() {
+            let snapshot = Doc::parse(EXAMPLE);
+            let mine = snapshot.items().into_iter().find(|i| i.kind == Kind::Mine).unwrap();
+            let json = format!(r#"{{"close":[{{"item":{},"call":0}}]}}"#, mine.line + 1);
+            let mut doc = snapshot.clone();
+            assert_eq!(doc.apply(&snapshot, &delta(&json, 1), &[call(5)], day(11, 6)).1, 0);
+
+            // A file with more open items than the cap, all closed at once.
+            let mut big = Doc::empty();
+            let adds: Vec<String> = (0..MAX_CLOSES_PER_CALL + 5)
+                .map(|i| format!(r#"{{"call":0,"section":"mine","text":"Task {i}"}}"#))
+                .collect();
+            big.apply(&snapshot, &delta(&format!(r#"{{"add":[{}]}}"#, adds.join(",")), 1), &[call(4)], day(11, 5));
+            let open: Vec<usize> = big
+                .items()
+                .into_iter()
+                .filter(|item| item.kind == Kind::Mine)
+                .map(|item| item.line + 1)
+                .collect();
+            assert_eq!(open.len(), MAX_CLOSES_PER_CALL + 5);
+            let closes: Vec<String> = open
+                .iter()
+                .map(|line| format!(r#"{{"item":{line},"call":0,"at":"00:00:09"}}"#))
+                .collect();
+            let shown = big.clone();
+            let closed = big
+                .apply(&shown, &delta(&format!(r#"{{"close":[{}]}}"#, closes.join(",")), 1), &[call(5)], day(11, 6))
+                .1;
+            assert_eq!(closed, MAX_CLOSES_PER_CALL);
+
+            // The summary section follows the same rules.
+            let lines: Vec<LoopLine> = open
+                .iter()
+                .map(|line| LoopLine::Done { item: *line, at: Some("00:00:09".into()) })
+                .chain(std::iter::once(LoopLine::Done { item: open[0], at: None }))
+                .collect();
+            let section = CallLoops::from_lines(&lines, Some(&shown));
+            assert_eq!(section.done.len(), MAX_CLOSES_PER_CALL);
         }
 
         #[test]

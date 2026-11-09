@@ -27,6 +27,23 @@ describe("MarkdownContent", () => {
     expect(container).not.toHaveTextContent("## Launch");
   });
 
+  it("draws a remote image as a link instead of fetching it", async () => {
+    const { container } = render(
+      <MarkdownContent>
+        {"![the chart](https://example.test/chart.png?q=secret) and ![local](./diagram.png)"}
+      </MarkdownContent>,
+    );
+    await act(async () => {
+      await vi.dynamicImportSettled();
+    });
+
+    const link = await screen.findByRole("link", { name: "the chart" });
+    expect(link).toHaveAttribute("href", "https://example.test/chart.png?q=secret");
+    // No <img> points at the network; a local image still renders.
+    const images = Array.from(container.querySelectorAll("img"));
+    expect(images.map((img) => img.getAttribute("src"))).toEqual(["./diagram.png"]);
+  });
+
   it("does not interpret raw HTML from a note", async () => {
     const { container } = render(
       <MarkdownContent>{"before <script>window.bad = true</script> after"}</MarkdownContent>,

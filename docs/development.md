@@ -92,5 +92,6 @@ From `apps/desktop`, run `pnpm exec vite --config vite.demo.config.ts` and open
 fixtures. It cannot record, run AI, access notes, or change native settings.
 Use it for screenshots and visual review, not as a native end-to-end test.
 The production config never imports its mock bridge. Add `?updates` to
-preview the provider update banner with fictional versions. The site's
+preview the provider update banner with fictional versions; `/banner.html`
+is the floating call banner's own page. The site's
 screenshots are rendered from it; see [site/README.md](../site/README.md).

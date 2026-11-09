@@ -4,8 +4,8 @@
 // Dates are relative to today so the sidebar reads Today and Yesterday in
 // every screenshot; the notes folder is a small design studio's week.
 const apiPreview = new URLSearchParams(location.search).has("api");
-// `?surface=banner` renders the floating call banner (main.tsx picks the
-// surface); here it always shows a detected Zoom call.
+// `/banner.html` renders the floating call banner; here it always shows a
+// detected Zoom call.
 const setupPreview = new URLSearchParams(location.search).has("setup");
 const updatesPreview = new URLSearchParams(location.search).has("updates");
 

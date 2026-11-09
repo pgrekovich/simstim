@@ -11,9 +11,11 @@ use tauri::{
     WebviewWindowBuilder,
 };
 
-/// Label of the banner window; `main.tsx` branches on it to render the
-/// banner UI instead of the app.
+/// Label of the banner window.
 pub const WINDOW_LABEL: &str = "banner";
+/// The banner's own page in the frontend dist: one card, without the
+/// application bundle the main window loads.
+const WINDOW_PAGE: &str = "banner.html";
 /// Logical size of the banner window. The card inside is inset by CSS so
 /// its shadow has room to render (the window itself is transparent and
 /// shadowless: a native shadow on a transparent window leaves artifacts
@@ -248,7 +250,7 @@ impl Banner {
     /// macOS panel conversion swizzles the NSWindow's class); `.setup()`
     /// qualifies.
     pub fn create(app: &AppHandle) -> tauri::Result<Self> {
-        let window = WebviewWindowBuilder::new(app, WINDOW_LABEL, WebviewUrl::App("index.html".into()))
+        let window = WebviewWindowBuilder::new(app, WINDOW_LABEL, WebviewUrl::App(WINDOW_PAGE.into()))
             .decorations(false)
             .transparent(true)
             .shadow(false)

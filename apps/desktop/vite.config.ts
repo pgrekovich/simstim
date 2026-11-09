@@ -13,6 +13,16 @@ export default defineConfig({
       "@": path.resolve(import.meta.dirname, "./src"),
     },
   },
+  build: {
+    rollupOptions: {
+      // Two pages: the main window and the floating call banner, which
+      // gets its own small bundle instead of the whole application.
+      input: {
+        main: path.resolve(import.meta.dirname, "index.html"),
+        banner: path.resolve(import.meta.dirname, "banner.html"),
+      },
+    },
+  },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //

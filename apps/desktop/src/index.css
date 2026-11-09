@@ -517,7 +517,7 @@
     appearance: none;
     }
   /* The banner window is a transparent layer around a floating card
-     (main.tsx tags <html> with .banner-window); the default opaque body
+     (banner.html tags <html> with .banner-window); the default opaque body
      would paint the whole window rectangle. Smoothing matches how macOS
      renders its own notification text. */
   .banner-window body {

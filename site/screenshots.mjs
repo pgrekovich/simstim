@@ -194,7 +194,7 @@ async function renderBanner() {
     await send("Emulation.setDeviceMetricsOverride", { width: 392, height: 170, deviceScaleFactor: 2, mobile: false });
     await send("Emulation.setDefaultBackgroundColorOverride", { color: { r: 0, g: 0, b: 0, a: 0 } });
     await send("Page.enable");
-    await send("Page.navigate", { url: `${DEMO}?surface=banner` });
+    await send("Page.navigate", { url: `${DEMO}banner.html` });
     await waitFor(`document.body.innerText.includes("Call detected")`);
     return await shot();
   } finally {

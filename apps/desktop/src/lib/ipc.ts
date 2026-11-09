@@ -483,6 +483,14 @@ export function storageStats(): Promise<StorageStats> {
   return invoke("storage_stats");
 }
 
+/**
+ * Opens a note in the default Markdown editor. The backend accepts only a
+ * Markdown file directly inside the notes folder (sessions.rs `open_note`).
+ */
+export function openNote(path: string): Promise<void> {
+  return invoke("open_note", { path });
+}
+
 /** Selects the newest Simstim log file in Finder (see logging.rs). */
 export function revealLog(): Promise<void> {
   return invoke("reveal_log");

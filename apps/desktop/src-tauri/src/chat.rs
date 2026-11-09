@@ -358,9 +358,23 @@ fn parse_claude_json(raw: &str) -> Option<Result<(String, Option<String>), Strin
     Some(Ok((text, model)))
 }
 
+/// Whether a cited file is the bare name of a Markdown note: one path
+/// component, no traversal, a `.md` extension. The UI opens a citation it
+/// cannot match to a listed note as a file under the notes folder, so a
+/// name the model produced must never reach beyond that folder.
+fn is_note_file_name(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower.ends_with(".md")
+        && lower.len() > 3
+        && !name.starts_with('.')
+        && !name.contains(['/', '\\'])
+        && !name.contains("..")
+        && !name.chars().any(char::is_control)
+}
+
 /// A `SOURCE:` line's payload, parsed. Accepted shapes (whitespace-tolerant):
-/// `<file> @ <hh:mm:ss>`, `<file>`, `<hh:mm:ss>`. A file is anything that
-/// isn't a bare timestamp; a `None` return means the line is junk and stays
+/// `<note>.md @ <hh:mm:ss>`, `<note>.md`, `<hh:mm:ss>`. A `None` return
+/// means the line is junk (a sentence, a path, a non-note file) and stays
 /// in the answer text.
 fn parse_source(raw: &str) -> Option<ChatSource> {
     let raw = raw.trim();
@@ -375,7 +389,7 @@ fn parse_source(raw: &str) -> Option<ChatSource> {
     if let Some((file, ts)) = raw.rsplit_once('@') {
         let file = file.trim().trim_end_matches(',').trim();
         let ts = ts.trim();
-        if looks_like_timestamp(ts) && !file.is_empty() {
+        if looks_like_timestamp(ts) && is_note_file_name(file) {
             return Some(ChatSource {
                 file: Some(file.to_string()),
                 timestamp: Some(ts.to_string()),
@@ -390,7 +404,7 @@ fn parse_source(raw: &str) -> Option<ChatSource> {
     }
     // A bare file citation. Reject anything that reads like a sentence --
     // a malformed SOURCE line should degrade to visible text, not a chip.
-    if raw.split_whitespace().count() <= 8 {
+    if raw.split_whitespace().count() <= 8 && is_note_file_name(raw) {
         return Some(ChatSource {
             file: Some(raw.to_string()),
             timestamp: None,
@@ -1241,6 +1255,27 @@ mod tests {
             // rsplit: only the LAST @ separates the timestamp.
             let (_, sources, _) = split_reply("x\nSOURCE: a@b.md @ 00:00:05");
             assert_eq!(sources[0].file.as_deref(), Some("a@b.md"));
+        }
+
+        /// A citation is opened as a file under the notes folder when it
+        /// matches no listed note, so only a bare note name may become a
+        /// chip; anything else stays visible text.
+        #[test]
+        fn a_source_that_is_not_a_bare_note_name_degrades_to_text() {
+            for raw in [
+                "Answer.\nSOURCE: ../../Downloads/run.command",
+                "Answer.\nSOURCE: /Users/me/.zshrc @ 00:00:05",
+                "Answer.\nSOURCE: notes/2026-08-21 sync.md",
+                "Answer.\nSOURCE: .hidden.md",
+                "Answer.\nSOURCE: call.txt",
+                "Answer.\nSOURCE: .md",
+            ] {
+                let (text, sources, _) = split_reply(raw);
+                assert_eq!(text, raw, "{raw}");
+                assert!(sources.is_empty(), "{raw}");
+            }
+            let (_, sources, _) = split_reply("Answer.\nSOURCE: 2026-08-21 Legal Review.MD");
+            assert_eq!(sources[0].file.as_deref(), Some("2026-08-21 Legal Review.MD"));
         }
 
         #[test]

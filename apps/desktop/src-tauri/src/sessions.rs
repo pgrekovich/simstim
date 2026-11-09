@@ -429,6 +429,32 @@ pub fn set_summary_at(
     })
 }
 
+/// Resolves `path` to a Markdown note directly inside `notes_dir`, following
+/// symlinks on both sides, and refuses anything else: the only files the
+/// app ever hands to another application are the user's own notes.
+pub(crate) fn note_in_dir(notes_dir: &Path, path: &Path) -> Result<PathBuf> {
+    let notes_dir = std::fs::canonicalize(notes_dir)?;
+    let path = std::fs::canonicalize(path)?;
+    let is_markdown = path
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("md"));
+    if path.parent() != Some(notes_dir.as_path()) || !is_markdown || !path.is_file() {
+        return Err(anyhow!("not a note in the notes folder"));
+    }
+    Ok(path)
+}
+
+/// Opens a note in the user's default Markdown editor. Replaces a blanket
+/// open-path grant: a path from the UI, including one built from a cited
+/// file name in a chat answer, opens only when it is a note in the notes
+/// folder.
+#[tauri::command]
+pub fn open_note(path: String) -> Result<(), String> {
+    let cfg = Config::load();
+    let note = note_in_dir(&cfg.output_dir, Path::new(&path)).map_err(|e| e.to_string())?;
+    tauri_plugin_opener::open_path(note, None::<&str>).map_err(|e| e.to_string())
+}
+
 /// Create an empty note without recording. Use exclusive creation and a filename suffix
 /// for same-second collisions; never overwrite another note.
 pub fn create_session_in(dir: &Path) -> Result<PathBuf> {
@@ -1546,6 +1572,39 @@ mod tests {
 
             let after = std::fs::read_to_string(&path).unwrap();
             assert_eq!(after, before, "the file must be left byte-identical on refusal");
+        }
+    }
+
+    mod open_note {
+        use super::super::note_in_dir;
+
+        #[test]
+        fn only_a_markdown_file_directly_in_the_folder_opens() {
+            let dir = tempfile::tempdir().unwrap();
+            let notes = dir.path().join("notes");
+            std::fs::create_dir_all(notes.join("sub")).unwrap();
+            std::fs::write(notes.join("call.md"), "x").unwrap();
+            std::fs::write(notes.join("sub/inner.md"), "x").unwrap();
+            std::fs::write(notes.join("run.command"), "x").unwrap();
+            std::fs::write(dir.path().join("outside.md"), "x").unwrap();
+
+            assert!(note_in_dir(&notes, &notes.join("call.md")).is_ok());
+            assert!(note_in_dir(&notes, &notes.join("sub/inner.md")).is_err());
+            assert!(note_in_dir(&notes, &notes.join("run.command")).is_err());
+            assert!(note_in_dir(&notes, &notes.join("missing.md")).is_err());
+            assert!(note_in_dir(&notes, &notes.join("../outside.md")).is_err());
+            assert!(note_in_dir(&notes, &notes).is_err());
+        }
+
+        #[cfg(unix)]
+        #[test]
+        fn a_symlink_out_of_the_folder_is_refused() {
+            let dir = tempfile::tempdir().unwrap();
+            let notes = dir.path().join("notes");
+            std::fs::create_dir_all(&notes).unwrap();
+            std::fs::write(dir.path().join("secret.md"), "x").unwrap();
+            std::os::unix::fs::symlink(dir.path().join("secret.md"), notes.join("link.md")).unwrap();
+            assert!(note_in_dir(&notes, &notes.join("link.md")).is_err());
         }
     }
 }

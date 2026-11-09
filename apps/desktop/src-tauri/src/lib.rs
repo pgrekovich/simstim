@@ -851,6 +851,7 @@ pub fn run() {
             banner::banner_painted,
             banner::show_main_window,
             logging::reveal_log,
+            sessions::open_note,
             models::list_models,
             models::download_model,
             models::delete_model,

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { ask } from "@tauri-apps/plugin-dialog";
-import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import {
   CircleAlert,
   ClipboardCopy,
@@ -55,6 +55,7 @@ import {
   listSessions,
   openLoopsRead,
   openLoopsUpdate,
+  openNote,
   readSession,
   recordingActivity,
   showMainWindow,
@@ -1221,7 +1222,9 @@ function App() {
       return;
     }
     if (appConfig) {
-      void openPath(`${appConfig.output_dir}/${fileName}`);
+      // A bare note name the backend validated (chat.rs); open_note checks
+      // again that the result is a note inside the folder.
+      void openNote(`${appConfig.output_dir}/${fileName}`);
     }
   }
 
@@ -1349,7 +1352,7 @@ function App() {
         loopsActive={loopsOpen}
         loopsCount={loops?.exists ? loops.open_count : null}
         onDelete={handleDeleteSession}
-        onOpenFile={(path) => void openPath(path)}
+        onOpenFile={(path) => void openNote(path)}
         onRevealInFinder={(path) => void revealItemInDir(path)}
       />}
       {!sidebarCollapsed && (
@@ -1551,7 +1554,7 @@ function App() {
                     <ClipboardCopy />
                     Copy transcript
                   </DropdownMenuItem>
-                  <DropdownMenuItem onSelect={() => void openPath(selectedPath)}>
+                  <DropdownMenuItem onSelect={() => void openNote(selectedPath)}>
                     <FileText />
                     Open file
                   </DropdownMenuItem>
@@ -1628,7 +1631,7 @@ function App() {
             onUpdate={handleLoopsUpdate}
             onOpenCitation={(source) => handleOpenCitation(source, null)}
             onOpenFile={() => {
-              if (appConfig) void openPath(`${appConfig.output_dir}/Open loops.md`);
+              if (appConfig) void openNote(`${appConfig.output_dir}/Open loops.md`);
             }}
           />
         ) : (

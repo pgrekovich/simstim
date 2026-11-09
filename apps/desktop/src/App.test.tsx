@@ -54,6 +54,7 @@ vi.mock("@/lib/ipc", () => ({
   readSession: vi
     .fn()
     .mockResolvedValue({ title: "", date: "", notes: "", transcript: "", audio_path: null, summary: "", summary_model: null, summary_style: null, people: [] }),
+  openNote: vi.fn().mockResolvedValue(undefined),
   startRecording: vi.fn().mockResolvedValue("/tmp/active.md"),
   stopRecording: vi.fn().mockResolvedValue("/tmp/active.md"),
   saveSession: vi.fn().mockResolvedValue(undefined),
@@ -127,7 +128,6 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
 }));
 
 vi.mock("@tauri-apps/plugin-opener", () => ({
-  openPath: vi.fn().mockResolvedValue(undefined),
   revealItemInDir: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -194,6 +194,7 @@ beforeEach(() => {
   });
   vi.mocked(ipc.startRecording).mockReset().mockResolvedValue("/tmp/active.md");
   vi.mocked(ipc.stopRecording).mockReset().mockResolvedValue("/tmp/active.md");
+  vi.mocked(ipc.openNote).mockClear();
   vi.mocked(ipc.listSessions).mockClear();
   vi.mocked(ipc.saveSession).mockClear();
   vi.mocked(ipc.updateActiveSession).mockClear();
@@ -1682,9 +1683,7 @@ describe("App: note actions menu", () => {
     fireEvent.pointerDown(trigger);
     fireEvent.click(trigger);
     fireEvent.click(await screen.findByText("Open file"));
-    await waitFor(() =>
-      expect(opener.openPath).toHaveBeenCalledExactlyOnceWith("/tmp/sync.md"),
-    );
+    await waitFor(() => expect(ipc.openNote).toHaveBeenCalledExactlyOnceWith("/tmp/sync.md"));
 
     fireEvent.pointerDown(trigger);
     fireEvent.click(trigger);

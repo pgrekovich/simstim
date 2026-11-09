@@ -14,7 +14,7 @@ A working existing Claude Code or Codex installation is reused. A helper
 installed by simstim lives in `~/Library/Application Support/simstim/helpers/`
 and takes precedence on subsequent runs. Downloads come from Anthropic or
 OpenAI's GitHub releases and are checked against upstream SHA-256 metadata;
-Claude's native signature is also verified. Downloads happen only when you
+Claude's native signature is also verified as Anthropic's. Downloads happen only when you
 choose to connect. Installing a desktop chat app alone does not supply this
 helper. Provider authentication and credential storage remain with the
 unmodified official tool. Setup does not send notes or make model requests.

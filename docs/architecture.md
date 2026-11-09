@@ -155,7 +155,9 @@ permission handling. Keep process-group cancellation and bounded output.
 
 Helper setup downloads unmodified native binaries only on an explicit
 request, verifies upstream checksums, and installs with atomic replacement.
-Claude signatures are also checked. The helper owns browser authentication
+Claude's signature is also checked, including that it was signed by
+Anthropic's Developer ID team. Model files are pinned to a fixed upstream
+revision, size and SHA-256; a download that differs is discarded. The helper owns browser authentication
 and credential storage. Simstim checks readiness through the official auth
 status command without making a model request. Model choices come from
 Codex app-server model/list or the Claude Agent SDK initialize response,

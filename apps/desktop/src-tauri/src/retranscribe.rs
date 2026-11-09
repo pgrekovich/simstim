@@ -629,7 +629,7 @@ pub(crate) fn resolve_audio_path(md_path: &Path) -> Option<PathBuf> {
 fn whisper_model_path(id: &str) -> Option<PathBuf> {
     let spec = models::find(id)?;
     match &spec.layout {
-        ModelLayout::File { file_name, .. } => Some(simstim_engine::models_dir().join(file_name)),
+        ModelLayout::File(crate::models::ModelFile { file_name, .. }) => Some(simstim_engine::models_dir().join(file_name)),
         ModelLayout::Directory { .. } => None,
     }
 }

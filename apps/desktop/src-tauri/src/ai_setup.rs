@@ -466,6 +466,16 @@ fn codex_models_from_command(
     }
     bail!("The model catalog has too many pages.")
 }
+/// Apple Developer ID team of Anthropic PBC, as `codesign -dv` reports it
+/// on the official Claude Code binary (`TeamIdentifier=Q6L2SF6YDW`).
+const CLAUDE_TEAM_ID: &str = "Q6L2SF6YDW";
+
+/// A `codesign -R` requirement: an Apple-issued certificate chain whose
+/// leaf belongs to Anthropic's team.
+fn claude_signer_requirement() -> String {
+    format!("-R=anchor apple generic and certificate leaf[subject.OU] = \"{CLAUDE_TEAM_ID}\"")
+}
+
 fn run_command(cmd: &mut Command, timeout: Duration, cancel: &AtomicBool) -> Result<Output> {
     check_cancel(cancel)?;
     // Private temporary files avoid pipe deadlocks and never log login URLs,
@@ -713,16 +723,18 @@ fn install(provider: &str, destination: &Path, run: &Run) -> Result<()> {
             &run.cancelled,
         )?;
         verify_hash(&payload, expected, &run.cancelled)?;
+        // A valid signature is not enough: it must be Anthropic's Developer
+        // ID team, or a checksum-matching binary signed by anyone would pass.
         let signed = run_command(
             Command::new("/usr/bin/codesign")
-                .args(["--verify", "--strict"])
+                .args(["--verify", "--strict", &claude_signer_requirement()])
                 .arg(&payload),
             Duration::from_secs(30),
             &run.cancelled,
         )?;
         ensure!(
             signed.status.success(),
-            "The Claude component's signature could not be verified."
+            "The Claude component's signature could not be verified as Anthropic's."
         );
         payload
     } else {

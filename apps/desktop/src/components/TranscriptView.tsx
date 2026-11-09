@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, type ReactNode } from "react";
+import { Fragment, memo, useCallback, useEffect, useMemo, useRef, type ReactNode } from "react";
 import { Card } from "@/components/ui/card";
 
 /** Matches the `[hh:mm:ss] Who: text` format `session::format_line` emits. */
@@ -191,8 +191,9 @@ function TurnRow({
 }) {
   return (
     // Align labels and transcript text by baseline so different font sizes remain
-    // aligned.
-    <div className="grid grid-cols-[44px_minmax(0,1fr)] items-baseline gap-x-3">
+    // aligned. content-visibility lets the browser skip layout and paint of
+    // turns far off screen: a two-hour call is thousands of chunks.
+    <div className="grid grid-cols-[44px_minmax(0,1fr)] items-baseline gap-x-3 [contain-intrinsic-size:auto_48px] [content-visibility:auto]">
       <div className="text-right">
         <span
           className={
@@ -217,6 +218,82 @@ function TurnRow({
   );
 }
 
+/**
+ * One transcript block. Memoized so interim text, the hearing readout and
+ * typing in the notes pane re-render only the blocks whose inputs changed:
+ * the grouped block objects are stable between finalized lines.
+ */
+const TranscriptBlock = memo(function TranscriptBlock({
+  block,
+  matches,
+  activeMatchIndex,
+  onSeek,
+  registerLine,
+}: {
+  block: Block;
+  matches: TranscriptMatch[];
+  activeMatchIndex: number;
+  onSeek?: (offsetSecs: number) => void;
+  registerLine: (index: number, element: HTMLElement | null) => void;
+}) {
+  if (block.kind === "raw") {
+    return (
+      <p
+        ref={(element) => registerLine(block.index, element)}
+        className="whitespace-pre-wrap text-[15px] leading-[1.55] text-foreground"
+      >
+        {highlightedText(block.raw, block.index, matches, activeMatchIndex)}
+      </p>
+    );
+  }
+  return (
+    <TurnRow speaker={block.speaker}>
+      {/* One flowing paragraph per turn; every ASR chunk inside
+          stays its own seekable fragment, its timestamp on the
+          native tooltip. */}
+      {block.items.map((item, j) => {
+        const body = highlightedText(item.text, item.index, matches, activeMatchIndex);
+        return (
+          <Fragment key={item.index}>
+            {j > 0 && " "}
+            {onSeek ? (
+              // A span, not a <button>: buttons are atomic inline
+              // boxes and can never break across lines, so a
+              // long chunk would push the next one onto its own
+              // line instead of flowing like words.
+              <span
+                ref={(element) => registerLine(item.index, element)}
+                role="button"
+                tabIndex={0}
+                title={item.timestamp}
+                onClick={() => {
+                  // A drag to select words ends in a click too;
+                  // copying a passage must never start playback.
+                  if (window.getSelection()?.toString()) return;
+                  onSeek(timestampToSeconds(item.timestamp));
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    onSeek(timestampToSeconds(item.timestamp));
+                  }
+                }}
+                className="-mx-0.5 cursor-pointer rounded-[4px] px-0.5 transition-colors [box-decoration-break:clone] hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+              >
+                {body}
+              </span>
+            ) : (
+              <span ref={(element) => registerLine(item.index, element)} title={item.timestamp}>
+                {body}
+              </span>
+            )}
+          </Fragment>
+        );
+      })}
+    </TurnRow>
+  );
+});
+
 export function TranscriptView({
   lines,
   interimMe,
@@ -233,6 +310,12 @@ export function TranscriptView({
   // yanks the view back down if the user has scrolled up to read history.
   const wasAtBottomRef = useRef(true);
   const isEmpty = lines.length === 0 && !interimMe && !interimThem;
+  // Grouped once per change of the finalized lines, not on every interim
+  // update (up to several a second while both sides talk).
+  const blocks = useMemo(() => groupIntoBlocks(lines), [lines]);
+  const registerLine = useCallback((index: number, element: HTMLElement | null) => {
+    lineRefs.current[index] = element;
+  }, []);
 
   function handleScroll() {
     const el = scrollRef.current;
@@ -279,65 +362,16 @@ export function TranscriptView({
           </p>
         ) : (
           <div className="flex flex-col gap-[14px]">
-            {groupIntoBlocks(lines).map((block) => {
-              if (block.kind === "raw") {
-                return (
-                  <p
-                    key={block.index}
-                    ref={(element) => { lineRefs.current[block.index] = element; }}
-                    className="whitespace-pre-wrap text-[15px] leading-[1.55] text-foreground"
-                  >
-                    {highlightedText(block.raw, block.index, matches, activeMatchIndex)}
-                  </p>
-                );
-              }
-              return (
-                <TurnRow key={block.items[0].index} speaker={block.speaker}>
-                  {/* One flowing paragraph per turn; every ASR chunk inside
-                      stays its own seekable fragment, its timestamp on the
-                      native tooltip. */}
-                  {block.items.map((item, j) => {
-                    const body = highlightedText(item.text, item.index, matches, activeMatchIndex);
-                    return (
-                      <Fragment key={item.index}>
-                        {j > 0 && " "}
-                        {onSeek ? (
-                          // A span, not a <button>: buttons are atomic inline
-                          // boxes and can never break across lines, so a
-                          // long chunk would push the next one onto its own
-                          // line instead of flowing like words.
-                          <span
-                            ref={(element) => { lineRefs.current[item.index] = element; }}
-                            role="button"
-                            tabIndex={0}
-                            title={item.timestamp}
-                            onClick={() => {
-                              // A drag to select words ends in a click too;
-                              // copying a passage must never start playback.
-                              if (window.getSelection()?.toString()) return;
-                              onSeek(timestampToSeconds(item.timestamp));
-                            }}
-                            onKeyDown={(event) => {
-                              if (event.key === "Enter" || event.key === " ") {
-                                event.preventDefault();
-                                onSeek(timestampToSeconds(item.timestamp));
-                              }
-                            }}
-                            className="-mx-0.5 cursor-pointer rounded-[4px] px-0.5 transition-colors [box-decoration-break:clone] hover:bg-primary/10 focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
-                          >
-                            {body}
-                          </span>
-                        ) : (
-                          <span ref={(element) => { lineRefs.current[item.index] = element; }} title={item.timestamp}>
-                            {body}
-                          </span>
-                        )}
-                      </Fragment>
-                    );
-                  })}
-                </TurnRow>
-              );
-            })}
+            {blocks.map((block) => (
+              <TranscriptBlock
+                key={block.kind === "raw" ? block.index : block.items[0].index}
+                block={block}
+                matches={matches}
+                activeMatchIndex={activeMatchIndex}
+                onSeek={onSeek}
+                registerLine={registerLine}
+              />
+            ))}
             {interimMe && (
               <TurnRow speaker="Me" draft>
                 {interimMe}

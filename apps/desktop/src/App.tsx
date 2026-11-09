@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
@@ -97,6 +97,9 @@ import { STANDARD_STYLE, STANDARD_STYLE_NAME, usePrompts } from "@/lib/prompts";
  * status to "recording" so the UI doesn't get stuck saying "loading model"
  * forever.
  */
+/** The inactive note view never shows live capture; a constant keeps its props stable. */
+const NO_LIVE_LINES: string[] = [];
+
 const MODEL_LOAD_FALLBACK_MS = 15_000;
 const SIDEBAR_COLLAPSED_KEY = "simstim.sidebar-collapsed";
 
@@ -1155,7 +1158,20 @@ function App() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
-  async function handleDeleteSession(path: string) {
+  // The sidebar's rows are memoized on these handlers, so they keep their
+  // identity across renders: state setters are stable, the rest is captured.
+  const selectSession = useCallback((path: string) => {
+    setSurface(null);
+    setSelectedPath(path);
+  }, []);
+  const collapseSidebar = useCallback(() => setSidebarCollapsed(true), []);
+  const openSearch = useCallback(() => setSearchOpen(true), []);
+  const openAsk = useCallback(() => setSurface("ask"), []);
+  const openLoops = useCallback(() => setSurface("loops"), []);
+  const openNoteFile = useCallback((path: string) => void openNote(path), []);
+  const revealNoteInFinder = useCallback((path: string) => void revealItemInDir(path), []);
+
+  const handleDeleteSession = useCallback(async (path: string) => {
     const title = sessions.find((s) => s.path === path)?.title ?? "this note";
     // A native confirm, not a silent delete: the files leave the folder.
     // They go to the Trash (recoverable), and the dialog says so.
@@ -1168,14 +1184,12 @@ function App() {
     if (!confirmed) return;
     try {
       await deleteSession(path);
-      if (selectedPath === path) {
-        setSelectedPath(null);
-      }
+      setSelectedPath((current) => (current === path ? null : current));
       await refreshSessions();
     } catch (err) {
       setStatus({ kind: "error", message: String(err) });
     }
-  }
+  }, [sessions, refreshSessions]);
 
   // Flush pending edits before generating a summary. Enhance-progress events drive
   // status, errors and the final refetch.
@@ -1244,8 +1258,9 @@ function App() {
     setAskCallRequest({ id: ++askCallRequestIdRef.current, question });
   }
 
-  async function handleNewSession() {
-    if (!appConfig?.onboarding_complete || busy) return;
+  const onboardingComplete = appConfig?.onboarding_complete === true;
+  const handleNewSession = useCallback(async () => {
+    if (!onboardingComplete || busy) return;
     setBusy(true);
     setSurface(null);
     try {
@@ -1257,7 +1272,7 @@ function App() {
     } finally {
       setBusy(false);
     }
-  }
+  }, [onboardingComplete, busy, refreshSessions]);
 
   // Whether a recording is in progress, independent of `status`: derived
   // from `activePath` (set for as long as the worker is running, cleared
@@ -1283,9 +1298,13 @@ function App() {
   // shortcut menu reads as clutter, so its branch renders a bare drag strip.
   const showTopbar = sessionActive || selectedPath !== null || surfaceOpen;
   // Use one processing label for sidebar rows with work in flight.
-  const busyPaths: Record<string, string> = {};
-  if (enhancingPath !== null) busyPaths[enhancingPath] = "finishing";
-  if (retranscribingJob) busyPaths[retranscribingJob.path] = describeFinishing(retranscribingJob.percent);
+  // Stable between changes so the memoized sidebar rows skip re-rendering.
+  const busyPaths = useMemo(() => {
+    const paths: Record<string, string> = {};
+    if (enhancingPath !== null) paths[enhancingPath] = "finishing";
+    if (retranscribingJob) paths[retranscribingJob.path] = describeFinishing(retranscribingJob.percent);
+    return paths;
+  }, [enhancingPath, retranscribingJob]);
   // The "recording" state has no word of its own: the hearing indicator
   // and the red Stop button carry it. While the open note's accurate pass
   // runs, the header carries its percent instead of a bare "saved": the
@@ -1339,21 +1358,18 @@ function App() {
         selectedPath={surfaceOpen ? null : selectedPath}
         activePath={activePath}
         busyPaths={busyPaths}
-        onSelect={(path) => {
-          setSurface(null);
-          setSelectedPath(path);
-        }}
+        onSelect={selectSession}
         onNewSession={handleNewSession}
-        onCollapse={() => setSidebarCollapsed(true)}
-        onOpenSearch={() => setSearchOpen(true)}
-        onOpenAsk={() => setSurface("ask")}
+        onCollapse={collapseSidebar}
+        onOpenSearch={openSearch}
+        onOpenAsk={openAsk}
         askActive={askNotesOpen}
-        onOpenLoops={() => setSurface("loops")}
+        onOpenLoops={openLoops}
         loopsActive={loopsOpen}
         loopsCount={loops?.exists ? loops.open_count : null}
         onDelete={handleDeleteSession}
-        onOpenFile={(path) => void openNote(path)}
-        onRevealInFinder={(path) => void revealItemInDir(path)}
+        onOpenFile={openNoteFile}
+        onRevealInFinder={revealNoteInFinder}
       />}
       {!sidebarCollapsed && (
         <ResizeHandle
@@ -1711,9 +1727,9 @@ function App() {
               initialData={sessionData}
               // SessionData carries no duration; the sidebar's scan does.
               durationSecs={sessions.find((s) => s.path === selectedPath)?.duration_secs ?? null}
-              liveLines={lines}
-              interimMe={interimMe}
-              interimThem={interimThem}
+              liveLines={NO_LIVE_LINES}
+              interimMe=""
+              interimThem=""
               retranscribingJob={retranscribingJob}
               enhanceRunning={enhancingPath === selectedPath}
               enhanceProgress={enhancing?.path === selectedPath ? enhancing.message : null}

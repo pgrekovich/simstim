@@ -1,12 +1,4 @@
-import {
-  forwardRef,
-  useEffect,
-  useImperativeHandle,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronDown, ChevronUp, Sparkles, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { createPortal } from "react-dom";
@@ -481,9 +473,10 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
   // playback. Only ever wired up by the JSX below when `initialData.audio_path` is set,
   // so `playerRef.current` being null here would mean the player was unmounted out from
   // under an in-flight click -- defensive, not expected in practice.
-  function handleSeek(offsetSecs: number) {
+  // Stable identity: the transcript blocks are memoized on it.
+  const handleSeek = useCallback((offsetSecs: number) => {
     playerRef.current?.seek(offsetSecs);
-  }
+  }, []);
 
   // Start a manual transcription request and reread the note after completion. Job
   // progress lives in App because it can outlive this view. Notify App when starting and

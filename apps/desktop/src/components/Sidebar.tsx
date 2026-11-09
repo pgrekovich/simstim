@@ -1,3 +1,4 @@
+import { memo, useMemo } from "react";
 import { FileText, Folder, ListChecks, MessageCircleQuestion, PanelLeftClose, Search, SquarePen, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -110,7 +111,126 @@ function groupSessions(sessions: SessionMeta[]): SessionGroup[] {
   return groups;
 }
 
-export function Sidebar({
+/**
+ * One note row, memoized: the list re-renders on every App render (live
+ * transcript, hearing readout), and a few hundred rows each wrapped in a
+ * context menu are the bulk of that work. App passes stable callbacks.
+ */
+const SessionRow = memo(function SessionRow({
+  session,
+  selected,
+  recording,
+  busyWord,
+  onSelect,
+  onDelete,
+  onOpenFile,
+  onRevealInFinder,
+}: {
+  session: SessionMeta;
+  selected: boolean;
+  recording: boolean;
+  busyWord?: string;
+  onSelect: (path: string) => void;
+  onDelete: (path: string) => void;
+  onOpenFile?: (path: string) => void;
+  onRevealInFinder?: (path: string) => void;
+}) {
+  // Recording wins over a (theoretically simultaneous) busy word: red
+  // tally is the loudest state this list has.
+  const busy = recording ? undefined : busyWord;
+  const duration = formatDuration(session.duration_secs);
+  return (
+    // Offer the note actions in a context menu as well as the open-note
+    // toolbar.
+    <ContextMenu>
+      <ContextMenuTrigger asChild>
+        <div
+          className={cn(
+            // Notes hides the hairlines touching the selected row
+            // (its tint reads as the divider); the row above loses
+            // its line through the `note-row` rule in index.css.
+            "note-row group relative border-b border-border last:border-b-0",
+            selected && "border-transparent"
+          )}
+        >
+          <button
+            type="button"
+            onClick={() => onSelect(session.path)}
+            data-selected={selected ? "true" : undefined}
+            className={cn(
+              "h-auto w-full rounded-[7px] px-2.5 py-[7px] text-left font-normal",
+              selected
+                ? "text-foreground hover:bg-primary/[0.18]"
+                : "text-foreground hover:bg-foreground/[0.05] active:bg-foreground/[0.10]",
+              recording
+                ? "flex items-center gap-2 bg-background shadow-[0_1px_2px_rgb(0_0_0/0.07)] dark:border dark:border-destructive/[0.28] dark:bg-destructive/[0.14]"
+                : busy
+                  ? "flex items-center gap-2"
+                  : "flex flex-col gap-px"
+            )}
+          >
+            {recording ? (
+              <>
+                <span
+                  data-testid="recording-dot"
+                  aria-hidden="true"
+                  className="recording-tally size-1.5 shrink-0 rounded-full bg-destructive"
+                />
+                <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                  <span className="truncate text-[13px] font-semibold text-foreground">{session.title}</span>
+                  <span className="text-[11px] text-destructive">recording</span>
+                </span>
+              </>
+            ) : busy ? (
+              <>
+                {/* Machine work, not capture: the quiet ink work
+                    spinner where the recording row has its red
+                    tally, and the status word in muted mono. */}
+                <span
+                  data-testid="working-dot"
+                  aria-hidden="true"
+                  className="working-spinner size-3 shrink-0 text-muted-foreground"
+                />
+                <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                  <span className="truncate text-[13px] font-semibold text-inherit">{session.title}</span>
+                  <span className="text-[11px] tabular-nums text-muted-foreground">{busy}</span>
+                </span>
+              </>
+            ) : (
+              <>
+                <span className="w-full truncate text-[13px] font-semibold">{session.title}</span>
+                <span className="text-[11px] tabular-nums text-muted-foreground">
+                  {formatTime(session.date)}
+                  {duration && ` · ${duration}`}
+                </span>
+              </>
+            )}
+          </button>
+        </div>
+      </ContextMenuTrigger>
+      <ContextMenuContent>
+        <ContextMenuItem onSelect={() => onOpenFile?.(session.path)}>
+          <FileText />
+          Open file
+        </ContextMenuItem>
+        <ContextMenuItem onSelect={() => onRevealInFinder?.(session.path)}>
+          <Folder />
+          Show in Finder
+        </ContextMenuItem>
+        <ContextMenuSeparator />
+        {/* Same gate as the hover trash button: the recording
+            session and one with machine work in flight can't
+            be deleted (the backend rejects both). */}
+        <ContextMenuItem disabled={recording || Boolean(busy)} onSelect={() => onDelete(session.path)}>
+          <Trash2 />
+          Move to Trash
+        </ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
+  );
+});
+
+export const Sidebar = memo(function Sidebar({
   width = 280,
   sessions,
   selectedPath,
@@ -129,7 +249,7 @@ export function Sidebar({
   onOpenFile,
   onRevealInFinder,
 }: SidebarProps) {
-  const groups = groupSessions(sessions);
+  const groups = useMemo(() => groupSessions(sessions), [sessions]);
 
   return (
     <aside
@@ -230,110 +350,23 @@ export function Sidebar({
               <div className="px-2 pb-1.5 pt-[18px] text-[13px] font-semibold text-foreground">
                 {group.label}
               </div>
-              {group.sessions.map((session) => {
-                const selected = selectedPath === session.path;
-                const recording = activePath === session.path;
-                // Recording wins over a (theoretically simultaneous) busy
-                // word: red tally is the loudest state this list has.
-                const busyWord = recording ? undefined : busyPaths?.[session.path];
-                const duration = formatDuration(session.duration_secs);
-                return (
-                  // Offer the note actions in a context menu as well as the open-note
-                  // toolbar.
-                  <ContextMenu key={session.path}>
-                    <ContextMenuTrigger asChild>
-                  <div
-                    className={cn(
-                      // Notes hides the hairlines touching the selected row
-                      // (its tint reads as the divider); the row above loses
-                      // its line through the `note-row` rule in index.css.
-                      "note-row group relative border-b border-border last:border-b-0",
-                      selected && "border-transparent"
-                    )}
-                  >
-                    <button
-                      type="button"
-                      onClick={() => onSelect(session.path)}
-                      data-selected={selected ? "true" : undefined}
-                      className={cn(
-                        "h-auto w-full rounded-[7px] px-2.5 py-[7px] text-left font-normal",
-                        selected
-                          ? "text-foreground hover:bg-primary/[0.18]"
-                          : "text-foreground hover:bg-foreground/[0.05] active:bg-foreground/[0.10]",
-                        recording
-                          ? "flex items-center gap-2 bg-background shadow-[0_1px_2px_rgb(0_0_0/0.07)] dark:border dark:border-destructive/[0.28] dark:bg-destructive/[0.14]"
-                          : busyWord
-                            ? "flex items-center gap-2"
-                            : "flex flex-col gap-px"
-                      )}
-                    >
-                      {recording ? (
-                        <>
-                          <span
-                            data-testid="recording-dot"
-                            aria-hidden="true"
-                            className="recording-tally size-1.5 shrink-0 rounded-full bg-destructive"
-                          />
-                          <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                            <span className="truncate text-[13px] font-semibold text-foreground">{session.title}</span>
-                            <span className="text-[11px] text-destructive">recording</span>
-                          </span>
-                        </>
-                      ) : busyWord ? (
-                        <>
-                          {/* Machine work, not capture: the quiet ink work
-                              spinner where the recording row has its red
-                              tally, and the status word in muted mono. */}
-                          <span
-                            data-testid="working-dot"
-                            aria-hidden="true"
-                            className="working-spinner size-3 shrink-0 text-muted-foreground"
-                          />
-                          <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                            <span className="truncate text-[13px] font-semibold text-inherit">{session.title}</span>
-                            <span className="text-[11px] tabular-nums text-muted-foreground">{busyWord}</span>
-                          </span>
-                        </>
-                      ) : (
-                        <>
-                          <span className="w-full truncate text-[13px] font-semibold">{session.title}</span>
-                          <span className="text-[11px] tabular-nums text-muted-foreground">
-                            {formatTime(session.date)}
-                            {duration && ` · ${duration}`}
-                          </span>
-                        </>
-                      )}
-                    </button>
-                  </div>
-                    </ContextMenuTrigger>
-                    <ContextMenuContent>
-                      <ContextMenuItem onSelect={() => onOpenFile?.(session.path)}>
-                        <FileText />
-                        Open file
-                      </ContextMenuItem>
-                      <ContextMenuItem onSelect={() => onRevealInFinder?.(session.path)}>
-                        <Folder />
-                        Show in Finder
-                      </ContextMenuItem>
-                      <ContextMenuSeparator />
-                      {/* Same gate as the hover trash button: the recording
-                          session and one with machine work in flight can't
-                          be deleted (the backend rejects both). */}
-                      <ContextMenuItem
-                        disabled={recording || Boolean(busyWord)}
-                        onSelect={() => onDelete(session.path)}
-                      >
-                        <Trash2 />
-                        Move to Trash
-                      </ContextMenuItem>
-                    </ContextMenuContent>
-                  </ContextMenu>
-                );
-              })}
+              {group.sessions.map((session) => (
+                <SessionRow
+                  key={session.path}
+                  session={session}
+                  selected={selectedPath === session.path}
+                  recording={activePath === session.path}
+                  busyWord={busyPaths?.[session.path]}
+                  onSelect={onSelect}
+                  onDelete={onDelete}
+                  onOpenFile={onOpenFile}
+                  onRevealInFinder={onRevealInFinder}
+                />
+              ))}
             </div>
           ))
         )}
       </div>
     </aside>
   );
-}
+});

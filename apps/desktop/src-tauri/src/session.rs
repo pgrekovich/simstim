@@ -25,11 +25,15 @@ use crate::audio_sink::{AudioFormat, AudioSink};
 /// it). Per-segment saves are unaffected by this throttle.
 const MIN_EDIT_SAVE_INTERVAL: Duration = Duration::from_secs(1);
 
-/// minimum gap between interim decodes for the same channel.
+/// Minimum gap between interim decodes for the same channel.
 const INTERIM_MIN_INTERVAL: Duration = Duration::from_millis(400);
+/// Longest gap the adaptive throttle may grow to: the draft must never look
+/// frozen, even on a loaded machine.
+const INTERIM_MAX_INTERVAL: Duration = Duration::from_secs(2);
 
-/// Limit interim decoding to the last eight seconds to bound work during long speech.
-const INTERIM_DECODE_CAP_SAMPLES: usize = 8 * 16_000;
+/// Limit interim decoding to the last five seconds to bound work during long
+/// speech: the draft only needs the tail the reader is following.
+const INTERIM_DECODE_CAP_SAMPLES: usize = 5 * 16_000;
 
 /// Force a final segment after ten seconds of continuous speech; VAD max_speech_duration
 /// alone does not reliably split it.
@@ -66,6 +70,19 @@ struct ChannelInterim {
     /// `buf.len()` as of the last interim decode, for the "buffer must have
     /// grown since last decode" gate.
     last_interim_len: usize,
+    /// How long the last interim decode took, which sets the gap before the
+    /// next one (see `interim_interval`).
+    last_interim_cost: Option<Duration>,
+}
+
+/// The gap before the next interim decode: twice what the last one cost,
+/// never under the floor or over the ceiling. One worker thread decodes
+/// both channels, so when both sides talk at once, or the machine is busy,
+/// a fixed cadence would queue decodes faster than they finish and the
+/// draft would fall further and further behind the speech.
+fn interim_interval(last_cost: Option<Duration>) -> Duration {
+    let adaptive = last_cost.map_or(INTERIM_MIN_INTERVAL, |cost| cost * 2);
+    adaptive.clamp(INTERIM_MIN_INTERVAL, INTERIM_MAX_INTERVAL)
 }
 
 /// Pure decision function for the interim decode throttle (Global
@@ -918,10 +935,12 @@ fn process_channel_chunk_with_cap(
         interim.buf.len(),
         interim.last_interim_len,
         elapsed,
-        INTERIM_MIN_INTERVAL,
+        interim_interval(interim.last_interim_cost),
     ) {
         let start = interim.buf.len().saturating_sub(INTERIM_DECODE_CAP_SAMPLES);
+        let started = Instant::now();
         let text = engine.transcribe(&interim.buf[start..]);
+        interim.last_interim_cost = Some(started.elapsed());
         on_interim(channel, text);
         interim.last_interim_at = Some(Instant::now());
         interim.last_interim_len = interim.buf.len();
@@ -1106,6 +1125,14 @@ mod tests {
         use super::*;
 
         const MIN: Duration = Duration::from_millis(400);
+
+        #[test]
+        fn the_gap_follows_the_last_decode_cost_within_bounds() {
+            assert_eq!(interim_interval(None), INTERIM_MIN_INTERVAL);
+            assert_eq!(interim_interval(Some(Duration::from_millis(100))), INTERIM_MIN_INTERVAL);
+            assert_eq!(interim_interval(Some(Duration::from_millis(500))), Duration::from_secs(1));
+            assert_eq!(interim_interval(Some(Duration::from_secs(5))), INTERIM_MAX_INTERVAL);
+        }
 
         #[test]
         fn refuses_when_speech_not_active() {

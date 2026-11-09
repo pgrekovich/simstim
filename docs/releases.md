@@ -47,6 +47,9 @@ The workflow requires these GitHub Actions secrets:
 - `TAURI_SIGNING_PRIVATE_KEY`, the minisign private key that signs the
   in-app updater archive, and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` (empty
   when the key has none)
+- `TAP_TOKEN`, a fine-grained personal access token with read and write
+  access to the contents of `pgrekovich/homebrew-tap` and nothing else; the
+  `homebrew` job pushes the cask bump with it
 
 The Developer ID identity is configured in the workflow. The certificate is
 imported into an ephemeral runner keychain. CI tests, builds, signs,
@@ -63,6 +66,16 @@ Release workflow to finish. Verify the release's prerelease status, download
 the DMG, compare its SHA-256 with the release notes and check installation
 on a second Mac. The README links to `https://simstim.tech/download`, which
 always points at the latest stable release.
+
+## Homebrew
+
+`brew install --cask pgrekovich/tap/simstim` installs the DMG from the tap
+at `https://github.com/pgrekovich/homebrew-tap`. The cask pins the version
+and the DMG's SHA-256, so after a stable release the `homebrew` job
+downloads the published DMG, rewrites those two lines in `Casks/simstim.rb`
+and pushes to the tap. Check the tap's latest commit after a release; if the
+job failed, bump the two lines by hand and verify them with `brew fetch
+--cask pgrekovich/tap/simstim`. Prereleases leave the cask alone.
 
 ## Landing page
 

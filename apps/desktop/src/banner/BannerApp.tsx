@@ -1,10 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { emitTo, listen } from "@tauri-apps/api/event";
 import { ChevronDown, X } from "lucide-react";
 import appIcon from "../../src-tauri/icons/128x128.png";
 import {
   bannerCurrentState,
   bannerDismiss,
+  bannerPainted,
   getConfig,
   showMainWindow,
   type BannerStatePayload,
@@ -13,7 +14,6 @@ import { initTheme } from "@/lib/theme";
 
 /** How long the detected banner stays up before dismissing itself. */
 export const AUTO_DISMISS_MS = 30_000;
-const TICK_MS = 100;
 
 /**
  * The floating banner window's whole UI (main.tsx renders this instead of
@@ -24,7 +24,8 @@ const TICK_MS = 100;
  */
 export default function BannerApp() {
   const [state, setState] = useState<BannerStatePayload>({ kind: "hidden" });
-  const [remainingMs, setRemainingMs] = useState(AUTO_DISMISS_MS);
+  /** Auto-dismiss time left; counts down only while the pointer is outside. */
+  const remainingMsRef = useRef(AUTO_DISMISS_MS);
   const [hovered, setHovered] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
 
@@ -55,6 +56,14 @@ export default function BannerApp() {
     };
   }, []);
 
+  // The backend shows the native window only after this confirmation, so
+  // the card is in the DOM by the time the panel is ordered front. Layout
+  // effect: runs after the DOM commit, before the browser paints.
+  useLayoutEffect(() => {
+    if (state.kind === "hidden" || state.seq === undefined) return;
+    void bannerPainted(state.seq);
+  }, [state]);
+
   useEffect(() => {
     // Any pushed state change closes the dropdown; a detected state also
     // resets the timer AND the hover flag: when the banner hides with the
@@ -63,23 +72,27 @@ export default function BannerApp() {
     // permanently paused.
     setMenuOpen(false);
     if (state.kind !== "detected") return;
-    setRemainingMs(AUTO_DISMISS_MS);
+    remainingMsRef.current = AUTO_DISMISS_MS;
     setHovered(false);
   }, [state]);
 
+  // One timeout for the whole countdown instead of a 100 ms interval that
+  // re-rendered the card 300 times per banner. Hovering unschedules it and
+  // keeps the time left; leaving reschedules the remainder.
   useEffect(() => {
     if (state.kind !== "detected" || hovered) return;
-    const id = setInterval(() => setRemainingMs((ms) => Math.max(0, ms - TICK_MS)), TICK_MS);
-    return () => clearInterval(id);
+    const startedAt = Date.now();
+    const id = setTimeout(() => {
+      // Hide locally first so nothing re-fires; the backend hides the
+      // native window in response to the dismiss.
+      setState({ kind: "hidden" });
+      void bannerDismiss();
+    }, remainingMsRef.current);
+    return () => {
+      clearTimeout(id);
+      remainingMsRef.current = Math.max(0, remainingMsRef.current - (Date.now() - startedAt));
+    };
   }, [state, hovered]);
-
-  useEffect(() => {
-    if (state.kind !== "detected" || remainingMs > 0) return;
-    // Hide locally first so this effect cannot re-fire; the backend hides
-    // the native window in response to the dismiss.
-    setState({ kind: "hidden" });
-    void bannerDismiss();
-  }, [state, remainingMs]);
 
   if (state.kind === "hidden") return null;
 

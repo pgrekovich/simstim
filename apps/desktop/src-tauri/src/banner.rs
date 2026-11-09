@@ -1,7 +1,9 @@
 //! Floating call-banner controller and Tauri window adapter. The pure controller returns
 //! a new state only when rendering needs to change.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::time::Duration;
 
 use serde::Serialize;
 use tauri::{
@@ -22,6 +24,10 @@ const WINDOW_WIDTH: f64 = 392.0;
 const WINDOW_HEIGHT: f64 = 170.0;
 /// Logical inset from the monitor's top-right corner.
 const SCREEN_MARGIN: f64 = 16.0;
+/// How long a visible state waits for the webview's render confirmation
+/// before the window is shown anyway. A hung or reloading webview must
+/// never hide a call suggestion; a healthy one answers within a frame.
+const SHOW_FALLBACK: Duration = Duration::from_millis(150);
 
 /// What the banner window is currently showing.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -48,6 +54,46 @@ pub enum BannerPayload {
     Hidden,
     Detected { bundle_id: String, app_name: String },
     Ended,
+}
+
+/// What the banner webview receives: the state plus the sequence number it
+/// echoes back through `banner_painted` once that state is in the DOM.
+#[derive(Clone, Debug, Serialize)]
+pub struct BannerEvent {
+    pub seq: u64,
+    #[serde(flatten)]
+    pub state: BannerPayload,
+}
+
+/// Orders the window front only after the webview has rendered the state
+/// it is about to show. Without it the transparent panel appeared empty
+/// and the card jumped in a frame or two later.
+#[derive(Default)]
+struct ShowGate {
+    pending: Option<u64>,
+}
+
+impl ShowGate {
+    fn request(&mut self, seq: u64) {
+        self.pending = Some(seq);
+    }
+
+    fn cancel(&mut self) {
+        self.pending = None;
+    }
+
+    /// Whether the confirmation (or the fallback timer) for `seq` should
+    /// show the window now. Stale sequence numbers are ignored, so a late
+    /// answer for a state that has since been replaced or hidden does
+    /// nothing.
+    fn painted(&mut self, seq: u64) -> bool {
+        if self.pending == Some(seq) {
+            self.pending = None;
+            true
+        } else {
+            false
+        }
+    }
 }
 
 impl From<&BannerState> for BannerPayload {
@@ -192,6 +238,9 @@ impl BannerController {
 pub struct Banner {
     app: AppHandle,
     controller: Mutex<BannerController>,
+    /// Sequence number of the last state sent to the webview.
+    seq: AtomicU64,
+    show_gate: Mutex<ShowGate>,
 }
 
 impl Banner {
@@ -225,6 +274,8 @@ impl Banner {
         Ok(Self {
             app: app.clone(),
             controller: Mutex::new(BannerController::new()),
+            seq: AtomicU64::new(0),
+            show_gate: Mutex::new(ShowGate::default()),
         })
     }
 
@@ -283,23 +334,49 @@ impl Banner {
         self.apply(next);
     }
 
-    pub fn current_payload(&self) -> BannerPayload {
-        BannerPayload::from(self.controller.lock().unwrap().current())
+    pub fn current_event(&self) -> BannerEvent {
+        BannerEvent {
+            seq: self.seq.load(Ordering::Relaxed),
+            state: BannerPayload::from(self.controller.lock().unwrap().current()),
+        }
+    }
+
+    /// The webview rendered the state numbered `seq`: show the window if
+    /// that state is still the one waiting to be shown.
+    pub fn painted(&self, seq: u64) {
+        if self.show_gate.lock().unwrap().painted(seq) {
+            self.set_visible(true);
+        }
     }
 
     fn apply(&self, next: Option<BannerState>) {
         let Some(state) = next else { return };
-        let visible = state.is_visible();
-        // Emit before showing so the webview never gets displayed while
-        // still rendering the previous state.
-        if let Err(error) = self
-            .app
-            .emit_to(WINDOW_LABEL, "banner-state", BannerPayload::from(&state))
-        {
+        let seq = self.seq.fetch_add(1, Ordering::Relaxed) + 1;
+        let event = BannerEvent {
+            seq,
+            state: BannerPayload::from(&state),
+        };
+        if let Err(error) = self.app.emit_to(WINDOW_LABEL, "banner-state", event) {
             eprintln!("banner state emit failed: {error}");
         }
-        // Detector actions arrive on its listener thread; every AppKit call
-        // below must happen on the main thread.
+        if state.is_visible() {
+            // Shown once the webview confirms the render (`painted`), or
+            // after the fallback delay if it never does.
+            self.show_gate.lock().unwrap().request(seq);
+            let app = self.app.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(SHOW_FALLBACK);
+                app.state::<Banner>().painted(seq);
+            });
+        } else {
+            self.show_gate.lock().unwrap().cancel();
+            self.set_visible(false);
+        }
+    }
+
+    /// Detector actions and confirmations arrive on other threads; every
+    /// AppKit call must happen on the main thread.
+    fn set_visible(&self, visible: bool) {
         let app = self.app.clone();
         let result = self.app.run_on_main_thread(move || {
             set_window_visible(&app, visible);
@@ -394,6 +471,11 @@ fn convert_to_panel(window: &WebviewWindow) -> tauri::Result<()> {
     let panel = window.to_panel()?;
     panel.set_style_mask(NON_ACTIVATING_PANEL);
     panel.set_level(STATUS_WINDOW_LEVEL);
+    // The app is inactive while the panel is up (the user is in the call),
+    // and AppKit only routes mouse-moved events to an inactive window that
+    // asks for them. Without this, hover (the Dismiss button, pausing the
+    // auto-dismiss timer) worked only intermittently.
+    panel.set_accepts_mouse_moved_events(true);
     // fullScreenAuxiliary is the load-bearing flag: calls are often in
     // full-screen Zoom or Meet, and a plain window can never order in over
     // another app's full-screen space.
@@ -411,8 +493,14 @@ pub fn banner_dismiss(banner: State<Banner>) {
 }
 
 #[tauri::command]
-pub fn banner_current_state(banner: State<Banner>) -> BannerPayload {
-    banner.current_payload()
+pub fn banner_current_state(banner: State<Banner>) -> BannerEvent {
+    banner.current_event()
+}
+
+/// The webview's confirmation that the state numbered `seq` is rendered.
+#[tauri::command]
+pub fn banner_painted(seq: u64, banner: State<Banner>) {
+    banner.painted(seq);
 }
 
 /// The banner's "Open simstim" action: the one deliberate focus steal.
@@ -612,6 +700,42 @@ mod tests {
     fn dismiss_while_hidden_is_ignored() {
         let mut c = BannerController::new();
         assert_eq!(c.on_dismiss(), None);
+    }
+
+    #[test]
+    fn show_gate_shows_once_for_the_requested_state_only() {
+        let mut gate = ShowGate::default();
+        gate.request(1);
+        // A stale confirmation (previous state) does nothing.
+        assert!(!gate.painted(0));
+        assert!(gate.painted(1));
+        // The fallback timer firing after the confirmation is ignored.
+        assert!(!gate.painted(1));
+    }
+
+    #[test]
+    fn show_gate_follows_the_newest_request_and_a_hide_cancels() {
+        let mut gate = ShowGate::default();
+        gate.request(1);
+        gate.request(2);
+        assert!(!gate.painted(1));
+        assert!(gate.painted(2));
+
+        gate.request(3);
+        gate.cancel();
+        assert!(!gate.painted(3));
+    }
+
+    #[test]
+    fn banner_events_flatten_the_state_beside_the_sequence_number() {
+        let event = BannerEvent {
+            seq: 7,
+            state: BannerPayload::from(&detected("us.zoom.xos", "Zoom")),
+        };
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["seq"], 7);
+        assert_eq!(json["kind"], "detected");
+        assert_eq!(json["app_name"], "Zoom");
     }
 
     #[test]

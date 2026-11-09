@@ -774,6 +774,7 @@ pub fn run() {
             detect::set_detect_calls,
             banner::banner_dismiss,
             banner::banner_current_state,
+            banner::banner_painted,
             banner::show_main_window,
             models::list_models,
             models::download_model,

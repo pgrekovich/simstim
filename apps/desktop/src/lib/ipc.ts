@@ -107,13 +107,26 @@ export interface CallDetectedPayload {
  * seed, so a reloaded banner webview cannot miss a push). Mirrors
  * `banner::BannerPayload` (apps/desktop/src-tauri/src/banner.rs).
  */
-export type BannerStatePayload =
+export type BannerStatePayload = (
   | { kind: "hidden" }
   | { kind: "detected"; bundle_id: string; app_name: string }
-  | { kind: "ended" };
+  | { kind: "ended" }
+) & {
+  /**
+   * Mirrors `banner::BannerEvent`: the number the backend gave this state.
+   * The banner echoes it through `bannerPainted` once the state is in the
+   * DOM, and only then is the native window shown.
+   */
+  seq?: number;
+};
 
 export function bannerCurrentState(): Promise<BannerStatePayload> {
   return invoke("banner_current_state");
+}
+
+/** Confirms that the banner rendered the state numbered `seq`. */
+export function bannerPainted(seq: number): Promise<void> {
+  return invoke("banner_painted", { seq });
 }
 
 /** Hides the banner (the X button and the auto-dismiss timeout). */

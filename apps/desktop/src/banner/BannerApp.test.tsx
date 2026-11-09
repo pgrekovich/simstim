@@ -16,6 +16,7 @@ vi.mock("@/lib/ipc", () => ({
   getConfig: vi.fn().mockResolvedValue({ theme: "system" }),
   bannerCurrentState: vi.fn().mockResolvedValue({ kind: "hidden" }),
   bannerDismiss: vi.fn().mockResolvedValue(undefined),
+  bannerPainted: vi.fn().mockResolvedValue(undefined),
   showMainWindow: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -50,6 +51,7 @@ async function renderDetected() {
 beforeEach(() => {
   vi.mocked(ipc.bannerCurrentState).mockClear().mockResolvedValue({ kind: "hidden" });
   vi.mocked(ipc.bannerDismiss).mockClear();
+  vi.mocked(ipc.bannerPainted).mockClear();
   vi.mocked(ipc.showMainWindow).mockClear();
   vi.mocked(listen).mockClear();
   vi.mocked(emitTo).mockClear();
@@ -84,6 +86,17 @@ describe("BannerApp", () => {
     emit("banner-state", { kind: "ended" });
     expect(await screen.findByText("Call seems over")).toBeVisible();
     expect(screen.getByRole("button", { name: /^stop$/i })).toBeVisible();
+  });
+
+  it("confirms a rendered state by its sequence number, never a hidden one", async () => {
+    render(<BannerApp />);
+    await act(async () => {});
+    emit("banner-state", { ...DETECTED, seq: 3 });
+    screen.getByText("Zoom");
+    expect(ipc.bannerPainted).toHaveBeenCalledWith(3);
+
+    emit("banner-state", { kind: "hidden", seq: 4 });
+    expect(ipc.bannerPainted).toHaveBeenCalledTimes(1);
   });
 
   it("start forwards to the main window with the detection payload", async () => {
@@ -147,18 +160,27 @@ describe("BannerApp", () => {
     expect(ipc.bannerDismiss).toHaveBeenCalledTimes(1);
   });
 
-  it("hovering pauses the auto-dismiss timer", async () => {
+  it("hovering pauses the auto-dismiss timer and keeps the time left", async () => {
     vi.useFakeTimers();
     await renderDetected();
+    // Ten seconds elapse, then the pointer comes in: the countdown holds.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
     fireEvent.mouseEnter(screen.getByRole("status"));
     await act(async () => {
       await vi.advanceTimersByTimeAsync(AUTO_DISMISS_MS * 2);
     });
     expect(ipc.bannerDismiss).not.toHaveBeenCalled();
 
+    // Leaving resumes from the remaining twenty seconds, not a fresh thirty.
     fireEvent.mouseLeave(screen.getByRole("status"));
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(AUTO_DISMISS_MS + 1_000);
+      await vi.advanceTimersByTimeAsync(AUTO_DISMISS_MS - 10_000 - 1_000);
+    });
+    expect(ipc.bannerDismiss).not.toHaveBeenCalled();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
     });
     expect(ipc.bannerDismiss).toHaveBeenCalledTimes(1);
   });

@@ -66,6 +66,10 @@ tauri-plugin-updater = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 tracing-appender = "0.2"
+# Mutexes that cannot be poisoned: a panic while a lock is held (device
+# setup runs under one) must not turn every later lock into a second
+# panic, least of all inside a Drop during unwinding.
+parking_lot = "0.12"
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = "3.7"
 cidre = { version = "0.29", default-features = false, features = ["app", "at", "blocks", "core_audio", "dispatch", "macos_14_2"] }

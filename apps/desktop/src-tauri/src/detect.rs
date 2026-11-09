@@ -15,7 +15,7 @@ use crate::{config::Config, AppState};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
-use std::sync::Mutex;
+use parking_lot::Mutex;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -451,7 +451,7 @@ impl DetectHandle {
 impl Drop for DetectHandle {
     fn drop(&mut self) {
         let _ = self.tx.send(WorkerMsg::Shutdown);
-        if let Some(join) = self.join.lock().unwrap().take() {
+        if let Some(join) = self.join.lock().take() {
             let _ = join.join();
         }
     }

@@ -8,8 +8,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc, Mutex,
+    Arc,
 };
+use parking_lot::Mutex;
 use std::time::{Duration, Instant};
 use tauri::Emitter;
 
@@ -153,7 +154,7 @@ fn latest_provider_version(provider: &str, work: &Path) -> Result<String> {
 /// Metadata only, only for installed helpers. A manual check bypasses the daily cache.
 async fn read_provider_status(force: bool) -> Vec<ProviderStatus> {
     tauri::async_runtime::spawn_blocking(move || {
-        let mut cache = UPDATE_CHECK.lock().unwrap();
+        let mut cache = UPDATE_CHECK.lock();
         if force {
             *cache = None;
         }
@@ -227,20 +228,20 @@ pub struct SetupStatus {
 struct Slot;
 impl Drop for Slot {
     fn drop(&mut self) {
-        *SETUP.lock().unwrap() = None;
+        *SETUP.lock() = None;
     }
 }
 #[tauri::command]
 pub fn ai_setup_status() -> Option<SetupStatus> {
-    SETUP.lock().unwrap().as_ref().map(|run| SetupStatus {
+    SETUP.lock().as_ref().map(|run| SetupStatus {
         provider: run.provider.clone(),
         updating: run.updating,
-        phase: run.phase.lock().unwrap().to_string(),
+        phase: run.phase.lock().to_string(),
     })
 }
 #[tauri::command]
 pub fn cancel_ai_setup() {
-    if let Some(run) = SETUP.lock().unwrap().as_ref() {
+    if let Some(run) = SETUP.lock().as_ref() {
         run.cancelled.store(true, Ordering::Relaxed);
     }
 }
@@ -782,7 +783,7 @@ pub async fn setup_ai(
         cancelled: AtomicBool::new(false),
     });
     {
-        let mut current = SETUP.lock().unwrap();
+        let mut current = SETUP.lock();
         if current.is_some() {
             return Err(
                 "AI setup is already running. Finish it or cancel before trying again.".into(),
@@ -799,14 +800,14 @@ pub async fn setup_ai(
             None => {
                 let path = managed_binary(&provider).context("Could not find your application support directory")?;
                 install(&provider, &path, &run)?;
-                *UPDATE_CHECK.lock().unwrap() = None;
+                *UPDATE_CHECK.lock() = None;
                 let _ = app.emit("ai-helper-updated", &provider);
                 path
             }
         };
         check_cancel(&run.cancelled)?;
         if probe_cancellable(&provider, &binary, &run.cancelled).1 { return Ok(()); }
-        *run.phase.lock().unwrap() = "signing_in";
+        *run.phase.lock() = "signing_in";
         let work = tempfile::tempdir()?;
         let result = run_command(Command::new(&binary).args(auth_args(&provider, true)).current_dir(work.path()),
             Duration::from_secs(300), &run.cancelled)?;

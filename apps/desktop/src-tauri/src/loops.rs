@@ -19,7 +19,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Mutex;
+use parking_lot::Mutex;
 
 use chrono::{DateTime, Datelike, Duration, Local, NaiveDate};
 use serde::{Deserialize, Serialize};
@@ -1478,7 +1478,7 @@ fn run<R: tauri::Runtime>(app: &tauri::AppHandle<R>, scope: Scope) -> Result<(),
     state.pending.fetch_add(1, Ordering::SeqCst);
     let result = {
         let _pending = PendingGuard(&state.pending);
-        let _turn = state.lock.lock().unwrap_or_else(|e| e.into_inner());
+        let _turn = state.lock.lock();
         emit(app, "running", None);
         update(app, scope)
     };

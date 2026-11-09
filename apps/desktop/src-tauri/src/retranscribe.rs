@@ -21,7 +21,7 @@ use anyhow::{anyhow, Context, Result};
 use serde::Serialize;
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use parking_lot::Mutex;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::oneshot;
 
@@ -197,19 +197,19 @@ impl RetranscribeState {
     /// Whether a transcription job is running. Model deletion must also check
     /// has_queued_jobs.
     pub fn is_running(&self) -> bool {
-        self.0.lock().unwrap().queue.running.is_some()
+        self.0.lock().queue.running.is_some()
     }
 
     /// Whether jobs are waiting. Block model deletion for queued jobs as well as the
     /// running job.
     pub fn has_queued_jobs(&self) -> bool {
-        !self.0.lock().unwrap().queue.pending.is_empty()
+        !self.0.lock().queue.pending.is_empty()
     }
 
     /// Whether this path is running or queued. Prevent deletion of its files without
     /// blocking unrelated notes.
     pub fn involves(&self, path: &str) -> bool {
-        let inner = self.0.lock().unwrap();
+        let inner = self.0.lock();
         inner.queue.running.as_deref() == Some(path)
             || inner.queue.pending.iter().any(|p| p == path)
     }
@@ -220,7 +220,7 @@ impl RetranscribeState {
 /// leaving the queue stuck.
 fn try_enqueue<R: tauri::Runtime>(app: &AppHandle<R>, path: &str, job: QueuedJob) -> EnqueueOutcome {
     let jobs_state = app.state::<RetranscribeState>();
-    let mut inner = jobs_state.0.lock().unwrap();
+    let mut inner = jobs_state.0.lock();
     let outcome = inner.queue.enqueue(path);
     if outcome == EnqueueOutcome::Queued {
         inner.jobs.insert(path.to_string(), job);
@@ -232,7 +232,7 @@ fn try_enqueue<R: tauri::Runtime>(app: &AppHandle<R>, path: &str, job: QueuedJob
 /// continue draining rather than leaving an unstartable path in the running slot.
 fn dequeue_next_runnable<R: tauri::Runtime>(app: &AppHandle<R>) -> Option<(String, QueuedJob)> {
     let jobs_state = app.state::<RetranscribeState>();
-    let mut inner = jobs_state.0.lock().unwrap();
+    let mut inner = jobs_state.0.lock();
     loop {
         let next_path = inner.queue.finish_and_advance()?;
         if let Some(job) = inner.jobs.remove(&next_path) {
@@ -1375,14 +1375,14 @@ mod tests {
             assert!(!state.has_queued_jobs());
 
             {
-                let mut inner = state.0.lock().unwrap();
+                let mut inner = state.0.lock();
                 inner.queue.enqueue("/tmp/a.md");
             }
             assert!(state.is_running(), "the first path claims the running slot");
             assert!(!state.has_queued_jobs(), "nothing queued behind it yet");
 
             {
-                let mut inner = state.0.lock().unwrap();
+                let mut inner = state.0.lock();
                 inner.queue.enqueue("/tmp/b.md");
             }
             assert!(state.has_queued_jobs(), "a second path queues behind the first");
@@ -1394,7 +1394,7 @@ mod tests {
             assert!(!state.involves("/tmp/a.md"));
 
             {
-                let mut inner = state.0.lock().unwrap();
+                let mut inner = state.0.lock();
                 inner.queue.enqueue("/tmp/a.md");
                 inner.queue.enqueue("/tmp/b.md");
             }
@@ -1558,7 +1558,7 @@ mod tests {
             // `finish_and_advance` landing right after can never find
             // `pending` holding a path `jobs` doesn't know about yet.
             let state = handle.state::<RetranscribeState>();
-            let inner = state.0.lock().unwrap();
+            let inner = state.0.lock();
             assert!(
                 inner.jobs.contains_key("/tmp/b.md"),
                 "job data must already be stored once try_enqueue returns Queued"
@@ -1576,7 +1576,7 @@ mod tests {
             assert_eq!(try_enqueue(&handle, "/tmp/a.md", job("/tmp/a.md")), EnqueueOutcome::AlreadyRunning);
 
             let state = handle.state::<RetranscribeState>();
-            let inner = state.0.lock().unwrap();
+            let inner = state.0.lock();
             assert!(
                 inner.jobs.is_empty(),
                 "StartNow/AlreadyRunning must never store job data -- the caller \
@@ -1600,7 +1600,7 @@ mod tests {
 
             {
                 let jobs = handle.state::<RetranscribeState>();
-                let mut inner = jobs.0.lock().unwrap();
+                let mut inner = jobs.0.lock();
                 inner.queue.running = Some("/tmp/just-finished.md".to_string());
                 // Simulates the pre-fix race directly: a path sitting in
                 // `pending` with no matching entry in `jobs` at all -- the
@@ -1630,7 +1630,7 @@ mod tests {
             );
 
             let state = handle.state::<RetranscribeState>();
-            let inner = state.0.lock().unwrap();
+            let inner = state.0.lock();
             assert_eq!(
                 inner.queue.running.as_deref(),
                 Some("/tmp/real.md"),
@@ -1655,7 +1655,7 @@ mod tests {
 
             {
                 let jobs = handle.state::<RetranscribeState>();
-                let mut inner = jobs.0.lock().unwrap();
+                let mut inner = jobs.0.lock();
                 inner.queue.running = Some("/tmp/just-finished.md".to_string());
                 inner.queue.pending.push_back("/tmp/missing-a.md".to_string());
                 inner.queue.pending.push_back("/tmp/missing-b.md".to_string());
@@ -1667,7 +1667,7 @@ mod tests {
             assert!(dequeue_next_runnable(&handle).is_none());
 
             let state = handle.state::<RetranscribeState>();
-            let inner = state.0.lock().unwrap();
+            let inner = state.0.lock();
             assert_eq!(inner.queue.running, None, "nothing left to run, so `running` must clear");
         }
     }
@@ -1696,7 +1696,7 @@ mod tests {
 
             {
                 let jobs = handle.state::<RetranscribeState>();
-                jobs.0.lock().unwrap().queue.running = Some(md_path.display().to_string());
+                jobs.0.lock().queue.running = Some(md_path.display().to_string());
             }
             // A live recording worker owns the file for as long as this lease lives.
             let _recording = crate::session_files::record(&md_path).unwrap();
@@ -1715,7 +1715,7 @@ mod tests {
             assert_eq!(after, FIXTURE, "the file must be left byte-exact -- the pipeline must never run");
 
             assert_eq!(
-                handle.state::<RetranscribeState>().0.lock().unwrap().queue.running,
+                handle.state::<RetranscribeState>().0.lock().queue.running,
                 None,
                 "the queue must still advance even though the job was skipped"
             );
@@ -1738,7 +1738,7 @@ mod tests {
 
             {
                 let jobs = handle.state::<RetranscribeState>();
-                jobs.0.lock().unwrap().queue.running = Some(md_path.display().to_string());
+                jobs.0.lock().queue.running = Some(md_path.display().to_string());
             }
 
             let result = tauri::async_runtime::block_on(run_job(
@@ -1755,7 +1755,7 @@ mod tests {
             assert_eq!(after, FIXTURE, "the file must be left byte-exact -- the pipeline must never run");
 
             assert_eq!(
-                handle.state::<RetranscribeState>().0.lock().unwrap().queue.running,
+                handle.state::<RetranscribeState>().0.lock().queue.running,
                 None,
                 "the queue must still advance even though the job was dropped"
             );
@@ -1782,8 +1782,8 @@ mod tests {
 
             {
                 let jobs = handle.state::<RetranscribeState>();
-                jobs.0.lock().unwrap().queue.running = Some(md_path.display().to_string());
-                handle.state::<AppState>().finalizing.lock().unwrap().push(md_path.clone());
+                jobs.0.lock().queue.running = Some(md_path.display().to_string());
+                handle.state::<AppState>().finalizing.lock().push(md_path.clone());
             }
 
             let result = tauri::async_runtime::block_on(run_job(
@@ -1800,7 +1800,7 @@ mod tests {
             assert_eq!(after, before, "the file must be left untouched -- the pipeline must never run");
 
             assert_eq!(
-                handle.state::<RetranscribeState>().0.lock().unwrap().queue.running,
+                handle.state::<RetranscribeState>().0.lock().queue.running,
                 None,
                 "the queue must still advance even though the job was dropped"
             );
@@ -1823,7 +1823,7 @@ mod tests {
             let (next_tx, next_rx) = oneshot::channel();
             {
                 let jobs = handle.state::<RetranscribeState>();
-                let mut inner = jobs.0.lock().unwrap();
+                let mut inner = jobs.0.lock();
                 inner.queue.running = Some(bad_path.display().to_string());
                 inner.queue.pending.push_back("/tmp/next.md".to_string());
                 inner.jobs.insert(
@@ -1866,7 +1866,7 @@ mod tests {
             // Both doomed jobs have now fully drained: nothing left running
             // or queued.
             let state = handle.state::<RetranscribeState>();
-            let inner = state.0.lock().unwrap();
+            let inner = state.0.lock();
             assert_eq!(inner.queue.running, None);
             assert!(inner.queue.pending.is_empty());
         }

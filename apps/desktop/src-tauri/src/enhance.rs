@@ -12,7 +12,7 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::Mutex;
+use parking_lot::Mutex;
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
@@ -80,7 +80,7 @@ pub struct EnhanceState(Mutex<Option<String>>);
 
 impl EnhanceState {
     pub fn is_running(&self) -> bool {
-        self.0.lock().unwrap().is_some()
+        self.0.lock().is_some()
     }
 }
 
@@ -90,7 +90,7 @@ struct SlotGuard<'a>(&'a EnhanceState);
 
 impl Drop for SlotGuard<'_> {
     fn drop(&mut self) {
-        *self.0 .0.lock().unwrap() = None;
+        *self.0 .0.lock() = None;
     }
 }
 
@@ -1299,7 +1299,7 @@ fn enhance_path_inner<R: tauri::Runtime>(
         .ok()
         .and_then(|meta| meta.duration_secs);
     {
-        let mut running = enhance.0.lock().unwrap();
+        let mut running = enhance.0.lock();
         validate_enhance(
             md_path,
             state.active_output_path().as_deref(),

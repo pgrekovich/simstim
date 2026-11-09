@@ -8,7 +8,7 @@ use chrono::{DateTime, FixedOffset, Local};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use parking_lot::Mutex;
 use std::time::SystemTime;
 use tauri::{AppHandle, Manager};
 
@@ -61,7 +61,7 @@ pub fn list_sessions_in(dir: &Path) -> Vec<SessionMeta> {
         Ok(entries) => entries,
         Err(_) => return out,
     };
-    let mut cache = META_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    let mut cache = META_CACHE.lock();
     let cache = cache.get_or_insert_with(HashMap::new);
     let mut seen = Vec::new();
     for entry in entries.flatten() {
@@ -111,8 +111,10 @@ pub fn list_sessions_in(dir: &Path) -> Vec<SessionMeta> {
 /// modification time and size are unchanged. Derived from the files and
 /// rebuilt on demand: the folder stays the source of truth, this only
 /// spares re-parsing hundreds of unchanged notes on every window focus.
-static META_CACHE: Mutex<Option<HashMap<PathBuf, ((SystemTime, u64), SessionMeta)>>> =
-    Mutex::new(None);
+static META_CACHE: Mutex<Option<MetaCache>> = Mutex::new(None);
+/// Modification time and size: the key that decides whether a cached entry is current.
+type FileStamp = (SystemTime, u64);
+type MetaCache = HashMap<PathBuf, (FileStamp, SessionMeta)>;
 
 fn parse_rfc3339(date: &str) -> Option<DateTime<FixedOffset>> {
     DateTime::parse_from_rfc3339(date).ok()
@@ -1138,7 +1140,6 @@ mod tests {
         }
     }
 
-    #[test]
     /// The listing cache is keyed by modification time and size: a rewrite
     /// of a note shows its new title, a removed note leaves the list, and
     /// an unchanged note never re-parses (observed through a file whose

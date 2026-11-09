@@ -8,7 +8,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender};
-use std::sync::{Arc, Mutex};
+use parking_lot::Mutex;
+use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -122,7 +123,7 @@ impl PendingEdits {
 /// from `pending`. Returns whether anything was applied, so the worker loop
 /// knows whether it owes an edits-only save this tick.
 fn apply_pending_edits(pending: &Mutex<PendingEdits>, transcript: &mut Transcript) -> bool {
-    let (title, notes) = pending.lock().unwrap().take();
+    let (title, notes) = pending.lock().take();
     let mut applied = false;
     if let Some(title) = title {
         transcript.set_title(title);
@@ -392,7 +393,7 @@ impl Session {
             if let Err(error) = &result {
                 if !worker_stop_flag.load(Ordering::SeqCst) {
                     let message = format!("{error:#}");
-                    *worker_death.lock().unwrap_or_else(|e| e.into_inner()) = Some(message.clone());
+                    *worker_death.lock() = Some(message.clone());
                     on_died(message);
                 }
             }
@@ -417,7 +418,7 @@ impl Session {
     /// The error the worker died with before any stop was requested, if
     /// it did. See `death`.
     pub(crate) fn died(&self) -> Option<String> {
-        self.death.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.death.lock().clone()
     }
 
     /// Signals the worker to stop, waits for it to flush both VADs,
@@ -961,7 +962,6 @@ mod tests {
         let pending = Mutex::new(PendingEdits::default());
         pending
             .lock()
-            .unwrap()
             .update(Some("New title".into()), Some("New notes".into()));
         let mut transcript = Transcript::new(t0());
 
@@ -1055,13 +1055,13 @@ mod tests {
             |_| {},
             |_, _| {},
             |_| {},
-            move |_| *seen.lock().unwrap() = true,
+            move |_| *seen.lock() = true,
         );
         drop(chunk_tx);
         // Whether the engine loads or not (no models on CI), a stop that
         // was requested is never a death.
         let _ = session.stop();
-        assert!(!*died.lock().unwrap());
+        assert!(!*died.lock());
     }
 
     // Partial-audio continuation boundaries.

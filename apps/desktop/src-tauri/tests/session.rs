@@ -1,7 +1,8 @@
 use desktop_lib::session::PendingEdits;
 use simstim_capture::{Channel, Chunk};
 use std::sync::mpsc::channel;
-use std::sync::{Arc, Mutex};
+use parking_lot::Mutex;
+use std::sync::Arc;
 
 fn no_pending_edits() -> Arc<Mutex<PendingEdits>> {
     Arc::new(Mutex::new(PendingEdits::default()))
@@ -278,7 +279,6 @@ fn pending_edits_set_before_start_land_in_the_saved_file() {
     let pending = no_pending_edits();
     pending
         .lock()
-        .unwrap()
         .update(Some("Live edited title".into()), Some("Live notes".into()));
 
     let session = desktop_lib::session::Session::start(
@@ -333,7 +333,7 @@ fn save_failures_are_reported_via_on_error_and_stop_returns_err() {
         |_| {},
         |_, _| {},
         move |msg| {
-            errors_for_worker.lock().unwrap().push(msg);
+            errors_for_worker.lock().push(msg);
         },
     );
 
@@ -343,7 +343,7 @@ fn save_failures_are_reported_via_on_error_and_stop_returns_err() {
         "final save into a missing directory should fail"
     );
     assert!(
-        !errors.lock().unwrap().is_empty(),
+        !errors.lock().is_empty(),
         "expected at least one session-error message reported"
     );
 }
@@ -584,7 +584,8 @@ fn continuing_a_session_does_not_wipe_its_existing_duration_before_the_final_sav
 // offsets must both survive.
 mod continuing_audio {
     use super::*;
-    use std::sync::{Arc, Mutex};
+    use parking_lot::Mutex;
+    use std::sync::Arc;
 
     fn existing_md(duration_line: &str) -> String {
         existing_md_with_last_line(duration_line, "[00:00:01] Me: hi\n")
@@ -671,7 +672,7 @@ mod continuing_audio {
             no_pending_edits(),
             true,
             desktop_lib::audio_sink::AudioFormat::Flac,
-            move |line| lines_for_worker.lock().unwrap().push(line),
+            move |line| lines_for_worker.lock().push(line),
             |_, _| {},
             |_| {},
         );
@@ -727,7 +728,7 @@ mod continuing_audio {
         // base, not at the old, too-short audio's own 4-frame end and not at
         // 0 -- proving the transcript and the audio agree on where new
         // content starts.
-        let first_new_line = lines.lock().unwrap()[0].clone();
+        let first_new_line = lines.lock()[0].clone();
         let new_line_offset = parse_offset_secs(&first_new_line)
             .unwrap_or_else(|| panic!("line doesn't parse as timestamped: {first_new_line}"));
         assert!(
@@ -826,7 +827,7 @@ mod continuing_audio {
             no_pending_edits(),
             true,
             desktop_lib::audio_sink::AudioFormat::Flac,
-            move |line| lines_for_worker.lock().unwrap().push(line),
+            move |line| lines_for_worker.lock().push(line),
             |_, _| {},
             |_| {},
         );
@@ -849,7 +850,7 @@ mod continuing_audio {
             "expected new audio appended after the {old_frame_count}-frame old audio, got {total_frames} total frames"
         );
 
-        let first_new_line = lines.lock().unwrap()[0].clone();
+        let first_new_line = lines.lock()[0].clone();
         let new_line_offset = parse_offset_secs(&first_new_line)
             .unwrap_or_else(|| panic!("line doesn't parse as timestamped: {first_new_line}"));
         let old_audio_secs = old_frame_count as u64 / 16_000;
@@ -1051,7 +1052,7 @@ mod continuing_audio {
             |_| {},
             |_, _| {},
             move |msg| {
-                errors_for_worker.lock().unwrap().push(msg);
+                errors_for_worker.lock().push(msg);
             },
         );
         for chunk in samples.chunks(1600) {
@@ -1065,7 +1066,7 @@ mod continuing_audio {
         let path = session.stop().unwrap();
 
         assert!(
-            !errors.lock().unwrap().is_empty(),
+            !errors.lock().is_empty(),
             "expected a session-error reporting the audio prefill failure"
         );
         let after = std::fs::read(&flac_path).unwrap();

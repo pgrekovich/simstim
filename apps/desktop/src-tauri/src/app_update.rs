@@ -10,7 +10,7 @@
 //! live outside the bundle and are untouched.
 
 use serde::Serialize;
-use std::sync::Mutex;
+use parking_lot::Mutex;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 use tauri_plugin_updater::{Update, UpdaterExt};
@@ -98,7 +98,7 @@ pub async fn check_app_update(
     }
     let state = app.state::<AppUpdateState>();
     let cached = {
-        let cache = state.cache.lock().unwrap();
+        let cache = state.cache.lock();
         cache
             .as_ref()
             .map(|check| (check.checked_at, check.update.clone()))
@@ -120,7 +120,7 @@ pub async fn check_app_update(
         .check()
         .await
         .map_err(|error| format!("could not check for updates: {error}"))?;
-    *state.cache.lock().unwrap() = Some(CachedCheck {
+    *state.cache.lock() = Some(CachedCheck {
         checked_at: Instant::now(),
         update: update.clone(),
     });
@@ -160,19 +160,18 @@ pub async fn install_app_update(app: AppHandle) -> Result<(), String> {
     let update = state
         .cache
         .lock()
-        .unwrap()
         .as_ref()
         .and_then(|check| check.update.clone())
         .ok_or("no update is known; check for updates first")?;
     {
-        let mut installing = state.installing.lock().unwrap();
+        let mut installing = state.installing.lock();
         if *installing {
             return Err("an update is already being installed".to_string());
         }
         *installing = true;
     }
     let result = download_and_install(&app, &update).await;
-    *state.installing.lock().unwrap() = false;
+    *state.installing.lock() = false;
     match result {
         Ok(()) => {
             emit_progress(&app, "restarting", 0, None, None);

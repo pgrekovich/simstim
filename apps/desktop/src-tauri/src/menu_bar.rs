@@ -1,7 +1,7 @@
 //! Native macOS menu-bar status. Route actions through the main-window coordinator so
 //! live files retain a single writer.
 
-use std::sync::Mutex;
+use parking_lot::Mutex;
 use std::time::{Duration, Instant};
 
 use tauri::image::Image;
@@ -98,7 +98,7 @@ impl MenuBar {
 
     pub fn recording_started(&self) {
         let generation = {
-            let mut state = self.presentation.lock().unwrap();
+            let mut state = self.presentation.lock();
             state.generation += 1;
             let generation = state.generation;
             state.recording = Some(RecordingPresentation {
@@ -123,7 +123,7 @@ impl MenuBar {
 
     pub fn recording_stopped(&self) {
         {
-            let mut state = self.presentation.lock().unwrap();
+            let mut state = self.presentation.lock();
             state.generation += 1;
             state.recording = None;
         }
@@ -140,7 +140,7 @@ impl MenuBar {
     }
 
     fn is_recording(&self) -> bool {
-        self.presentation.lock().unwrap().recording.is_some()
+        self.presentation.lock().recording.is_some()
     }
 
     fn apply_recording_state(&self) {
@@ -161,7 +161,7 @@ impl MenuBar {
         // that dispatch let an "Add Note" click landing inside a tick deadlock the whole
         // app mid-recording.
         let started_at = {
-            let state = self.presentation.lock().unwrap();
+            let state = self.presentation.lock();
             let Some(recording) = &state.recording else {
                 return false;
             };

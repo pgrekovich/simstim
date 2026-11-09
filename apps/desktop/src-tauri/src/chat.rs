@@ -11,7 +11,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
+use parking_lot::Mutex;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
@@ -825,7 +826,7 @@ fn ask_inner<R: tauri::Runtime>(
     let state = app.state::<ChatState>();
     // Claim the slot and snapshot the history under one lock.
     let (cancel, history) = {
-        let mut convos = state.0.lock().unwrap();
+        let mut convos = state.0.lock();
         let convo = convos.entry(scope_key.to_string()).or_default();
         validate_ask(
             &provider,
@@ -846,7 +847,7 @@ fn ask_inner<R: tauri::Runtime>(
     struct SlotGuard<'a>(&'a ChatState, &'a str);
     impl Drop for SlotGuard<'_> {
         fn drop(&mut self) {
-            if let Some(convo) = self.0 .0.lock().unwrap().get_mut(self.1) {
+            if let Some(convo) = self.0 .0.lock().get_mut(self.1) {
                 convo.running = None;
             }
         }
@@ -982,7 +983,7 @@ fn ask_inner<R: tauri::Runtime>(
     // Append both halves of the exchange only on success: a failed or
     // cancelled ask leaves the conversation exactly as it was, so the
     // history replay never carries a dangling unanswered question.
-    let mut convos = state.0.lock().unwrap();
+    let mut convos = state.0.lock();
     let convo = convos.entry(scope_key.to_string()).or_default();
     match result {
         Ok(answer) => {
@@ -1057,7 +1058,7 @@ pub async fn chat_ask(
 /// The scope's conversation so far, for seeding a freshly mounted view.
 #[tauri::command]
 pub fn chat_history(path: Option<String>, state: tauri::State<ChatState>) -> ChatHistory {
-    let convos = state.0.lock().unwrap();
+    let convos = state.0.lock();
     match convos.get(&scope_key(path.as_deref())) {
         Some(convo) => ChatHistory {
             messages: convo.messages.clone(),
@@ -1075,7 +1076,7 @@ pub fn chat_history(path: Option<String>, state: tauri::State<ChatState>) -> Cha
 /// to a conversation the user believes is gone.
 #[tauri::command]
 pub fn chat_clear(path: Option<String>, state: tauri::State<ChatState>) -> Result<(), String> {
-    let mut convos = state.0.lock().unwrap();
+    let mut convos = state.0.lock();
     if let Some(convo) = convos.get_mut(&scope_key(path.as_deref())) {
         if convo.running.is_some() {
             return Err("still answering; stop the question first".to_string());
@@ -1090,7 +1091,7 @@ pub fn chat_clear(path: Option<String>, state: tauri::State<ChatState>) -> Resul
 /// the message "cancelled" (the UI's cue for a quiet dismissal).
 #[tauri::command]
 pub fn chat_cancel(path: Option<String>, state: tauri::State<ChatState>) {
-    let convos = state.0.lock().unwrap();
+    let convos = state.0.lock();
     if let Some(convo) = convos.get(&scope_key(path.as_deref())) {
         if let Some(cancel) = &convo.running {
             cancel.store(true, Ordering::Relaxed);

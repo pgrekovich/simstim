@@ -26,7 +26,8 @@ use serde::Serialize;
 use session::PendingEdits;
 use simstim_capture::Channel;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use parking_lot::Mutex;
+use std::sync::Arc;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -146,7 +147,7 @@ pub struct HearingStatus {
 #[tauri::command]
 fn recording_activity(state: tauri::State<'_, AppState>) -> Option<HearingStatus> {
     let (activity, mic) = {
-        let guard = state.recording.lock().unwrap();
+        let guard = state.recording.lock();
         let recording = guard.live()?;
         (
             recording.activity.clone(),
@@ -183,7 +184,7 @@ struct FinalizingGuard {
 impl Drop for FinalizingGuard {
     fn drop(&mut self) {
         let state = self.app.state::<AppState>();
-        let mut finalizing = state.finalizing.lock().unwrap();
+        let mut finalizing = state.finalizing.lock();
         finalizing.retain(|p| p != &self.path);
     }
 }
@@ -203,7 +204,6 @@ impl AppState {
     fn active_output_path(&self) -> Option<PathBuf> {
         self.recording
             .lock()
-            .unwrap()
             .live()
             .map(|r| r.path.clone())
     }
@@ -214,7 +214,6 @@ impl AppState {
     pub(crate) fn finalizing_match(&self, path: &Path) -> Option<PathBuf> {
         self.finalizing
             .lock()
-            .unwrap()
             .iter()
             .find(|p| p.as_path() == path)
             .cloned()
@@ -222,7 +221,7 @@ impl AppState {
 
     pub(crate) fn recording_status(&self) -> Option<RecordingStatus> {
         let (id, activity) = {
-            let guard = self.recording.lock().unwrap();
+            let guard = self.recording.lock();
             let recording = guard.live()?;
             (
                 recording.path.display().to_string(),
@@ -288,7 +287,7 @@ impl StartingClaim {
     /// frees the slot, and the start fails with the worker's error.
     fn commit(mut self, recording: Recording) -> Result<(), String> {
         let state = self.app.state::<AppState>();
-        let mut slot = state.recording.lock().unwrap();
+        let mut slot = state.recording.lock();
         debug_assert!(matches!(*slot, RecordingSlot::Starting));
         if let Some(message) = recording.session.died() {
             drop(slot);
@@ -316,7 +315,7 @@ impl Drop for StartingClaim {
         }
         {
             let state = self.app.state::<AppState>();
-            let mut slot = state.recording.lock().unwrap();
+            let mut slot = state.recording.lock();
             if matches!(*slot, RecordingSlot::Starting) {
                 *slot = RecordingSlot::Idle;
             }
@@ -354,7 +353,7 @@ async fn start_recording(
     {
         let state = app.state::<AppState>();
         let finalizing_path = path.as_deref().and_then(|p| state.finalizing_match(p));
-        let mut slot = state.recording.lock().unwrap();
+        let mut slot = state.recording.lock();
         claim_recording_slot(&mut slot, path.as_deref(), finalizing_path.as_deref())?;
     }
     let claim = StartingClaim {
@@ -476,7 +475,7 @@ fn start_recording_blocking(
 fn recording_lost(app: &AppHandle, path: &Path, message: String) {
     let state = app.state::<AppState>();
     let recording = {
-        let mut slot = state.recording.lock().unwrap();
+        let mut slot = state.recording.lock();
         match slot.live() {
             Some(live) if live.path == path => slot.take_live(),
             _ => None,
@@ -518,9 +517,9 @@ fn update_active_session(
     notes: Option<String>,
     state: State<AppState>,
 ) -> Result<(), String> {
-    let guard = state.recording.lock().unwrap();
+    let guard = state.recording.lock();
     let recording = guard.live().ok_or("not recording")?;
-    recording.pending_edits.lock().unwrap().update(title, notes);
+    recording.pending_edits.lock().update(title, notes);
     Ok(())
 }
 
@@ -528,7 +527,7 @@ fn update_active_session(
 async fn stop_recording(app: AppHandle) -> Result<String, String> {
     let state = app.state::<AppState>();
     let recording = {
-        let mut active = state.recording.lock().unwrap();
+        let mut active = state.recording.lock();
         if matches!(*active, RecordingSlot::Starting) {
             return Err("the recording is still starting".into());
         }
@@ -538,7 +537,6 @@ async fn stop_recording(app: AppHandle) -> Result<String, String> {
         state
             .finalizing
             .lock()
-            .unwrap()
             .push(recording.path.clone());
         recording
     };
@@ -919,10 +917,10 @@ mod tests {
         let path = PathBuf::from("/tmp/call.md");
         assert_eq!(state.finalizing_match(&path), None);
 
-        state.finalizing.lock().unwrap().push(path.clone());
+        state.finalizing.lock().push(path.clone());
         assert_eq!(state.finalizing_match(&path), Some(path.clone()));
 
-        state.finalizing.lock().unwrap().retain(|p| p != &path);
+        state.finalizing.lock().retain(|p| p != &path);
         assert_eq!(state.finalizing_match(&path), None);
     }
 
@@ -938,13 +936,13 @@ mod tests {
         let a = PathBuf::from("/tmp/a.md");
         let b = PathBuf::from("/tmp/b.md");
 
-        state.finalizing.lock().unwrap().push(a.clone());
-        state.finalizing.lock().unwrap().push(b.clone());
+        state.finalizing.lock().push(a.clone());
+        state.finalizing.lock().push(b.clone());
         assert_eq!(state.finalizing_match(&a), Some(a.clone()));
         assert_eq!(state.finalizing_match(&b), Some(b.clone()));
 
         // B finishes first (its guard drops): A must stay marked.
-        state.finalizing.lock().unwrap().retain(|p| p != &b);
+        state.finalizing.lock().retain(|p| p != &b);
         assert_eq!(state.finalizing_match(&a), Some(a.clone()));
         assert_eq!(state.finalizing_match(&b), None);
     }

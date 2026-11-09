@@ -7,7 +7,7 @@
 use serde::Serialize;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use parking_lot::Mutex;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::config::Config;
@@ -432,7 +432,7 @@ pub async fn download_model(
     let spec = validate_downloadable(&id)?;
 
     {
-        let mut in_flight = state.0.lock().unwrap();
+        let mut in_flight = state.0.lock();
         if !in_flight.insert(id.clone()) {
             return Err(format!("already downloading: {id}"));
         }
@@ -440,7 +440,7 @@ pub async fn download_model(
 
     let result = run_download(&app, spec).await;
 
-    state.0.lock().unwrap().remove(&id);
+    state.0.lock().remove(&id);
 
     if let Err(e) = &result {
         emit_progress(&app, &id, "error", 0, 0, Some(e.clone()));
@@ -545,7 +545,7 @@ pub async fn delete_model(id: String, app: AppHandle) -> Result<(), String> {
     crate::blocking(move || {
         let downloads = app.state::<DownloadState>();
         let jobs = app.state::<RetranscribeState>();
-        let downloading = downloads.0.lock().unwrap().contains(&id);
+        let downloading = downloads.0.lock().contains(&id);
         // Queued jobs also need their model files; block deletion before they start.
         let retranscribing = jobs.is_running() || jobs.has_queued_jobs();
         delete_model_at(

@@ -5,7 +5,8 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, LazyLock, Mutex, Weak};
+use parking_lot::Mutex;
+use std::sync::{Arc, LazyLock, Weak};
 
 #[derive(Default)]
 struct Ownership {
@@ -36,7 +37,7 @@ fn gate(path: &Path) -> anyhow::Result<Arc<Gate>> {
     for part in suffix.into_iter().rev() {
         key.push(part);
     }
-    let mut gates = GATES.lock().unwrap_or_else(|e| e.into_inner());
+    let mut gates = GATES.lock();
     gates.retain(|_, gate| gate.strong_count() > 0);
     if let Some(existing) = gates.get(&key).and_then(Weak::upgrade) {
         return Ok(existing);
@@ -53,7 +54,7 @@ pub(crate) fn edit<T>(
     operation: impl FnOnce() -> anyhow::Result<T>,
 ) -> anyhow::Result<T> {
     let gate = gate(path)?;
-    let recording = gate.lock().unwrap_or_else(|e| e.into_inner());
+    let recording = gate.lock();
     anyhow::ensure!(
         !recording.recording,
         "this note is recording or still saving; try again when it finishes"
@@ -67,7 +68,7 @@ pub(crate) fn remove<T>(
     operation: impl FnOnce() -> anyhow::Result<T>,
 ) -> anyhow::Result<T> {
     let gate = gate(path)?;
-    let ownership = gate.lock().unwrap_or_else(|e| e.into_inner());
+    let ownership = gate.lock();
     anyhow::ensure!(
         !ownership.recording,
         "this note is recording or still saving"
@@ -86,7 +87,7 @@ pub(crate) struct RecordingLease(Arc<Gate>);
 pub(crate) fn record(path: &Path) -> anyhow::Result<RecordingLease> {
     let gate = gate(path)?;
     {
-        let mut recording = gate.lock().unwrap_or_else(|e| e.into_inner());
+        let mut recording = gate.lock();
         anyhow::ensure!(
             !recording.recording,
             "this note is recording or still saving"
@@ -102,7 +103,7 @@ pub(crate) fn record(path: &Path) -> anyhow::Result<RecordingLease> {
 
 impl Drop for RecordingLease {
     fn drop(&mut self) {
-        self.0.lock().unwrap_or_else(|e| e.into_inner()).recording = false;
+        self.0.lock().recording = false;
     }
 }
 
@@ -115,7 +116,7 @@ pub(crate) struct ProcessingLease(Arc<Gate>);
 pub(crate) fn process(path: &Path) -> anyhow::Result<ProcessingLease> {
     let gate = gate(path)?;
     {
-        let mut ownership = gate.lock().unwrap_or_else(|e| e.into_inner());
+        let mut ownership = gate.lock();
         anyhow::ensure!(
             !ownership.recording,
             "this note is recording or still saving"
@@ -127,14 +128,14 @@ pub(crate) fn process(path: &Path) -> anyhow::Result<ProcessingLease> {
 
 impl Clone for ProcessingLease {
     fn clone(&self) -> Self {
-        self.0.lock().unwrap_or_else(|e| e.into_inner()).processing += 1;
+        self.0.lock().processing += 1;
         Self(self.0.clone())
     }
 }
 
 impl Drop for ProcessingLease {
     fn drop(&mut self) {
-        self.0.lock().unwrap_or_else(|e| e.into_inner()).processing -= 1;
+        self.0.lock().processing -= 1;
     }
 }
 

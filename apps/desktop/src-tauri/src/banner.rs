@@ -2,7 +2,7 @@
 //! a new state only when rendering needs to change.
 
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use parking_lot::Mutex;
 use std::time::Duration;
 
 use serde::Serialize;
@@ -289,49 +289,49 @@ impl Banner {
     // only enqueue, so nothing here can deadlock back into the lock.
 
     pub fn detected(&self, bundle_id: &str, app_name: &str) {
-        let mut controller = self.controller.lock().unwrap();
+        let mut controller = self.controller.lock();
         let next = controller.on_detected(bundle_id, app_name);
         self.apply(next);
     }
 
     pub fn detection_cleared(&self, bundle_id: &str) {
-        let mut controller = self.controller.lock().unwrap();
+        let mut controller = self.controller.lock();
         let next = controller.on_detection_cleared(bundle_id);
         self.apply(next);
     }
 
     pub fn call_ended(&self) {
-        let mut controller = self.controller.lock().unwrap();
+        let mut controller = self.controller.lock();
         let next = controller.on_call_ended();
         self.apply(next);
     }
 
     pub fn recording_starting(&self) {
-        let mut controller = self.controller.lock().unwrap();
+        let mut controller = self.controller.lock();
         let next = controller.on_recording_starting();
         self.apply(next);
     }
 
     pub fn recording_start_failed(&self) {
-        let mut controller = self.controller.lock().unwrap();
+        let mut controller = self.controller.lock();
         let next = controller.on_recording_start_failed();
         self.apply(next);
     }
 
     pub fn recording_started(&self) {
-        let mut controller = self.controller.lock().unwrap();
+        let mut controller = self.controller.lock();
         let next = controller.on_recording_started();
         self.apply(next);
     }
 
     pub fn recording_stopped(&self) {
-        let mut controller = self.controller.lock().unwrap();
+        let mut controller = self.controller.lock();
         let next = controller.on_recording_stopped();
         self.apply(next);
     }
 
     pub fn dismiss(&self) {
-        let mut controller = self.controller.lock().unwrap();
+        let mut controller = self.controller.lock();
         let next = controller.on_dismiss();
         self.apply(next);
     }
@@ -339,14 +339,14 @@ impl Banner {
     pub fn current_event(&self) -> BannerEvent {
         BannerEvent {
             seq: self.seq.load(Ordering::Relaxed),
-            state: BannerPayload::from(self.controller.lock().unwrap().current()),
+            state: BannerPayload::from(self.controller.lock().current()),
         }
     }
 
     /// The webview rendered the state numbered `seq`: show the window if
     /// that state is still the one waiting to be shown.
     pub fn painted(&self, seq: u64) {
-        if self.show_gate.lock().unwrap().painted(seq) {
+        if self.show_gate.lock().painted(seq) {
             self.set_visible(true);
         }
     }
@@ -364,14 +364,14 @@ impl Banner {
         if state.is_visible() {
             // Shown once the webview confirms the render (`painted`), or
             // after the fallback delay if it never does.
-            self.show_gate.lock().unwrap().request(seq);
+            self.show_gate.lock().request(seq);
             let app = self.app.clone();
             std::thread::spawn(move || {
                 std::thread::sleep(SHOW_FALLBACK);
                 app.state::<Banner>().painted(seq);
             });
         } else {
-            self.show_gate.lock().unwrap().cancel();
+            self.show_gate.lock().cancel();
             self.set_visible(false);
         }
     }

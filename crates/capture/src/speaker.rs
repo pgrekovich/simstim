@@ -194,7 +194,7 @@ fn log_format_issue_once(msg: &str) {
         .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
         .is_ok()
     {
-        eprintln!("simstim-capture: speaker tap {msg}");
+        tracing::warn!("speaker tap {msg}");
     }
 }
 

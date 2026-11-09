@@ -79,6 +79,14 @@ Helpers live in `~/Library/Application Support/simstim/helpers/`; provider
 subscription credentials are stored separately by the provider's own tool.
 User-supplied API keys remain in macOS Keychain until removed in Settings.
 
+## Diagnostics
+
+Simstim writes what it reports while running (device names, call app
+bundle identifiers, file paths, error messages) to a daily log under
+`~/Library/Logs/Simstim`, keeping seven days. The log never contains note
+text, transcript lines or audio, and nothing reads or sends it; **Reveal in
+Finder** in Settings shows it for a bug report you choose to file.
+
 ## Network activity
 
 - Initial and explicitly requested speech-model downloads use the upstream
@@ -109,9 +117,8 @@ User-supplied API keys remain in macOS Keychain until removed in Settings.
   saved key, or explicitly choosing Load models or Refresh models. It sends
   no note text and stores no catalog on disk.
 - Opening external links uses your normal browser.
-- The application itself has no automatic update check; new app versions
-  are downloaded manually. Helper binaries download only after an explicit
-  Update providers or Settings action.
+- Helper binaries download only after an explicit Update providers or
+  Settings action.
 
 Your assistant, connectors, sync provider and operating system have their
 own data policies. simstim does not access helper or connector credentials

@@ -8,6 +8,7 @@ pub mod chat;
 pub mod config;
 pub mod detect;
 pub mod enhance;
+pub mod logging;
 pub mod loops;
 pub mod models;
 mod launch_at_login;
@@ -398,7 +399,7 @@ fn start_recording_blocking(
         call_mic.as_ref().map(|mic| mic.device_uid.as_str()),
     )
     .map_err(|e| e.to_string())?;
-    eprintln!(
+    tracing::info!(
         "recording microphone: {}{}",
         mic.device_name(),
         call_mic
@@ -737,6 +738,7 @@ fn position_main_traffic_lights(window: &tauri::WebviewWindow) -> tauri::Result<
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    logging::init();
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
@@ -753,6 +755,8 @@ pub fn run() {
         .manage(chat::ChatState::default())
         .manage(loops::LoopsState::default())
         .setup(|app| {
+            // The app version comes from the release config, not Cargo.toml.
+            tracing::info!("simstim {} starting", app.package_info().version);
             // Grant asset access only to the configured notes folder at startup. Folder
             // changes add their own explicit grant; the static asset scope remains
             // empty.
@@ -846,6 +850,7 @@ pub fn run() {
             banner::banner_current_state,
             banner::banner_painted,
             banner::show_main_window,
+            logging::reveal_log,
             models::list_models,
             models::download_model,
             models::delete_model,

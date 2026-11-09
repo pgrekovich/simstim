@@ -112,10 +112,10 @@ impl ActivityMonitor {
             )
             .map_err(|error| format!("registering process-list listener: {error:?}"))?;
         if let Err(error) = monitor.refresh_devices() {
-            eprintln!("call detection initial audio-device setup failed: {error}");
+            tracing::warn!("call detection initial audio-device setup failed: {error}");
         }
         if let Err(error) = monitor.refresh_processes() {
-            eprintln!("call detection initial process setup failed: {error}");
+            tracing::warn!("call detection initial process setup failed: {error}");
         }
         Ok(monitor)
     }
@@ -136,7 +136,7 @@ impl ActivityMonitor {
             match device.add_prop_listener(&address, audio_activity_listener, self.context) {
                 Ok(()) => self.devices.push(device),
                 Err(error) => {
-                    eprintln!("call detection device listener skipped: {error:?}");
+                    tracing::warn!("call detection device listener skipped: {error:?}");
                 }
             }
         }
@@ -160,7 +160,7 @@ impl ActivityMonitor {
             if let Err(error) =
                 process.add_prop_listener(&input_address, audio_activity_listener, self.context)
             {
-                eprintln!("call detection process-input listener skipped: {error:?}");
+                tracing::warn!("call detection process-input listener skipped: {error:?}");
                 continue;
             }
             if let Err(error) =
@@ -171,7 +171,7 @@ impl ActivityMonitor {
                     audio_activity_listener,
                     self.context,
                 );
-                eprintln!("call detection process-output listener skipped: {error:?}");
+                tracing::warn!("call detection process-output listener skipped: {error:?}");
                 continue;
             }
             self.process_listeners.push(process);

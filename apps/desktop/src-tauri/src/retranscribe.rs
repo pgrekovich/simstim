@@ -864,7 +864,7 @@ async fn run_job<R: tauri::Runtime>(
             let message = format!(
                 "this note is recording again; the accurate pass runs after it stops ({error})"
             );
-            eprintln!("retranscribe skipped {path}: {message}");
+            tracing::info!("retranscribe skipped {path}: {message}");
             emit_progress(&app, &path, "skipped", None, Some(message.clone()), None);
             advance_queue(app.clone());
             return Err(message);

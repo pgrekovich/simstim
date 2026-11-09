@@ -36,6 +36,7 @@ import {
   setRetranscribeModel,
   setShowInDock,
   setTheme,
+  revealLog,
   storageStats,
   type AppConfig,
   type DownloadProgress,
@@ -889,6 +890,14 @@ export function SettingsDialog({ open: isOpen, onOpenChange, onModelsChanged }: 
                 >
                   <Button variant="outline" size="sm" disabled={choosingDir} onClick={handleChooseFolder}>
                     Change
+                  </Button>
+                </Row>
+                <Row
+                  label="Log"
+                  description="What Simstim reports while it runs, for a bug report. Never your notes or audio."
+                >
+                  <Button variant="outline" size="sm" onClick={() => void revealLog()}>
+                    Reveal in Finder
                   </Button>
                 </Row>
               </Group>

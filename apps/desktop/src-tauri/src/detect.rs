@@ -107,7 +107,7 @@ pub fn call_mic(bundle_id: Option<&str>) -> Option<CallMic> {
     match platform::scan_app_inputs(std::process::id() as i32) {
         Ok(inputs) => choose_call_mic(inputs, bundle_id),
         Err(error) => {
-            eprintln!("call microphone lookup failed: {error}");
+            tracing::warn!("call microphone lookup failed: {error}");
             None
         }
     }
@@ -516,7 +516,7 @@ fn run_worker(app: AppHandle, rx: Receiver<WorkerMsg>, tx: Sender<WorkerMsg>, en
     let mut listeners = match platform::ActivityMonitor::new(tx) {
         Ok(listeners) => Some(listeners),
         Err(error) => {
-            eprintln!("call detection unavailable: {error}");
+            tracing::warn!("call detection unavailable: {error}");
             None
         }
     };
@@ -550,12 +550,12 @@ fn run_worker(app: AppHandle, rx: Receiver<WorkerMsg>, tx: Sender<WorkerMsg>, en
                     let changes = listeners.take_events();
                     if changes.device_list_changed {
                         if let Err(error) = listeners.refresh_devices() {
-                            eprintln!("call detection devices resubscribe failed: {error}");
+                            tracing::warn!("call detection devices resubscribe failed: {error}");
                         }
                     }
                     if changes.process_list_changed {
                         if let Err(error) = listeners.refresh_processes() {
-                            eprintln!("call detection process-list refresh failed: {error}");
+                            tracing::warn!("call detection process-list refresh failed: {error}");
                         }
                     }
                 }
@@ -612,7 +612,7 @@ fn run_worker(app: AppHandle, rx: Receiver<WorkerMsg>, tx: Sender<WorkerMsg>, en
                             .collect();
                         active_ids.sort_unstable();
                         if active_ids != last_active_ids {
-                            eprintln!("call detection active mic apps: {active_ids:?}");
+                            tracing::info!("call detection active mic apps: {active_ids:?}");
                             last_active_ids = active_ids;
                         }
                     }
@@ -632,7 +632,7 @@ fn run_worker(app: AppHandle, rx: Receiver<WorkerMsg>, tx: Sender<WorkerMsg>, en
                 Err(error) => {
                     reconcile_at = None;
                     scan_retry_at = Some(Instant::now() + SCAN_ERROR_BACKOFF);
-                    eprintln!("call detection process scan failed: {error}");
+                    tracing::warn!("call detection process scan failed: {error}");
                 }
             }
         }

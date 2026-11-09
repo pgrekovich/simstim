@@ -278,7 +278,7 @@ impl Session {
     /// (see the module docs); an empty text clears that channel's draft, including
     /// whenever a line finalizes on it. Interim text is never written to disk.
     /// `on_error` fires on engine/VAD init failures and save failures (these are also
-    /// always `eprintln!`-ed, so `on_error` failing to reach a UI never loses the
+    /// always logged, so `on_error` failing to reach a UI never loses the
     /// diagnostic entirely). `continue_from`: `None` starts a brand-new session at
     /// `out_path` (the existing behavior). `Some` continues an existing session already
     /// at `out_path` instead -- see [`ContinueFrom`]'s docs for exactly what gets
@@ -437,10 +437,10 @@ impl Session {
     }
 }
 
-/// `eprintln!`s `msg` and forwards it to `on_error`, so a UI-less caller
+/// Logs `msg` and forwards it to `on_error`, so a UI-less caller
 /// (e.g. tests) still sees the diagnostic on stderr.
 fn report_error(on_error: &impl Fn(String), msg: String) {
-    eprintln!("{msg}");
+    tracing::error!("{msg}");
     on_error(msg);
 }
 

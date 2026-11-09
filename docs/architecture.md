@@ -20,6 +20,7 @@ The supported target is macOS 14.2+ on Apple Silicon.
 | `apps/desktop/src-tauri/src/api.rs` | Direct text APIs, Keychain credentials and restricted Markdown reads |
 | `apps/desktop/src-tauri/src/ai_setup.rs` | Official helper installation and provider-owned login |
 | `apps/desktop/src-tauri/src/app_update.rs` | Daily release check and explicit, signature-verified in-app update |
+| `apps/desktop/src-tauri/src/logging.rs` | Daily-rotated diagnostics under `~/Library/Logs/Simstim`, never note text or audio |
 | `apps/desktop/src` | React UI and typed IPC wrappers |
 
 ## Recording and transcription

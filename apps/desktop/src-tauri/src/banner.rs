@@ -359,7 +359,7 @@ impl Banner {
             state: BannerPayload::from(&state),
         };
         if let Err(error) = self.app.emit_to(WINDOW_LABEL, "banner-state", event) {
-            eprintln!("banner state emit failed: {error}");
+            tracing::warn!("banner state emit failed: {error}");
         }
         if state.is_visible() {
             // Shown once the webview confirms the render (`painted`), or
@@ -384,7 +384,7 @@ impl Banner {
             set_window_visible(&app, visible);
         });
         if let Err(error) = result {
-            eprintln!("banner main-thread dispatch failed: {error}");
+            tracing::warn!("banner main-thread dispatch failed: {error}");
         }
     }
 }
@@ -398,7 +398,7 @@ fn set_window_visible(app: &AppHandle, visible: bool) {
     };
     if visible {
         if let Err(error) = move_to_top_right(app, &window) {
-            eprintln!("banner positioning failed: {error}");
+            tracing::warn!("banner positioning failed: {error}");
         }
     }
 
@@ -417,7 +417,7 @@ fn set_window_visible(app: &AppHandle, visible: bool) {
 
     let result = if visible { window.show() } else { window.hide() };
     if let Err(error) = result {
-        eprintln!("banner visibility change failed: {error}");
+        tracing::warn!("banner visibility change failed: {error}");
     }
 }
 

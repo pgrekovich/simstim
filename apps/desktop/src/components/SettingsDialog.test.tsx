@@ -38,6 +38,7 @@ vi.mock("@/lib/ipc", () => ({
   listEnhanceProviders: vi.fn(),
   setAutoStopAfterCall: vi.fn().mockResolvedValue(undefined),
   storageStats: vi.fn(),
+  revealLog: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("@tauri-apps/api/event", () => ({

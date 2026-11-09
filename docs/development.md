@@ -12,6 +12,9 @@ pnpm tauri dev
 ```
 
 Launch development capture from your own terminal; see permissions below.
+Diagnostics go to stderr in debug builds and always to
+`~/Library/Logs/Simstim`; `SIMSTIM_LOG=debug` (tracing filter syntax)
+raises the level.
 
 ## Checks
 

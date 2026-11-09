@@ -394,7 +394,7 @@ impl Config {
     pub(crate) fn load_from(path: &Path) -> Self {
         Self::try_load_toml(path).unwrap_or_else(|error| {
             if path.exists() {
-                eprintln!("failed to load config at {}: {error:#}", path.display());
+                tracing::error!("failed to load config at {}: {error:#}", path.display());
             }
             Self::default()
         })
@@ -443,7 +443,7 @@ impl Config {
         let config = Self::default();
 
         if let Err(error) = config.save_to(path) {
-            eprintln!("failed to create config at {}: {error:#}", path.display());
+            tracing::error!("failed to create config at {}: {error:#}", path.display());
         }
         config
     }

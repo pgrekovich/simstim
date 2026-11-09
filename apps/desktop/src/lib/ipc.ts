@@ -483,6 +483,11 @@ export function storageStats(): Promise<StorageStats> {
   return invoke("storage_stats");
 }
 
+/** Selects the newest Simstim log file in Finder (see logging.rs). */
+export function revealLog(): Promise<void> {
+  return invoke("reveal_log");
+}
+
 /**
  * Enhances a note with the configured AI CLI: the user's rough notes lead,
  * the transcript backs them, and the result replaces the note's `## Summary`

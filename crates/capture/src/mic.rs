@@ -51,7 +51,7 @@ fn pick_input_device(host: &cpal::Host, preferred_uid: Option<&str>) -> Result<c
             .find(|device| device.id().is_ok_and(|id| id.id() == uid));
         match preferred {
             Some(device) => return Ok(device),
-            None => eprintln!("mic: preferred input {uid} is not available; using system default"),
+            None => tracing::warn!("preferred input {uid} is not available; using system default"),
         }
     }
     host.default_input_device()
@@ -98,7 +98,7 @@ pub fn start_mic(tx: Sender<Chunk>, preferred_uid: Option<&str>) -> Result<Captu
                         samples,
                     });
                 },
-                |e| eprintln!("mic stream error: {e}"),
+                |e| tracing::warn!("mic stream error: {e}"),
                 None,
             )?;
             stream.play()?;

@@ -9,4 +9,4 @@ anyhow = { workspace = true }
 tracing = "0.1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-cidre = { version = "0.29", default-features = false, features = ["av", "blocks", "core_audio", "dispatch", "macos_14_2"] }
+cidre = { version = "=0.29.0", default-features = false, features = ["av", "blocks", "core_audio", "dispatch", "macos_14_2"] }

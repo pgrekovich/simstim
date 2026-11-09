@@ -5,3 +5,12 @@ members = ["apps/desktop/src-tauri", "crates/capture", "crates/engine", "crates/
 [workspace.dependencies]
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }
+
+# Two statically linked ML runtimes and a WebKit shell: thin LTO and one
+# codegen unit shrink the binary and speed up the hot audio paths for a
+# longer release build; symbols are stripped (panics still log their
+# message and location through the hook in logging.rs).
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

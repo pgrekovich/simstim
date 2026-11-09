@@ -6,7 +6,10 @@
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, FixedOffset, Local};
 use serde::Serialize;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::time::SystemTime;
 use tauri::{AppHandle, Manager};
 
 use simstim_transcript::{parse_meta, parse_session, Transcript};
@@ -58,6 +61,9 @@ pub fn list_sessions_in(dir: &Path) -> Vec<SessionMeta> {
         Ok(entries) => entries,
         Err(_) => return out,
     };
+    let mut cache = META_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    let cache = cache.get_or_insert_with(HashMap::new);
+    let mut seen = Vec::new();
     for entry in entries.flatten() {
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) != Some("md") {
@@ -66,15 +72,32 @@ pub fn list_sessions_in(dir: &Path) -> Vec<SessionMeta> {
         if crate::loops::is_open_loops_file(&path) {
             continue;
         }
+        let Ok(stamp) = entry.metadata().and_then(|m| Ok((m.modified()?, m.len()))) else {
+            continue;
+        };
+        seen.push(path.clone());
+        if let Some((cached_stamp, meta)) = cache.get(&path) {
+            if *cached_stamp == stamp {
+                out.push(meta.clone());
+                continue;
+            }
+        }
         if let Ok(meta) = parse_meta(&path) {
-            out.push(SessionMeta {
+            let meta = SessionMeta {
                 path: path.display().to_string(),
                 title: meta.title,
                 date: meta.date,
                 duration_secs: meta.duration_secs,
-            });
+            };
+            cache.insert(path, (stamp, meta.clone()));
+            out.push(meta);
+        } else {
+            cache.remove(&path);
         }
     }
+    // Entries for files that are gone (deleted, moved, or another folder
+    // listed before) leave the map so it never outgrows the folder.
+    cache.retain(|path, _| seen.contains(path));
     out.sort_by(
         |a, b| match (parse_rfc3339(&a.date), parse_rfc3339(&b.date)) {
             (Some(da), Some(db)) => db.cmp(&da),
@@ -83,6 +106,13 @@ pub fn list_sessions_in(dir: &Path) -> Vec<SessionMeta> {
     );
     out
 }
+
+/// Frontmatter already read, keyed by path and valid while the file's
+/// modification time and size are unchanged. Derived from the files and
+/// rebuilt on demand: the folder stays the source of truth, this only
+/// spares re-parsing hundreds of unchanged notes on every window focus.
+static META_CACHE: Mutex<Option<HashMap<PathBuf, ((SystemTime, u64), SessionMeta)>>> =
+    Mutex::new(None);
 
 fn parse_rfc3339(date: &str) -> Option<DateTime<FixedOffset>> {
     DateTime::parse_from_rfc3339(date).ok()
@@ -528,9 +558,15 @@ pub fn search_sessions_in(dir: &Path, query: &str) -> Vec<SearchHit> {
     }
     all.into_iter()
         .filter_map(|meta| {
-            // parse_session, not a raw file read: matching against
-            // frontmatter internals (`asr: whisper-...`) would surface
-            // noise hits for model-name-like queries.
+            // A raw scan first: most notes do not contain the query at all,
+            // and that costs one read instead of a full parse per note.
+            // Matches are then confirmed per section below, so a hit only
+            // in frontmatter internals (`asr: whisper-...`) still yields
+            // nothing, exactly as before.
+            let raw = std::fs::read_to_string(&meta.path).ok()?;
+            if !raw.to_lowercase().contains(&needle) {
+                return None;
+            }
             let data = parse_session(Path::new(&meta.path)).ok()?;
             let mut snippets = Vec::new();
             let mut total = 0usize;
@@ -1100,6 +1136,32 @@ mod tests {
             delete_session_at(&md).unwrap();
             assert!(!md.exists());
         }
+    }
+
+    #[test]
+    /// The listing cache is keyed by modification time and size: a rewrite
+    /// of a note shows its new title, a removed note leaves the list, and
+    /// an unchanged note never re-parses (observed through a file whose
+    /// contents change under an unchanged stamp, which the cache must not
+    /// notice: that is the trade the key makes).
+    #[test]
+    fn list_sessions_cache_follows_rewrites_and_deletions() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("2026-08-14 09-00-00 call.md");
+        let mut t = Transcript::new(t(9, 0, 0));
+        t.set_title("First title".into());
+        t.save(&path).unwrap();
+        assert_eq!(list_sessions_in(dir.path())[0].title, "First title");
+
+        // A rewrite with a new size and time is picked up.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        t.set_title("Second, longer title".into());
+        t.save(&path).unwrap();
+        assert_eq!(list_sessions_in(dir.path())[0].title, "Second, longer title");
+
+        // A deleted note is gone from the next listing.
+        std::fs::remove_file(&path).unwrap();
+        assert!(list_sessions_in(dir.path()).is_empty());
     }
 
     #[test]

@@ -5,62 +5,72 @@
 <h1 align="center">simstim</h1>
 
 <p align="center">
-  <strong>Your calls. Your files. Your AI.</strong><br>
-  Record and transcribe calls on your Mac. Keep them as Markdown,<br>
-  and every promise from your calls in one list.
+  A local call recorder for macOS. It transcribes on your Mac and writes<br>
+  each call to a Markdown file you own.
 </p>
 
 <p align="center">
-  <a href="https://simstim.tech/download"><strong>Download for macOS</strong></a> ·
-  <a href="#getting-started">Get started</a> ·
-  <a href="docs/privacy.md">Privacy</a> ·
-  <a href="docs/development.md">Build from source</a>
+  <a href="https://simstim.tech/download"><strong>Download</strong></a> ·
+  <a href="https://simstim.tech">Website</a> ·
+  <a href="#install">Install</a> ·
+  <a href="#how-it-works">How it works</a> ·
+  <a href="docs/privacy.md">Privacy</a>
 </p>
 
 <p align="center"><sub>macOS 14.2+ · Apple Silicon · Free · MIT license · Signed and notarized</sub></p>
 
 ![A call is detected and recorded with a live transcript; after Stop its summary ends with open loops](docs/images/demo.gif)
 
-## Recording
+Simstim records your microphone and system audio as two channels,
+transcribes them with local speech models and saves the call as a Markdown
+file, with the audio beside it if you keep it. There is no account, no
+server and no telemetry. Summaries are optional and go through the AI you
+already use, as text only.
 
-Simstim records your microphone and system audio, transcribes the call
-locally, and saves it in a folder you choose. Audio stays on your Mac.
+## Install
 
-- A live transcript appears during the call. After you stop, a second local
-  transcription pass improves accuracy.
-- You can take notes during the call. Your notes, the transcript and AI
-  summaries have separate sections.
-- Search across past calls. If you keep the audio, click a timestamp to
-  play that part of the recording.
-- Resume recording into an existing note. Earlier audio and timestamps
-  are preserved.
-- When Zoom, Teams, FaceTime, Slack or a browser tab starts using the
-  microphone, a small banner offers to record. Recording starts only when
-  you click. While it runs, the toolbar shows whether you and the other side
-  are being heard, and the menu bar shows the time with Stop and Add note.
+```sh
+brew install --cask pgrekovich/tap/simstim
+```
 
-<img src="docs/images/call-banner.png" width="390" alt="A floating banner: Call detected, Zoom, Start recording"> <img src="docs/images/menu-bar.png" width="69" alt="The menu bar with the Simstim icon and the elapsed time 01:29">
+Or [download the DMG](https://simstim.tech/download) and drag Simstim into
+Applications. Releases are signed with a Developer ID and notarized by
+Apple. The app checks GitHub for a newer release once a day and offers it
+in a banner; updating is always your click.
 
-## Open loops
+On first launch:
 
-A call ends with things you agreed to do, things others agreed to do for
-you and questions nobody answered. Every summary ends with them, each with
-the moment in the call where it was said.
+1. Choose your notes folder and grant microphone and system-audio access.
+2. Wait for the speech models, about **1.55 GB** for the default pair. You
+   can record once the live model is ready.
+3. Connect an AI assistant if you want summaries and open loops, then start
+   a recording.
 
-![The Open loops pane in Simstim](docs/images/open-loops.png)
+Recording starts only when you click. Let the other people know before you
+record.
 
-`Open loops.md` sits beside your calls and gathers them in four sections:
-Mine, Waiting for, Open questions and Done. After each summary, Simstim adds
-the call's new loops and checks off the ones the call reports as done. Each
-item links to its call and the second it was agreed. Check items off in the
-app or in any editor; Done keeps four weeks of history and then clears.
+## Features
 
-Simstim only adds lines and checks lines in that file. It never rewords or
-deletes yours. There are no priorities, reminders or badges: it is one
-Markdown file with checkboxes that Obsidian, git and every other editor
-already understand.
+- **Both sides of the call.** Your microphone and system audio are separate
+  channels, labeled Me and Them. Whatever plays through your Mac is
+  captured; no bot joins the meeting.
+- **A live transcript, then an accurate one.** Text appears during the call.
+  After Stop, a second local pass over the saved audio improves accuracy.
+- **Call detection.** When Zoom, Teams, FaceTime, Slack or a browser tab
+  starts using the microphone, a small banner offers to record.
+- **Notes next to the transcript.** Your notes, the transcript and AI
+  summaries are separate sections. Re-transcription replaces the transcript
+  and leaves your notes and metadata alone.
+- **Search and playback.** Search across past calls. If you keep the audio,
+  click a timestamp to play that moment.
+- **Continue a note.** Record into an existing note; earlier audio and
+  timestamps are preserved.
+- **Open loops.** What you promised, what others promised you and questions
+  nobody answered, gathered from every call into one Markdown checklist.
+- **Optional AI.** Summaries and questions about your calls through Claude,
+  ChatGPT or your own API key.
 
-## Plain files
+## The files
 
 Each call is a Markdown file, with an optional audio file beside it.
 
@@ -72,91 +82,163 @@ Your notes/
 └── 2026-09-09 11-00-00 call.md
 ```
 
-Simstim reads and writes these files directly. You can open the same folder
-in Obsidian, keep it in git or sync it with your usual backup service.
-There is no export step.
+```markdown
+---
+date: 2026-09-09T10:00:00+02:00
+title: Beta planning
+asr: whisper-large-v3-turbo-q8
+duration: 12m
+people: Alex, Sam
+---
 
-[Example note](docs/examples/2026-09-09%2010-00-00%20call.md) ·
-[Example open loops](docs/examples/Open%20loops.md)
+## Notes
 
-## No feature bloat
+Keep the first release focused on recording and readable files.
 
-Simstim stays focused on recording calls, transcribing them and keeping
-usable files. Being able to build a feature with AI is not a reason to
-add it. New features should make that core workflow better.
+## Summary
 
-For PDFs, presentations and follow-up emails, give the Markdown to your
-usual assistant. It already has tools for that. Simstim does not need to
-rebuild them inside a call recorder.
+### Decisions
+
+- Start with five testers using different Apple Silicon Macs.
+
+### Open loops
+
+**Mine**
+
+- Send the checklist once the candidate passes review · 00:00:16
+
+## Transcript
+
+[00:00:04] Me: Let's start with five testers on different Macs.
+[00:00:09] Them: I'll prepare a short sample call for them.
+[00:00:16] Me: Great. I'll send the installation checklist once the candidate passes review.
+```
+
+The files are the database. Simstim reads and writes them directly, with no
+index or export step, so you can open the same folder in Obsidian, keep it
+in git or sync it with your usual backup service.
+[Full example note](docs/examples/2026-09-09%2010-00-00%20call.md).
+
+## Open loops
+
+Every summary ends with the call's open loops, each with the moment it was
+said. `Open loops.md` sits beside your calls and gathers them in four
+sections: Mine, Waiting for, Open questions and Done.
+
+```markdown
+## Mine
+
+- [ ] Send the checklist · Sep 9 · [Beta planning](2026-09-09%2010-00-00%20call.md#t=00:00:16)
+
+## Waiting for
+
+- [ ] Sam: a sample call · Sep 9 · [Beta planning](2026-09-09%2010-00-00%20call.md#t=00:00:09)
+```
+
+After each summary, Simstim adds the call's new loops and checks off the
+ones the call reports as done. Check items off in the app or in any editor;
+Done keeps four weeks of history and then clears.
+
+Simstim only adds lines and checks lines in that file. It never rewords or
+deletes yours. There are no priorities, reminders or badges: it is one
+Markdown file with checkboxes that Obsidian, git and every other editor
+already understand. [Example file](docs/examples/Open%20loops.md).
+
+## How it works
+
+| Stage | What runs |
+| --- | --- |
+| Capture | Microphone through cpal, system audio through Core Audio process taps, kept as separate channels |
+| Call detection | Core Audio microphone-usage metadata of known call apps; it only shows the banner |
+| Speech detection | Silero VAD |
+| Live transcript | Parakeet TDT 0.6B v3 through sherpa-onnx |
+| Accurate pass | Whisper large-v3-turbo through whisper.cpp with Metal, over the saved audio after Stop |
+| Storage | Markdown saved by atomic replacement; audio flushed during capture, then encoded to AAC or FLAC |
+| App | Rust workers in a Tauri shell with a React interface |
+
+Both speech models detect the language themselves. Finalized transcript
+segments are appended to disk as they arrive and audio is flushed
+periodically during capture. Model files are pinned to a fixed upstream
+revision, size and SHA-256.
+
+[Architecture](docs/architecture.md) has the code map and the reasoning
+behind the file ownership, audio alignment and permission handling.
 
 ## Optional AI
 
 Connect **Claude or ChatGPT** to get summaries, keep your open loops
-current and ask questions about your calls. You can also use your own
-OpenAI, Anthropic or OpenRouter API key from Settings, stored in macOS
-Keychain with separate API billing. Simstim sets up the official Claude
-Code or Codex helper and opens its browser sign-in. Setup does not require
-a terminal.
+current and ask questions about your calls. Simstim sets up the official
+Claude Code or Codex helper and opens its browser sign-in, without a
+terminal. Your provider's plan limits and billing apply; Simstim adds no fee
+and sells no credits. You can also use your own OpenAI, Anthropic or
+OpenRouter API key, stored in macOS Keychain.
 
-AI requests send text to your provider, never audio. Your provider's plan
-limits and billing settings apply; Simstim adds no fee.
+AI requests send text to your provider, never audio.
 
 Without AI, recording, transcription, notes, playback and text search still
 work locally. Open loops come from summaries, so they pause when automatic
-summaries are off. You can also use your own tools, including local models,
-on the saved files.
+summaries are off. You can also run your own tools, including local models,
+on the saved files. [AI setup and example workflows](docs/your-ai.md).
 
-![A call summary in Simstim, ending with the call's open loops](docs/images/summary.png)
+## Privacy and network
 
-[AI setup and example workflows](docs/your-ai.md)
+- Audio is recorded and transcribed on your Mac and is never uploaded.
+- There are no Simstim accounts, analytics or telemetry.
+- API keys live only in macOS Keychain, never in settings or call files.
+- Notes and audio are ordinary unencrypted files in the folder you choose.
+  If that folder is synced, they sync through that service.
 
-## Getting started
+Network activity is limited to speech-model downloads, the daily release
+check against GitHub, AI helper setup and version checks, and the AI
+requests you make. [Privacy details](docs/privacy.md).
 
-1. [Download for macOS](https://simstim.tech/download),
-   open the DMG and drag Simstim into Applications. The release is signed
-   and notarized by Apple. Or install with Homebrew:
-   `brew install --cask pgrekovich/tap/simstim`.
-2. Choose your notes folder and grant microphone and system-audio access.
-   Speech models download on first launch, about **1.55 GB** for the default
-   pair. You can start once the live model is ready.
-3. Connect an AI assistant if you want summaries and open loops, then start
-   a recording.
-
-Simstim can suggest recording when it detects a call, but always waits for
-your click. Let the other people know before you record.
-
-Simstim has no accounts, subscriptions or telemetry. Model downloads, the
-daily release check, AI setup and cloud AI requests need internet access. If
-you choose a synced folder, its files will sync through that service.
-[Privacy details](docs/privacy.md).
-
-<details>
-<summary><strong>Limitations</strong></summary>
+## Limitations
 
 - Apple Silicon Macs only, on macOS 14.2 or later.
-- **Me / Them** distinguish your microphone from system audio, not individual
-  remote speakers. Headphones help keep the channels separate.
+- **Me / Them** distinguish your microphone from system audio, not
+  individual remote speakers. Headphones help keep the channels separate.
 - Recognition can miss names and numbers; timestamps can drift. Check
   important details against the recording.
 - Wait for transcription and summaries to finish before continuing a note.
   Edit files in other apps only after Simstim has finished processing them;
   improving a transcript replaces its transcript section.
-- Simstim checks GitHub for a newer release once a day and offers it in a
-  banner and in Settings. Updating is always your click; notes, models and
-  settings stay where they are. Replacing the app with a newer DMG by hand
-  works too.
 
-</details>
+## Scope
 
-## Settings and contributing
+Simstim stays focused on recording calls, transcribing them and keeping
+usable files. Being able to build a feature with AI is not a reason to add
+it. For PDFs, presentations and follow-up emails, give the Markdown to your
+usual assistant, which already has tools for that.
 
-Choose your summary instructions, styles and quick questions in Settings.
-They are saved in `~/.config/simstim/prompts.toml`, alongside the app's
-configuration. [Configuration reference](docs/configuration.md).
+## Configuration
+
+Most settings and `~/.config/simstim/config.toml` share one source of
+truth, so they can also be edited by hand. Summary instructions, styles and
+quick questions are saved beside it in `prompts.toml`.
+[Configuration reference](docs/configuration.md).
+
+## Build from source
+
+Requires an Apple Silicon Mac on macOS 14.2+, Xcode Command Line Tools,
+stable Rust, Node and pnpm.
+
+```sh
+cd apps/desktop
+pnpm install --frozen-lockfile
+pnpm tauri dev
+```
+
+An unsigned development build records silent system audio until your
+terminal is allowed under System Audio Recording Only in System Settings.
+The [development guide](docs/development.md) covers this, the four checks
+and the fictional UI preview.
+
+## Contributing
 
 [Report a bug](CONTRIBUTING.md#reporting-a-bug) ·
-[Development guide](docs/development.md) ·
-[Contributing](CONTRIBUTING.md) · [Architecture](docs/architecture.md)
+[Contributing](CONTRIBUTING.md) ·
+[Architecture](docs/architecture.md) ·
+[Security](SECURITY.md)
 
 ---
 

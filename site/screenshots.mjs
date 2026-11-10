@@ -1,4 +1,4 @@
-// Renders the site and README screenshots from the fictional preview
+// Renders the site screenshots from the fictional preview
 // (`pnpm --dir apps/desktop exec vite --config vite.demo.config.ts`, port 1422)
 // in headless Chrome at 2x, inside a real macOS window frame.
 import path from "node:path";
@@ -17,13 +17,6 @@ await withChrome(async () => {
   await crop(renders.loops, { left: 600, top: 90, width: 1600, height: 1040 }, path.join(root, "public", "assets", "loops-pane"));
   await crop(renders.recording, { left: 1560, top: 16, width: 470, height: 100 }, path.join(root, "public", "assets", "hearing"));
   await banner(await renderBanner(), path.join(root, "public", "assets", "call-banner"));
-  await sharp(path.join(root, "public", "assets", "call-banner@2x.png")).toFile(path.join(root, "..", "docs", "images", "call-banner.png"));
-  await sharp(path.join(root, "public", "assets", "app-summary@2x.webp"))
-    .png({ palette: true, quality: 92, compressionLevel: 9 })
-    .toFile(path.join(root, "..", "docs", "images", "summary.png"));
-  await sharp(path.join(root, "public", "assets", "app-loops@2x.webp"))
-    .png({ palette: true, quality: 92, compressionLevel: 9 })
-    .toFile(path.join(root, "..", "docs", "images", "open-loops.png"));
   await og(path.join(root, "public", "assets", "app-summary@2x.webp"), path.join(root, "public", "og.png"));
 });
 

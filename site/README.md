@@ -49,9 +49,8 @@ repository is public.
 
 `public/assets/app-{summary,loops,recording}*` are the app screenshots,
 `loops-pane*` and `hearing*` crops of them for the feature cards,
-`public/assets/call-banner*` the floating call banner, `public/og.png` the
-link preview and `docs/images/*.png` the README copies. All of them come
-from one script:
+`public/assets/call-banner*` the floating call banner and `public/og.png`
+the link preview. All of them come from one script:
 
 ```sh
 (cd apps/desktop && pnpm exec vite --config vite.demo.config.ts)  # the fictional preview on port 1422
@@ -66,7 +65,11 @@ WebP and 2x WebP variants. It prints each image's size; copy it to the
 `width` and `height` of the `<img>` in `src/index.html` when it changes.
 The preview's fixtures live in `apps/desktop/demo/tauri.ts`.
 
-`public/assets/menu-bar*.png` and `docs/images/menu-bar.png` are the one
-exception: the menu bar item is native, so they are a crop of a real
-`screencapture -R` of the menu bar while recording, 18 px of padding at 2x
-around the icon and timer, corners rounded.
+`public/assets/menu-bar*.png` are the one exception: the menu bar item is
+native, so they are a crop of a real `screencapture -R` of the menu bar
+while recording, 18 px of padding at 2x around the icon and timer, corners
+rounded.
+
+The README has a single image, `docs/images/demo.gif`. `pnpm --dir site
+demo-gif` renders it from the same preview and window frame; it needs
+ffmpeg.

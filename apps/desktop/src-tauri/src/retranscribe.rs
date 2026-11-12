@@ -772,6 +772,9 @@ fn run_retranscribe_pipeline(
         .with_context(|| format!("loading whisper model at {}", model_path.display()))?;
 
     let (me_samples, them_samples) = decode_audio_stereo(audio_path)?;
+    // Without headphones the microphone also hears the speakers; transcribing
+    // it raw repeats every remote sentence as Me.
+    let me_samples = simstim_engine::cancel_echo(&me_samples, &them_samples);
 
     // Each channel is transcribed speech-only (see
     // `simstim_engine::detect_speech` and `speech.rs`'s module docs): a

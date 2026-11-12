@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 
 use chrono::Local;
 use simstim_capture::{Channel, Chunk};
-use simstim_engine::{models_dir, Engine, Segment, Vad};
+use simstim_engine::{models_dir, EchoFilter, Engine, Segment, Vad};
 use simstim_transcript::{last_offset_secs, parse_meta, parse_session, Speaker, Transcript};
 
 use crate::audio_sink::{AudioFormat, AudioSink};
@@ -620,6 +620,8 @@ fn run_worker(
         ..Default::default()
     };
 
+    let mut echo = EchoFilter::new();
+
     let mut last_edit_save = Instant::now()
         .checked_sub(MIN_EDIT_SAVE_INTERVAL)
         .unwrap_or_else(Instant::now);
@@ -633,34 +635,50 @@ fn run_worker(
                 if let Some(sink) = audio_sink.as_mut() {
                     sink.push(chunk.channel, &chunk.samples, &on_error);
                 }
-                let (vad, interim) = match chunk.channel {
-                    Channel::Me => (&mut vad_me, &mut interim_me),
-                    Channel::Them => (&mut vad_them, &mut interim_them),
+                // The microphone is transcribed through the echo filter, which
+                // releases it as matching system audio arrives; the saved
+                // audio above stays raw.
+                let (them_ready, me_ready) = match chunk.channel {
+                    Channel::Me => (None, echo.push_me(&chunk.samples)),
+                    Channel::Them => {
+                        let me_ready = echo.push_them(&chunk.samples);
+                        (Some(chunk.samples), me_ready)
+                    }
                 };
-                let was_speech_active = vad.speech_active();
-                if was_speech_active {
-                    // Mark before a finalize can enter a comparatively slow
-                    // ASR decode, so auto-stop never mistakes time spent
-                    // transcribing recent speech for channel silence.
-                    activity.mark_voice(chunk.channel);
-                }
-                let saved = process_channel_chunk(
-                    &engine,
-                    vad,
-                    interim,
-                    &mut transcript,
-                    &out_path,
-                    &on_line,
-                    &on_interim,
-                    &on_error,
-                    chunk.channel,
-                    &chunk.samples,
-                );
-                if vad.speech_active() || saved {
-                    activity.mark_voice(chunk.channel);
-                }
-                if saved {
-                    saved_this_tick = true;
+                let ready = them_ready
+                    .map(|samples| (Channel::Them, samples))
+                    .into_iter()
+                    .chain((!me_ready.is_empty()).then_some((Channel::Me, me_ready)));
+                for (channel, samples) in ready {
+                    let (vad, interim) = match channel {
+                        Channel::Me => (&mut vad_me, &mut interim_me),
+                        Channel::Them => (&mut vad_them, &mut interim_them),
+                    };
+                    let was_speech_active = vad.speech_active();
+                    if was_speech_active {
+                        // Mark before a finalize can enter a comparatively slow
+                        // ASR decode, so auto-stop never mistakes time spent
+                        // transcribing recent speech for channel silence.
+                        activity.mark_voice(channel);
+                    }
+                    let saved = process_channel_chunk(
+                        &engine,
+                        vad,
+                        interim,
+                        &mut transcript,
+                        &out_path,
+                        &on_line,
+                        &on_interim,
+                        &on_error,
+                        channel,
+                        &samples,
+                    );
+                    if vad.speech_active() || saved {
+                        activity.mark_voice(channel);
+                    }
+                    if saved {
+                        saved_this_tick = true;
+                    }
                 }
             }
             Err(RecvTimeoutError::Timeout) => {
@@ -683,6 +701,23 @@ fn run_worker(
     // (applied to `transcript` in-memory already if it happened before the
     // final `break`, but drain again in case one snuck in right after).
     apply_pending_edits(&pending_edits, &mut transcript);
+
+    // Microphone audio still held for system audio that will never arrive.
+    let me_rest = echo.flush();
+    if !me_rest.is_empty() {
+        process_channel_chunk(
+            &engine,
+            &mut vad_me,
+            &mut interim_me,
+            &mut transcript,
+            &out_path,
+            &on_line,
+            &on_interim,
+            &on_error,
+            Channel::Me,
+            &me_rest,
+        );
+    }
 
     for (channel, vad, interim) in [
         (Channel::Me, &mut vad_me, &interim_me),

@@ -8,7 +8,7 @@ The supported target is macOS 14.2+ on Apple Silicon.
 | Location | Responsibility |
 | --- | --- |
 | `crates/capture` | Microphone through cpal; system audio through Core Audio process taps and cidre |
-| `crates/engine` | Silero speech detection, Parakeet live transcription, Whisper offline transcription |
+| `crates/engine` | Silero speech detection, speaker echo removal, Parakeet live transcription, Whisper offline transcription |
 | `crates/transcript` | Markdown parsing, rendering and atomic saves |
 | `apps/desktop/src-tauri/src/session.rs` | Recording worker and session continuation |
 | `apps/desktop/src-tauri/src/session_files.rs` | Per-file ownership across recording, processing and edits |
@@ -45,6 +45,17 @@ microphone and the tap on the blocking pool, like stop's finalization. A
 second start is refused at once, and the main thread stays free for the
 banner and its clicks while a device takes its 0.2-2 s to open. The slot
 is freed again if setup fails or panics.
+
+Without headphones the microphone also hears the speakers, which would
+transcribe every remote sentence a second time as Me. Both passes run the Me
+channel through WebRTC's echo canceller (AEC3, the pure Rust `sonora` port)
+with the Them channel as its reference; saved audio stays raw. Channels are
+paired by sample index with the audio file's lead rule, and the delay search
+covers about 2 s. The canceller's output is used only after it finds an echo
+path: with headphones AEC3 would still clip the user's speech during
+double-talk, so the microphone passes through unchanged. Live text can leak
+the first seconds of remote speech while the path is found; the offline pass
+finds it first and then filters the channel from the start.
 
 Silero VAD groups speech into chunks for Parakeet. Interim decoding provides
 live text; finalized segments are appended to disk. The worker also forces

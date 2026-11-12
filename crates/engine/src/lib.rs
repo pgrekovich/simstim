@@ -5,8 +5,10 @@ use sherpa_onnx::{
 };
 use std::path::{Path, PathBuf};
 
+mod echo;
 mod speech;
 mod whisper;
+pub use echo::{cancel_echo, EchoFilter};
 pub use speech::{detect_speech, SpeechProfile, SpeechRegion, SpeechTimeline};
 pub use whisper::{WhisperEngine, WhisperSegment};
 

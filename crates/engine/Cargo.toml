@@ -8,6 +8,7 @@ sherpa-onnx = "2.0.1"
 whisper-rs = { version = "0.16", features = ["metal"] }
 anyhow = { workspace = true }
 dirs = "7"
+sonora = "0.3"
 
 [dev-dependencies]
 hound = "3"

@@ -10,6 +10,8 @@ weights retain their respective licenses and notices.
   [Parakeet](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3),
   [whisper.cpp](https://github.com/ggml-org/whisper.cpp) and
   [whisper-rs](https://github.com/tazz4843/whisper-rs) make local transcription possible.
+- [sonora](https://github.com/dignifiedquire/sonora), a Rust port of
+  [WebRTC](https://webrtc.org) audio processing, removes speaker echo from the microphone.
 - [cidre](https://github.com/yury/cidre), [cpal](https://github.com/RustAudio/cpal)
   and [tauri-nspanel](https://github.com/ahkohd/tauri-nspanel) provide native integration.
 - [Anarlog](https://github.com/fastrepl/anarlog) and

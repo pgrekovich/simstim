@@ -411,8 +411,7 @@ impl Doc {
     fn headings(&self) -> Vec<usize> {
         let mut out = Vec::new();
         let mut fenced = false;
-        for i in self.body_start()..self.lines.len() {
-            let line = &self.lines[i];
+        for (i, line) in self.lines.iter().enumerate().skip(self.body_start()) {
             if line.trim_start().starts_with("```") {
                 fenced = !fenced;
             } else if !fenced && (line.starts_with("# ") || line.starts_with("## ")) {
@@ -441,8 +440,8 @@ impl Doc {
                 continue;
             };
             let end = headings.get(n + 1).copied().unwrap_or(self.lines.len());
-            for line in h + 1..end {
-                if let Some((done, _)) = task(&self.lines[line]) {
+            for (line, text) in self.lines.iter().enumerate().take(end).skip(h + 1) {
+                if let Some((done, _)) = task(text) {
                     out.push(ItemRef { line, kind, done });
                 }
             }

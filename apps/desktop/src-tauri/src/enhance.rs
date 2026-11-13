@@ -1168,16 +1168,61 @@ fn validate_enhance(
     Ok(())
 }
 
+/// How one summary run is written: by a saved style, by a one-off prompt
+/// typed for this note alone, or (both `None`) by the built-in prompt.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct SummaryRecipe<'a> {
+    pub style: Option<&'a crate::prompts::SummaryStyle>,
+    pub custom_prompt: Option<String>,
+}
+
+impl SummaryRecipe<'_> {
+    /// The text that stands in for the built-in task rule, if any.
+    fn task_prompt(&self) -> Option<&str> {
+        self.custom_prompt
+            .as_deref()
+            .or(self.style.map(|style| style.prompt.as_str()))
+    }
+}
+
+/// Which recipe writes this summary. An explicit request wins: a typed
+/// prompt first, then a style id (`standard` included). With neither, the
+/// run repeats what the note remembers, its one-off prompt or its style; a
+/// deleted style quietly means standard. A blank prompt is no prompt.
+pub(crate) fn summary_recipe<'a>(
+    prompts: &'a crate::prompts::Prompts,
+    requested_style: Option<&str>,
+    requested_prompt: Option<&str>,
+    existing: &simstim_transcript::SessionData,
+) -> SummaryRecipe<'a> {
+    let requested_prompt = requested_prompt.map(str::trim).filter(|p| !p.is_empty());
+    let custom_prompt = match (requested_prompt, requested_style) {
+        (Some(prompt), _) => Some(prompt.to_string()),
+        (None, Some(_)) => None,
+        (None, None) => existing.summary_prompt.clone(),
+    };
+    let style = if custom_prompt.is_some() {
+        None
+    } else {
+        prompts.resolve_style(requested_style.or(existing.summary_style.as_deref()))
+    };
+    SummaryRecipe { style, custom_prompt }
+}
+
 /// Generate a summary off the main thread and atomically replace its section while
-/// preserving user edits. `style` selects a prompt style or the standard prompt.
+/// preserving user edits. `style` selects a prompt style or the standard prompt;
+/// `prompt` is a one-off prompt for this note alone and wins over `style`.
 /// Progress and failures are emitted through enhance-progress events.
 #[tauri::command]
 pub async fn enhance_session(
     path: String,
     style: Option<String>,
+    prompt: Option<String>,
     app: tauri::AppHandle,
 ) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || enhance_path_blocking(&app, &path, style.as_deref()))
+    tauri::async_runtime::spawn_blocking(move || {
+        enhance_path_blocking(&app, &path, style.as_deref(), prompt.as_deref())
+    })
         .await
         .map_err(|e| format!("enhance task failed: {e}"))?
 }
@@ -1196,9 +1241,10 @@ fn enhance_path_blocking<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     path: &str,
     style: Option<&str>,
+    prompt: Option<&str>,
 ) -> Result<String, String> {
     let provider = Config::load().enhance_provider;
-    let result = enhance_path_inner(app, path, style);
+    let result = enhance_path_inner(app, path, style, prompt);
     match &result {
         Ok(_) => emit_progress(app, path, "done", &provider, None),
         Err(message) => emit_progress(app, path, "error", &provider, Some(message.clone())),
@@ -1210,6 +1256,7 @@ fn enhance_path_inner<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     path: &str,
     requested_style: Option<&str>,
+    requested_prompt: Option<&str>,
 ) -> Result<String, String> {
     let md_path = Path::new(path);
     let state = app.state::<AppState>();
@@ -1236,9 +1283,9 @@ fn enhance_path_inner<R: tauri::Runtime>(
 
     let _file_job = crate::session_files::process(md_path).map_err(|e| e.to_string())?;
     let existing = simstim_transcript::parse_session(md_path).map_err(|e| e.to_string())?;
-    // Which style writes this summary: the one asked for, else the one the
-    // note remembers; a deleted style quietly means standard.
-    let style = prompts.resolve_style(requested_style.or(existing.summary_style.as_deref()));
+    // What writes this summary: what was asked for, else what the note
+    // remembers (see `summary_recipe`).
+    let recipe = summary_recipe(&prompts, requested_style, requested_prompt, &existing);
     // A title proposal only ever lands while the title is machine-owned: the automatic
     // "Untitled"/detected shape, or one a previous enhance wrote (`title_by:`
     // frontmatter) -- so re-enhancing regenerates the title too. The writer re-checks
@@ -1312,7 +1359,7 @@ fn enhance_path_inner<R: tauri::Runtime>(
             list_people,
             event.as_ref(),
             &PromptTuning {
-                style_prompt: style.map(|s| s.prompt.as_str()),
+                style_prompt: recipe.task_prompt(),
                 instructions: &prompts.summary_instructions,
                 open_items: open_items.as_deref(),
             },
@@ -1356,7 +1403,8 @@ fn enhance_path_inner<R: tauri::Runtime>(
             &summary_label(spec, model.as_deref()),
             proposed_title.as_deref(),
             people.as_deref(),
-            style.map(|s| s.id.as_str()),
+            recipe.style.map(|s| s.id.as_str()),
+            recipe.custom_prompt.as_deref(),
         )
         .map_err(|e| e.to_string())?;
         // On its own blocking task: the summary is saved, and an open loops
@@ -1413,7 +1461,7 @@ pub(crate) fn maybe_auto_enhance<R: tauri::Runtime>(app: tauri::AppHandle<R>, pa
         {
             return;
         }
-        let _ = enhance_path_blocking(&app, &path, None);
+        let _ = enhance_path_blocking(&app, &path, None, None);
     });
 }
 

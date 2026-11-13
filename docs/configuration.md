@@ -140,7 +140,10 @@ scope = "call" # call, notes or both
 connectors = false
 ```
 
-Styles write the separate Summary section. Questions do not write to the
-note. `connectors = true` enables supported read operations through Claude
+Styles write the separate Summary section. For a summary you need once,
+choose **Custom prompt...** under **Summarize as** instead of saving a
+style: the prompt applies to that note only and is kept in its
+`summary_prompt:` frontmatter, so **Again** repeats it. Questions do not
+write to the note. `connectors = true` enables supported read operations through Claude
 Code, with a slower start; leave it off for ordinary note questions.
 See [your AI](your-ai.md).

@@ -65,6 +65,12 @@ pub struct Transcript {
     /// standard prompt. Remembered so "Again" repeats the same style. Only
     /// rendered while `summary` is non-empty.
     summary_style: Option<String>,
+    /// The `summary_prompt:` frontmatter value: the one-off prompt the user
+    /// typed for this note alone, when that (and no saved style) wrote
+    /// `summary`. Kept on one line. Remembered so "Again" repeats it and
+    /// the file says how its summary was written. Only rendered while
+    /// `summary` is non-empty.
+    summary_prompt: Option<String>,
     /// The `title_by:` frontmatter value: what machine wrote the CURRENT
     /// title (an enhance provider label, or "calendar" for a verbatim
     /// calendar-event name). `None` means the title is the user's own (or
@@ -98,6 +104,7 @@ impl Transcript {
             summary: String::new(),
             summary_model: None,
             summary_style: None,
+            summary_prompt: None,
             title_by: None,
             people: Vec::new(),
         }
@@ -116,6 +123,16 @@ impl Transcript {
     /// label it only renders while a summary exists.
     pub fn set_summary_style(&mut self, style: Option<String>) {
         self.summary_style = style.filter(|s| !s.trim().is_empty());
+    }
+
+    /// Sets the one-off prompt that wrote the summary (see the field's doc
+    /// comment); `None` when a style or the standard prompt did. Frontmatter
+    /// values are single lines, so line breaks and runs of whitespace
+    /// collapse to one space.
+    pub fn set_summary_prompt(&mut self, prompt: Option<String>) {
+        self.summary_prompt = prompt
+            .map(|p| p.split_whitespace().collect::<Vec<_>>().join(" "))
+            .filter(|p| !p.is_empty());
     }
 
     pub fn set_title(&mut self, title: String) {
@@ -307,6 +324,11 @@ impl Transcript {
             && let Some(style) = &self.summary_style
         {
             out.push_str(&format!("summary_style: {style}\n"));
+        }
+        if !summary.is_empty()
+            && let Some(prompt) = &self.summary_prompt
+        {
+            out.push_str(&format!("summary_prompt: {prompt}\n"));
         }
         out.push_str("---\n\n## Notes\n\n");
         let notes = self.notes.trim();
@@ -510,6 +532,10 @@ pub struct SessionData {
     /// that wrote `summary`, `None` for the built-in prompt (and whenever
     /// `summary` is empty). See [`Transcript::set_summary_style`].
     pub summary_style: Option<String>,
+    /// The `summary_prompt:` frontmatter value: the one-off prompt that
+    /// wrote `summary`, `None` otherwise (and whenever `summary` is empty).
+    /// See [`Transcript::set_summary_prompt`].
+    pub summary_prompt: Option<String>,
     /// The `title_by:` frontmatter value: what machine wrote the current
     /// title, `None` when the title is the user's own or the automatic
     /// default. See [`Transcript::set_title_by`].
@@ -609,6 +635,11 @@ pub fn parse_session(path: &Path) -> Result<SessionData> {
     } else {
         fields.get("summary_style").cloned()
     };
+    let summary_prompt = if summary.is_empty() {
+        None
+    } else {
+        fields.get("summary_prompt").map(|p| p.trim().to_string()).filter(|p| !p.is_empty())
+    };
 
     let transcript = body[transcript_content_start..].trim().to_string();
 
@@ -623,6 +654,7 @@ pub fn parse_session(path: &Path) -> Result<SessionData> {
         summary,
         summary_model,
         summary_style,
+        summary_prompt,
         people,
     })
 }
@@ -782,6 +814,41 @@ mod tests {
             t.save(&path).unwrap();
             let text = std::fs::read_to_string(&path).unwrap();
             assert!(!text.contains("summary_style") && !text.contains("summary_model"), "{text}");
+        }
+
+        /// `summary_prompt:` round-trips on one line whatever the user typed,
+        /// and drops with the summary like the style line does.
+        #[test]
+        fn round_trips_a_one_off_summary_prompt_on_a_single_line() {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("custom.md");
+            let mut t = Transcript::new(t0());
+            t.set_summary("- pricing only".into(), Some("claude".into()));
+            t.set_summary_prompt(Some("  Only what was said about pricing:\n\n- numbers\n- who objected ".into()));
+            t.save(&path).unwrap();
+            let text = std::fs::read_to_string(&path).unwrap();
+            assert!(
+                text.contains("summary_prompt: Only what was said about pricing: - numbers - who objected\n---\n"),
+                "{text}"
+            );
+            let parsed = parse_session(&path).unwrap();
+            assert_eq!(
+                parsed.summary_prompt.as_deref(),
+                Some("Only what was said about pricing: - numbers - who objected")
+            );
+            assert_eq!(parsed.summary, "- pricing only");
+
+            // Blank means none: no line at all.
+            t.set_summary_prompt(Some(" \n ".into()));
+            t.save(&path).unwrap();
+            assert!(!std::fs::read_to_string(&path).unwrap().contains("summary_prompt"));
+
+            // No summary: the prompt line is meaningless and is not written.
+            t.set_summary_prompt(Some("pricing".into()));
+            t.set_summary(String::new(), Some("claude".into()));
+            t.save(&path).unwrap();
+            assert!(!std::fs::read_to_string(&path).unwrap().contains("summary_prompt"));
+            assert_eq!(parse_session(&path).unwrap().summary_prompt, None);
         }
 
         /// `title_by:` round-trips, and a file without it (every pre-existing

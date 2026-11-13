@@ -883,6 +883,7 @@ fn ask_inner<R: tauri::Runtime>(
                         summary: String::new(),
                         summary_model: None,
                         summary_style: None,
+                        summary_prompt: None,
                         title_by: None,
                         audio_from_secs: None,
                         people: Vec::new(),

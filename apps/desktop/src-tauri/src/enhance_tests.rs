@@ -539,3 +539,79 @@ fn enhance_manual_e2e_real_provider() {
     eprintln!("--- summary ---\n{summary}\n---------------");
     assert!(!summary.is_empty());
 }
+
+mod recipe {
+    use super::*;
+    use crate::prompts::{Prompts, SummaryStyle};
+
+    fn prompts() -> Prompts {
+        Prompts {
+            summary_instructions: String::new(),
+            summary_styles: vec![SummaryStyle {
+                id: "brief".into(),
+                name: "Brief".into(),
+                prompt: "Two minutes for a colleague.".into(),
+            }],
+            quick_questions: Vec::new(),
+        }
+    }
+
+    fn note(style: Option<&str>, prompt: Option<&str>) -> simstim_transcript::SessionData {
+        simstim_transcript::SessionData {
+            title: "Sync".into(),
+            title_by: None,
+            date: "2026-11-05T10:00:00+01:00".into(),
+            notes: String::new(),
+            transcript: "[00:00:01] Me: hi".into(),
+            asr: "x".into(),
+            audio_from_secs: None,
+            summary: "- old".into(),
+            summary_model: Some("claude".into()),
+            summary_style: style.map(str::to_string),
+            summary_prompt: prompt.map(str::to_string),
+            people: Vec::new(),
+        }
+    }
+
+    /// A typed prompt writes the summary whatever style the note had or the
+    /// request names, and it is what the note will remember.
+    #[test]
+    fn a_typed_prompt_wins_over_any_style() {
+        let prompts = prompts();
+        let recipe = summary_recipe(&prompts, Some("brief"), Some("  Only pricing.\n"), &note(Some("brief"), None));
+        assert_eq!(recipe.style, None);
+        assert_eq!(recipe.custom_prompt.as_deref(), Some("Only pricing."));
+        assert_eq!(recipe.task_prompt(), Some("Only pricing."));
+    }
+
+    /// "Again" (nothing requested) repeats the note's one-off prompt.
+    #[test]
+    fn a_plain_rerun_repeats_the_notes_one_off_prompt() {
+        let prompts = prompts();
+        let recipe = summary_recipe(&prompts, None, None, &note(None, Some("Only pricing.")));
+        assert_eq!(recipe.custom_prompt.as_deref(), Some("Only pricing."));
+        assert_eq!(recipe.style, None);
+    }
+
+    /// Picking a style, or Standard, leaves the one-off prompt behind.
+    #[test]
+    fn picking_a_style_drops_the_one_off_prompt() {
+        let prompts = prompts();
+        let styled = summary_recipe(&prompts, Some("brief"), None, &note(None, Some("Only pricing.")));
+        assert_eq!(styled.custom_prompt, None);
+        assert_eq!(styled.task_prompt(), Some("Two minutes for a colleague."));
+
+        let standard = summary_recipe(&prompts, Some("standard"), None, &note(None, Some("Only pricing.")));
+        assert_eq!(standard, SummaryRecipe { style: None, custom_prompt: None });
+        assert_eq!(standard.task_prompt(), None);
+    }
+
+    /// A blank prompt is not a request: the note's own style still applies.
+    #[test]
+    fn a_blank_prompt_is_no_prompt() {
+        let prompts = prompts();
+        let recipe = summary_recipe(&prompts, None, Some(" \n"), &note(Some("brief"), None));
+        assert_eq!(recipe.custom_prompt, None);
+        assert_eq!(recipe.style.map(|s| s.id.as_str()), Some("brief"));
+    }
+}

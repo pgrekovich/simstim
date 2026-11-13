@@ -44,6 +44,7 @@ import {
 } from "@/components/SessionView";
 import { Sidebar } from "@/components/Sidebar";
 import { SettingsDialog } from "@/components/SettingsDialog";
+import { CUSTOM_PROMPT_NAME, SummaryPromptDialog } from "@/components/SummaryPromptDialog";
 import { Onboarding } from "@/components/Onboarding";
 import { ProviderUpdateBanner } from "@/components/ProviderUpdateBanner";
 import { AppUpdateBanner } from "@/components/AppUpdateBanner";
@@ -51,6 +52,7 @@ import {
   createSession,
   deleteSession,
   enhanceSession,
+  enhanceSessionWithPrompt,
   getConfig,
   listSessions,
   openLoopsRead,
@@ -226,6 +228,8 @@ function App() {
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [busy, setBusy] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // The one-off summary prompt dialog behind More > Summarize as.
+  const [summaryPromptOpen, setSummaryPromptOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   // A folder-wide surface that owns the main pane instead of a note: Ask your
   // notes or Open loops. One at a time; the note selection stays put
@@ -1186,11 +1190,12 @@ function App() {
 
   // Flush pending edits before generating a summary. Enhance-progress events drive
   // status, errors and the final refetch.
-  async function handleEnhanceSelected(style?: string) {
+  async function handleEnhanceSelected(style?: string, prompt?: string) {
     if (selectedPath === null || selectedPath === activePath || enhancingPath !== null) return;
     try {
       await activeSessionViewRef.current?.flushPendingEdits();
-      await enhanceSession(selectedPath, style);
+      if (prompt !== undefined) await enhanceSessionWithPrompt(selectedPath, prompt);
+      else await enhanceSession(selectedPath, style);
     } catch (err) {
       // Already surfaced through the enhance-progress "error" event; the
       // rejection here would only duplicate that toast.
@@ -1527,33 +1532,36 @@ function App() {
                         ? "Summarize again"
                         : "Summarize"}
                   </DropdownMenuItem>
-                  {/* The user's summary styles (prompts.toml), one submenu
-                      away; the plain item above keeps the note's own style. */}
-                  {prompts.summary_styles.length > 0 && (
-                    <DropdownMenuSub>
-                      <DropdownMenuSubTrigger
-                        disabled={
-                          viewingActiveSession ||
-                          enhancingPath !== null ||
-                          sessionData === null ||
-                          sessionData.transcript.trim().length === 0
-                        }
-                      >
-                        <Sparkles />
-                        Summarize as
-                      </DropdownMenuSubTrigger>
-                      <DropdownMenuSubContent>
-                        <DropdownMenuItem onSelect={() => void handleEnhanceSelected(STANDARD_STYLE)}>
-                          {STANDARD_STYLE_NAME}
+                  {/* The user's summary styles (prompts.toml) and a one-off
+                      prompt, one submenu away; the plain item above repeats
+                      what the note remembers. */}
+                  <DropdownMenuSub>
+                    <DropdownMenuSubTrigger
+                      disabled={
+                        viewingActiveSession ||
+                        enhancingPath !== null ||
+                        sessionData === null ||
+                        sessionData.transcript.trim().length === 0
+                      }
+                    >
+                      <Sparkles />
+                      Summarize as
+                    </DropdownMenuSubTrigger>
+                    <DropdownMenuSubContent>
+                      <DropdownMenuItem onSelect={() => void handleEnhanceSelected(STANDARD_STYLE)}>
+                        {STANDARD_STYLE_NAME}
+                      </DropdownMenuItem>
+                      {prompts.summary_styles.map((style) => (
+                        <DropdownMenuItem key={style.id} onSelect={() => void handleEnhanceSelected(style.id)}>
+                          {style.name}
                         </DropdownMenuItem>
-                        {prompts.summary_styles.map((style) => (
-                          <DropdownMenuItem key={style.id} onSelect={() => void handleEnhanceSelected(style.id)}>
-                            {style.name}
-                          </DropdownMenuItem>
-                        ))}
-                      </DropdownMenuSubContent>
-                    </DropdownMenuSub>
-                  )}
+                      ))}
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem onSelect={() => setSummaryPromptOpen(true)}>
+                        {CUSTOM_PROMPT_NAME}...
+                      </DropdownMenuItem>
+                    </DropdownMenuSubContent>
+                  </DropdownMenuSub>
                   <DropdownMenuItem
                     disabled={!sessionData || sessionData.transcript.trim().length === 0}
                     onSelect={() => {
@@ -1668,6 +1676,7 @@ function App() {
                 summary: "",
                 summary_model: null,
                 summary_style: null,
+                summary_prompt: null,
                 people: [],
               }}
               liveLines={lines}
@@ -1781,6 +1790,12 @@ function App() {
         open={settingsOpen}
         onOpenChange={setSettingsOpen}
         onModelsChanged={handleModelsChanged}
+      />
+      <SummaryPromptDialog
+        open={summaryPromptOpen}
+        onOpenChange={setSummaryPromptOpen}
+        initialPrompt={sessionData?.summary_prompt ?? null}
+        onSubmit={(prompt) => void handleEnhanceSelected(undefined, prompt)}
       />
       <GlobalSearch
         open={searchOpen}

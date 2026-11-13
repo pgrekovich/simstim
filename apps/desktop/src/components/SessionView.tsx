@@ -14,12 +14,15 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { CUSTOM_PROMPT_NAME, SummaryPromptDialog } from "@/components/SummaryPromptDialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { findTranscriptMatches, TranscriptView } from "@/components/TranscriptView";
 import {
   enhanceSession,
+  enhanceSessionWithPrompt,
   readSession,
   retranscribeSession,
   saveSession,
@@ -226,6 +229,10 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
   // frontmatter), `null` for the built-in prompt. The style menu in the
   // provenance line lists the current prompts.toml styles.
   const summaryStyle = initialData.summary_style;
+  // The one-off prompt that wrote this summary instead of a style
+  // (`summary_prompt:` frontmatter), and the dialog that takes a new one.
+  const summaryPrompt = initialData.summary_prompt;
+  const [promptDialogOpen, setPromptDialogOpen] = useState(false);
   const { prompts } = usePrompts();
   // Local-only optimistic flag for Enhance, same shape as `clicking` below:
   // covers the instants before the backend's `enhance-progress` "running"
@@ -558,15 +565,17 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
 
   /**
    * `style` is a summary style id (or `"standard"`) to write the summary
-   * in; omitted, the backend repeats the style the note remembers.
+   * in, `prompt` a one-off prompt that takes its place; with neither, the
+   * backend repeats what the note remembers.
    */
-  async function handleEnhance(style?: string) {
+  async function handleEnhance(style?: string, prompt?: string) {
     if (isActive || enhanceBusy) return;
     setEnhanceClicking(true);
     try {
       await commitNotes();
       await commitTitle();
-      await enhanceSession(path, style);
+      if (prompt !== undefined) await enhanceSessionWithPrompt(path, prompt);
+      else await enhanceSession(path, style);
     } catch (err) {
       console.error("failed to enhance session", err);
     } finally {
@@ -907,7 +916,7 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
                       re-summarizes at once; the note remembers it. Shown
                       only when the user has styles, or when this summary
                       came from one (even a since-deleted one). */}
-                  {(prompts.summary_styles.length > 0 || summaryStyle) && (
+                  {(prompts.summary_styles.length > 0 || summaryStyle || summaryPrompt) && (
                     <>
                       {" · "}
                       <DropdownMenu>
@@ -918,7 +927,7 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
                             aria-label="Summary style"
                             className="inline-flex items-center gap-px underline-offset-2 hover:text-foreground hover:underline disabled:pointer-events-none disabled:opacity-50"
                           >
-                            {styleName(prompts.summary_styles, summaryStyle)}
+                            {summaryPrompt ? CUSTOM_PROMPT_NAME : styleName(prompts.summary_styles, summaryStyle)}
                             <ChevronDown className="size-3" />
                           </button>
                         </DropdownMenuTrigger>
@@ -927,7 +936,7 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
                             { id: STANDARD_STYLE, name: styleName([], null) },
                             ...prompts.summary_styles,
                           ].map((style) => {
-                            const current = (summaryStyle ?? STANDARD_STYLE) === style.id;
+                            const current = !summaryPrompt && (summaryStyle ?? STANDARD_STYLE) === style.id;
                             return (
                               <DropdownMenuItem
                                 key={style.id}
@@ -940,8 +949,21 @@ export const SessionView = forwardRef<SessionViewHandle, SessionViewProps>(funct
                               </DropdownMenuItem>
                             );
                           })}
+                          {/* Not a style: a prompt typed for this note
+                              alone, in a dialog one click away. */}
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem onSelect={() => setPromptDialogOpen(true)}>
+                            <span className="flex-1">{CUSTOM_PROMPT_NAME}...</span>
+                            {summaryPrompt && <Check aria-hidden="true" />}
+                          </DropdownMenuItem>
                         </DropdownMenuContent>
                       </DropdownMenu>
+                      <SummaryPromptDialog
+                        open={promptDialogOpen}
+                        onOpenChange={setPromptDialogOpen}
+                        initialPrompt={summaryPrompt}
+                        onSubmit={(prompt) => void handleEnhance(undefined, prompt)}
+                      />
                     </>
                   )}
                   {" · "}

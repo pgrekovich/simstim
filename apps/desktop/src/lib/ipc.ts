@@ -208,6 +208,11 @@ export interface SessionData {
    */
   summary_style: string | null;
   /**
+   * The one-off prompt that wrote `summary` (`summary_prompt:` frontmatter);
+   * `null` when a style or the built-in prompt did, or without a summary.
+   */
+  summary_prompt: string | null;
+  /**
    * Who was on the call: the `people:` frontmatter list, written from the
    * calendar event the enhance lookup matched. `[]` without one.
    */
@@ -517,7 +522,16 @@ export function revealLog(): Promise<void> {
  * omitted to repeat whatever style the note remembers (what "Again" does).
  */
 export function enhanceSession(path: string, style?: string): Promise<string> {
-  return invoke("enhance_session", { path, style: style ?? null });
+  return invoke("enhance_session", { path, style: style ?? null, prompt: null });
+}
+
+/**
+ * Enhances a note with a one-off `prompt` typed for this note alone, in
+ * place of any style. The note remembers it, so a plain `enhanceSession`
+ * afterwards repeats it.
+ */
+export function enhanceSessionWithPrompt(path: string, prompt: string): Promise<string> {
+  return invoke("enhance_session", { path, style: null, prompt });
 }
 
 /** Which local and cloud summary providers are ready. Mirrors `enhance::list_enhance_providers`. */

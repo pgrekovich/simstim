@@ -24,11 +24,12 @@ vi.mock("@/lib/ipc", () => ({
     audio_path: null,
     summary: "",
     summary_model: null,
-    summary_style: null,
+    summary_style: null, summary_prompt: null,
     people: [],
   }),
   retranscribeSession: vi.fn().mockResolvedValue(undefined),
   enhanceSession: vi.fn().mockResolvedValue(""),
+  enhanceSessionWithPrompt: vi.fn().mockResolvedValue(""),
 }));
 
 // SessionView feeds `<audio src>` through `convertFileSrc`; a real Tauri
@@ -47,7 +48,7 @@ const baseData: SessionData = {
   audio_path: null,
   summary: "",
   summary_model: null,
-  summary_style: null,
+  summary_style: null, summary_prompt: null,
   people: [],
 };
 
@@ -57,6 +58,7 @@ beforeEach(() => {
   vi.mocked(ipc.readSession).mockClear();
   vi.mocked(ipc.retranscribeSession).mockClear();
   vi.mocked(ipc.enhanceSession).mockClear().mockResolvedValue("");
+  vi.mocked(ipc.enhanceSessionWithPrompt).mockClear().mockResolvedValue("");
 });
 
 describe("SessionView: stop-transition flush", () => {
@@ -261,7 +263,7 @@ describe("SessionView: audio playback and re-transcribe", () => {
           audio_path: "/tmp/call.flac",
           summary: "",
           summary_model: null,
-          summary_style: null,
+          summary_style: null, summary_prompt: null,
           people: [],
           transcript: "[00:01:05] Me: hello there\n",
         }}
@@ -417,7 +419,7 @@ describe("SessionView: audio playback and re-transcribe", () => {
       audio_path: "/tmp/call.flac",
       summary: "",
       summary_model: null,
-      summary_style: null,
+      summary_style: null, summary_prompt: null,
       people: [],
     });
     render(
@@ -429,7 +431,7 @@ describe("SessionView: audio playback and re-transcribe", () => {
           audio_path: "/tmp/call.flac",
           summary: "",
           summary_model: null,
-          summary_style: null,
+          summary_style: null, summary_prompt: null,
           people: [],
           transcript: "[00:00:03] Me: old parakeet text\n",
         }}
@@ -458,7 +460,7 @@ describe("SessionView: audio playback and re-transcribe", () => {
       audio_path: "/tmp/call.flac",
       summary: "",
       summary_model: null,
-      summary_style: null,
+      summary_style: null, summary_prompt: null,
       people: [],
     });
     render(
@@ -470,7 +472,7 @@ describe("SessionView: audio playback and re-transcribe", () => {
           audio_path: "/tmp/call.flac",
           summary: "",
           summary_model: null,
-          summary_style: null,
+          summary_style: null, summary_prompt: null,
           people: [],
           transcript: "[00:00:03] Me: old parakeet text\n",
         }}
@@ -501,7 +503,7 @@ describe("SessionView: notes/transcript tabs", () => {
           notes: "## Decisions\n\n- Ship **Friday**",
           summary: "> Generated **brief**",
           summary_model: "local/qwen",
-          summary_style: null,
+          summary_style: null, summary_prompt: null,
           people: [],
         }}
         liveLines={[]}
@@ -619,7 +621,7 @@ describe("SessionView: notes/transcript tabs", () => {
           notes: "keep Notes primary",
           summary: "A concise summary",
           summary_model: "local/qwen",
-          summary_style: null,
+          summary_style: null, summary_prompt: null,
           people: [],
           transcript: "[00:00:03] Me: hello tabs\n",
         }}
@@ -651,7 +653,7 @@ describe("SessionView: notes/transcript tabs", () => {
           notes: "   ",
           summary: "A concise summary",
           summary_model: "local/qwen",
-          summary_style: null,
+          summary_style: null, summary_prompt: null,
           people: [],
         }}
         liveLines={[]}
@@ -816,7 +818,7 @@ describe("SessionView: enhance", () => {
           transcript: "[00:00:01] Me: hi",
           summary: "- **ship v2 friday**",
           summary_model: "claude",
-          summary_style: null,
+          summary_style: null, summary_prompt: null,
           people: [],
         }}
         liveLines={[]}
@@ -876,6 +878,94 @@ describe("SessionView: summary styles (prompts.toml)", () => {
     await waitFor(() => expect(ipc.enhanceSession).toHaveBeenCalledExactlyOnceWith("/tmp/call.md", "brief"));
   });
 
+  it("summarizes once with a custom prompt typed from the style menu", async () => {
+    vi.mocked(ipc.getPrompts).mockResolvedValue({
+      summary_instructions: "",
+      summary_styles: [{ id: "brief", name: "Brief", prompt: "..." }],
+      quick_questions: [],
+    });
+    render(
+      <SessionView
+        path="/tmp/call.md"
+        isActive={false}
+        initialData={{
+          ...baseData,
+          transcript: "[00:00:01] Me: hi",
+          summary: "- **ship v2 friday**",
+          summary_model: "claude",
+        }}
+        liveLines={[]}
+        interimMe=""
+        interimThem=""
+        retranscribingJob={null}
+      />
+    );
+    fireEvent.click(screen.getByRole("tab", { name: "Summary" }));
+    const trigger = await screen.findByRole("button", { name: "Summary style" });
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false, pointerType: "mouse" });
+    fireEvent.click(trigger);
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Custom prompt..." }));
+
+    const field = await screen.findByRole("textbox", { name: "Custom prompt" });
+    expect(field).toHaveValue("");
+    // Nothing to run until something is typed.
+    expect(screen.getByRole("button", { name: /^Summarize/ })).toBeDisabled();
+    fireEvent.keyDown(field, { key: "Enter", metaKey: true });
+    expect(ipc.enhanceSessionWithPrompt).not.toHaveBeenCalled();
+
+    fireEvent.change(field, { target: { value: "  Only what was said about pricing.\n" } });
+    fireEvent.keyDown(field, { key: "Enter", metaKey: true });
+    await waitFor(() =>
+      expect(ipc.enhanceSessionWithPrompt).toHaveBeenCalledExactlyOnceWith(
+        "/tmp/call.md",
+        "Only what was said about pricing.",
+      ),
+    );
+    expect(ipc.enhanceSession).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByRole("textbox", { name: "Custom prompt" })).not.toBeInTheDocument());
+  });
+
+  it("names a summary written by a custom prompt and reopens that prompt for editing", async () => {
+    // No styles at all: the menu still shows, because this summary has a recipe to name.
+    vi.mocked(ipc.getPrompts).mockResolvedValue({ summary_instructions: "", summary_styles: [], quick_questions: [] });
+    render(
+      <SessionView
+        path="/tmp/call.md"
+        isActive={false}
+        initialData={{
+          ...baseData,
+          transcript: "[00:00:01] Me: hi",
+          summary: "- pricing moved to Q2",
+          summary_model: "claude",
+          summary_prompt: "Only what was said about pricing.",
+        }}
+        liveLines={[]}
+        interimMe=""
+        interimThem=""
+        retranscribingJob={null}
+      />
+    );
+    fireEvent.click(screen.getByRole("tab", { name: "Summary" }));
+    const trigger = await screen.findByRole("button", { name: "Summary style" });
+    expect(trigger).toHaveTextContent("Custom prompt");
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false, pointerType: "mouse" });
+    fireEvent.click(trigger);
+    const menu = await screen.findByRole("menu");
+    // Standard is not the current recipe while a custom prompt wrote the summary.
+    expect(within(menu).getByRole("menuitemradio", { name: "Standard" })).toHaveAttribute("aria-checked", "false");
+    fireEvent.click(within(menu).getByRole("menuitem", { name: "Custom prompt..." }));
+    expect(await screen.findByRole("textbox", { name: "Custom prompt" })).toHaveValue(
+      "Only what was said about pricing.",
+    );
+    fireEvent.click(screen.getByRole("button", { name: /^Summarize/ }));
+    await waitFor(() =>
+      expect(ipc.enhanceSessionWithPrompt).toHaveBeenCalledExactlyOnceWith(
+        "/tmp/call.md",
+        "Only what was said about pricing.",
+      ),
+    );
+  });
+
   it("hides the style menu when the user has no styles and the summary is standard", async () => {
     vi.mocked(ipc.getPrompts).mockResolvedValue({ summary_instructions: "", summary_styles: [], quick_questions: [] });
     render(
@@ -887,7 +977,7 @@ describe("SessionView: summary styles (prompts.toml)", () => {
           transcript: "[00:00:01] Me: hi",
           summary: "- **ship v2 friday**",
           summary_model: "claude",
-          summary_style: null,
+          summary_style: null, summary_prompt: null,
           people: [],
         }}
         liveLines={[]}
@@ -997,7 +1087,7 @@ describe("SessionView: copy summary", () => {
           transcript: "[00:00:01] Me: hi",
           summary: "### Decisions\n- ship v2 friday",
           summary_model: "claude",
-          summary_style: null,
+          summary_style: null, summary_prompt: null,
         }}
         liveLines={[]}
         interimMe=""

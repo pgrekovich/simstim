@@ -50,10 +50,11 @@ interface Note {
   transcript: string;
   summary_model: string;
   summary_style: null;
+  summary_prompt: null;
 }
 
-function note(n: Omit<Note, "path" | "title_by" | "audio_path" | "summary_model" | "summary_style">): Note {
-  return { ...n, path: `/demo/${file(n.date)}`, title_by: null, audio_path: null, summary_model: "example", summary_style: null };
+function note(n: Omit<Note, "path" | "title_by" | "audio_path" | "summary_model" | "summary_style" | "summary_prompt">): Note {
+  return { ...n, path: `/demo/${file(n.date)}`, title_by: null, audio_path: null, summary_model: "example", summary_style: null, summary_prompt: null };
 }
 
 const review = note({
